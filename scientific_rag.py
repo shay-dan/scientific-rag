@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from typing import Literal
+from typing import Callable, Literal
 
 import arxiv
 import gradio as gr
@@ -126,14 +126,26 @@ class ResearchService:
             temperature=0.2,
         )
 
-    def research(self, query: str, source: Literal["pubmed", "arxiv", "both"], limit: int) -> tuple[str, str]:
+    def research(
+        self,
+        query: str,
+        source: Literal["pubmed", "arxiv", "both"],
+        limit: int,
+        progress: Callable[[float, str], None] | None = None,
+    ) -> tuple[str, str]:
         if not query.strip():
             return "Please enter a research question.", ""
+        if progress:
+            progress(0.15, "Searching scholarly sources…")
         documents = self.miner.search(query, source, limit)
         if not documents:
             return "No abstracts were found. Try a broader query.", ""
 
+        if progress:
+            progress(0.45, f"Indexing {len(documents)} abstracts…")
         self.vector_store.add_documents(documents)
+        if progress:
+            progress(0.65, "Retrieving the most relevant evidence…")
         context_documents = self.vector_store.similarity_search(query, k=min(6, len(documents)))
         context = "\n\n".join(
             f"[{index}] {document.metadata.get('title', 'Untitled')}\n{document.page_content}"
@@ -144,6 +156,8 @@ class ResearchService:
             "do not give medical advice, and cite claims using bracket numbers such as [1].\n\n"
             "Question: {question}\n\nAbstracts:\n{context}"
         )
+        if progress:
+            progress(0.8, "Writing an evidence-based answer…")
         answer = (prompt | self.llm).invoke({"question": query, "context": context}).content
         sources = "\n".join(
             f"- [{index}] [{document.metadata.get('title', 'Untitled')}]({document.metadata.get('url', '')})"
@@ -156,11 +170,14 @@ def create_app() -> gr.Blocks:
     config = AppConfig()
     service: ResearchService | None = None
 
-    def run(query: str, source: str, limit: int) -> tuple[str, str]:
+    def run(query: str, source: str, limit: int, progress=gr.Progress()) -> tuple[str, str]:
         nonlocal service
         try:
+            progress(0.05, "Preparing the research service…")
             service = service or ResearchService(config)
-            return service.research(query, source, int(limit))
+            answer, sources = service.research(query, source, int(limit), progress)
+            progress(1.0, "Done")
+            return answer, sources
         except Exception as error:
             logger.exception("Research request failed")
             return f"Request failed: {error}", ""
@@ -175,11 +192,13 @@ def create_app() -> gr.Blocks:
         answer = gr.Markdown(label="Answer")
         sources = gr.Markdown(label="Retrieved sources")
         submit.click(run, inputs=[query, source, limit], outputs=[answer, sources])
+        query.submit(run, inputs=[query, source, limit], outputs=[answer, sources])
     return app
 
 
 if __name__ == "__main__":
     create_app().launch(
-        server_name=os.getenv("GRADIO_SERVER_NAME", "0.0.0.0"),
+        server_name=os.getenv("GRADIO_SERVER_NAME", "127.0.0.1"),
         server_port=int(os.getenv("PORT", "7860")),
+        show_error=True,
     )
