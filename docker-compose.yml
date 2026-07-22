@@ -1,0 +1,12 @@
+services:
+  scientific-rag:
+    build: .
+    ports:
+      - "7860:7860"
+    env_file:
+      - .env
+    volumes:
+      - chroma_data:/app/data/chroma
+
+volumes:
+  chroma_data:
