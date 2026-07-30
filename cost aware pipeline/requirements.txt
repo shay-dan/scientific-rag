@@ -12,6 +12,7 @@ langchain-text-splitters
 pgvector>=0.3,<1
 pydantic>=2.7,<3
 pydantic-settings>=2.5,<3
+python-multipart>=0.0.20,<1
 pymupdf
 python-dotenv>=1,<2
 rank-bm25

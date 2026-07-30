@@ -46,6 +46,7 @@ class PostgresVectorService:
         self.session = session
         self.settings = settings
         self.research_run_id = research_run_id
+        self._session_lock = asyncio.Lock()
         self.vector_store = None  # Compatibility with the legacy orchestrator's optional reset path.
         self.splitter = RecursiveCharacterTextSplitter(chunk_size=1_500, chunk_overlap=200)
         self.client = genai.Client(api_key=settings.google_api_key)
@@ -109,6 +110,13 @@ class PostgresVectorService:
 
     async def retrieve_context(self, query: str, top_n: int = 10) -> list[Document]:
         query_embedding = (await self._embed([query], "RETRIEVAL_QUERY"))[0]
+        # The legacy pipeline may issue several retrievals concurrently. An
+        # AsyncSession is intentionally single-operation, so serialize only
+        # the database portion while embeddings can still be prepared first.
+        async with self._session_lock:
+            return await self._retrieve_context_from_database(query, query_embedding, top_n)
+
+    async def _retrieve_context_from_database(self, query: str, query_embedding: list[float], top_n: int) -> list[Document]:
         candidate_limit = max(top_n * 3, 20)
         vector_statement = (
             select(DocumentChunk, SourceDocument)

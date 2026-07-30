@@ -1,0 +1,13 @@
+<div class="result-header"><div><p class="eyebrow">RESEARCH REPORT</p><h2>Your result</h2></div><span class="pill">{% if response.cached %}Cached {{ response.mode.value }} result{% else %}{{ response.mode.value|title }} research{% endif %}</span></div>
+<article class="card answer">{{ response.answer or "No report was generated." }}</article>
+<div class="result-actions">
+  <form action="/ui/research" method="post" hx-post="/ui/research" hx-target="#research-result" hx-swap="innerHTML">
+    <input type="hidden" name="question" value="{{ question }}"><input type="hidden" name="mode" value="{{ response.mode.value }}"><input type="hidden" name="action" value="fresh">
+    <button type="submit" class="secondary">Run fresh research</button>
+  </form>
+  <form action="/ui/research" method="post" hx-post="/ui/research" hx-target="#research-result" hx-swap="innerHTML">
+    <input type="hidden" name="question" value="{{ question }}"><input type="hidden" name="mode" value="{{ response.mode.value }}"><input type="hidden" name="action" value="extend">
+    <button type="submit" class="secondary">Search for additional sources</button>
+  </form>
+</div>
+<section class="sources"><h3>Sources used</h3>{% if response.sources %}{% for source in response.sources %}{% if source.source_url %}<a class="source" href="{{ source.source_url }}" target="_blank" rel="noreferrer">{% else %}<div class="source">{% endif %}<span class="source-title">{{ source.title }}</span><span class="source-meta">{{ source.source }}{% if source.external_id %} · {{ source.external_id }}{% endif %}</span>{% if source.source_url %}</a>{% else %}</div>{% endif %}{% endfor %}{% else %}<p class="empty">No external sources were retained for this report.</p>{% endif %}</section>

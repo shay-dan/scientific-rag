@@ -686,18 +686,24 @@ class VectorService:
         return candidates
 
 class ResearchAgent:
-    def __init__(self, vector_service, max_synthesis_subquestions: int = 2, retrieval_documents: int = 6, max_context_documents: int = 8):
+    def __init__(self, vector_service, max_synthesis_subquestions: int = 2, retrieval_documents: int = 6, max_context_documents: int = 8, progress_callback=None):
         print("DEBUG: 🛠️ Initializing ResearchAgent...")
         self.vector_service = vector_service
         self.max_synthesis_subquestions = max_synthesis_subquestions
         self.retrieval_documents = retrieval_documents
         self.max_context_documents = max_context_documents
+        self.progress_callback = progress_callback
 
         self.planner = create_chat_model("planner", 0).with_structured_output(ResearchPlan)
 
         self.expert = create_chat_model("expert", 0.3)
 
+    async def _progress(self, stage: str, role: str | None = None):
+        if self.progress_callback:
+            await self.progress_callback(stage, role)
+
     async def decompose_query_async(self, query: str) -> List[str]: #[new]
+        await self._progress("Breaking the question into focused research topics", "planner")
         print(f"DEBUG: 🧠 Decomposing query: '{query}'")
         prompt = ChatPromptTemplate.from_template(
             "You are a senior research scientist. Break this complex question into "
@@ -741,6 +747,7 @@ class ResearchAgent:
         sub_questions = await self.decompose_query_async(query)
 
         # 2. Parallel Retrieval from Vector Store
+        await self._progress("Searching the evidence database", "embedding")
         print(f"DEBUG: ⚡ Running {len(sub_questions)} retrievals in parallel...")
         results = await asyncio.gather(*[self._get_docs_async(q) for q in sub_questions])
 
@@ -762,13 +769,19 @@ class ResearchAgent:
         formatted_context = "\n\n".join(context_blocks) if context_blocks else "No external documents found."
 
         print("DEBUG: ✍️ Invoking Expert LLM for final synthesis...")
+        await self._progress("Writing a clear evidence-based answer", "expert")
         synthesis_prompt = ChatPromptTemplate.from_template("""
-            You are a Principal Investigator writing a final technical report.
+            Answer the user's question clearly and directly for an informed non-specialist.
 
-            TASK:
-            Answer the question accurately. You have access to:
+            You have access to:
             1. PROVIDED CONTEXT (Mined from academic databases).
             2. INTERNAL KNOWLEDGE (Your own foundational training).
+
+            STYLE:
+            - Start with the answer, not a title, author line, or formal report heading.
+            - Use plain language first; explain technical terms only when useful.
+            - Use short sections or bullets only when they help readability.
+            - State limitations, uncertainty, or safety concerns plainly.
 
             CITATION RULES:
             1. If information comes from the PROVIDED CONTEXT, cite it as [Source X].
@@ -781,7 +794,7 @@ class ResearchAgent:
             QUESTION:
             {question}
 
-            FINAL REPORT:
+            ANSWER:
         """) #[edit]
 
         answer = await ainvoke_with_fallback(
@@ -806,11 +819,12 @@ class ResearchAgent:
 # --- Updated Models ---
 
 class Orchestrator:
-    def __init__(self, vector_service, research_agent, llm='gemini', max_plan_steps: int = 2, papers_per_source: int = 3):
+    def __init__(self, vector_service, research_agent, llm='gemini', max_plan_steps: int = 2, papers_per_source: int = 3, progress_callback=None):
         self.vs = vector_service
         self.ra = research_agent
         self.max_plan_steps = max_plan_steps
         self.papers_per_source = papers_per_source
+        self.progress_callback = progress_callback
 
         # 1. Initialize Planner LLM
         if llm == "gemini":
@@ -829,8 +843,13 @@ class Orchestrator:
 
         print("DEBUG: Orchestrator initialized with Hybrid Parallel Planning.") #[edit]
 
+    async def _progress(self, stage: str, role: str | None = None):
+        if self.progress_callback:
+            await self.progress_callback(stage, role)
+
     async def generate_plan(self, question: str) -> QueryPlan:
         """Decomposes the query into technical or general sub-questions."""
+        await self._progress("Planning the research approach", "orchestrator")
         prompt = ChatPromptTemplate.from_template("""
             You are a Senior Research Architect. Break the question into 1-4 technical sub-questions.
 
@@ -865,6 +884,7 @@ class Orchestrator:
 
     async def filter_plan(self, original_query: str, plan: QueryPlan) -> QueryPlan:
         """Evaluates and filters sub-queries in parallel to save time and cost."""
+        await self._progress("Checking that the research plan is relevant", "gatekeeper")
         gate_prompt = ChatPromptTemplate.from_template("""
             You are a strict Research Auditor.
             Original Question: {original_query}
@@ -909,6 +929,7 @@ class Orchestrator:
         return QueryPlan(plan=filtered_sub_queries), evaluations #[edit]
 
     async def ask_db(self, plan: QueryPlan, original_query: str):
+        await self._progress("Searching existing evidence and embeddings", "embedding")
         all_docs = []
         # Filter for only academic queries to check DB, or check all if desired
         tasks = [self.ra._get_docs_async(step.query) for step in plan.plan]
@@ -961,6 +982,7 @@ class Orchestrator:
 
     async def run_mining_operation(self, plan: QueryPlan, limit=None):
         """Executes multi-source mining based on the plan. Skips internal knowledge types.""" #[edit]
+        await self._progress("Collecting relevant academic sources")
         all_mined_docs = []
         limit = limit or self.papers_per_source
         for step in plan.plan:
@@ -987,15 +1009,17 @@ class Orchestrator:
             print(f"DEBUG: Note - Could not clear collection: {e}")
 
     async def populate_knowledge_base(self, documents: List):
+        await self._progress("Indexing sources for semantic and full-text search", "embedding")
         print(f"DEBUG: Indexing {len(documents)} documents into Vector Store...")
         await self.vs.add_documents(documents)
 
     async def synthesize_final_report(self, original_query: str):
+        await self._progress("Preparing your answer from the evidence", "expert")
         print("DEBUG: Handing off to Research Agent for final synthesis...")
         # Research Agent uses both Vector Store and Internal LLM Knowledge
         return await self.ra.run_research(original_query)
 
-    async def execute_full_study(self, original_query: str, clear_db: bool = False,generate_evaluation_dataset: bool = False):
+    async def execute_full_study(self, original_query: str, clear_db: bool = False, generate_evaluation_dataset: bool = False, skip_database_cache: bool = False):
         """Main Orchestration Pipeline."""
         print(f"\n--- [ORCHESTRATOR] STARTING HYBRID STUDY ---")
 
@@ -1009,7 +1033,7 @@ class Orchestrator:
         refined_plan, evals = await self.filter_plan(original_query, raw_plan)
 
         # 3. DB Check
-        existing_report = await self.ask_db(refined_plan, original_query)
+        existing_report = None if skip_database_cache else await self.ask_db(refined_plan, original_query)
         if existing_report:
             return {"report": existing_report, "status": "retrieved_from_cache"}
 

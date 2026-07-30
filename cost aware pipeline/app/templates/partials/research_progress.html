@@ -1,0 +1,9 @@
+<section class="status live-progress" hx-get="/ui/research/{{ run_id }}/status" hx-trigger="load delay:2s, every 2s" hx-swap="outerHTML" aria-live="polite">
+  <div class="spinner"></div>
+  <div class="progress-copy">
+    <strong>Research is running</strong>
+    <p>{{ stage }}</p>
+    {% if model %}<p class="model-line">Using <code>{{ model }}</code></p>{% endif %}
+  </div>
+  <dl class="timer"><div><dt>Elapsed</dt><dd>{{ elapsed }}</dd></div><div><dt>{% if past_estimate %}Past estimate{% else %}Estimated remaining{% endif %}</dt><dd>{% if past_estimate %}Taking longer than the {{ estimate }} estimate{% else %}~{{ remaining }}{% endif %}</dd></div></dl>
+</section>

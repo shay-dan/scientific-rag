@@ -24,8 +24,17 @@ Every request has a fixed research budget. The limits reduce the number of paper
 
 - Exact repeated questions return the previously completed result without new model calls.
 - Synthetic evaluation-dataset generation is disabled by default.
-- Deep research is disabled by default. Enable it only after deciding its budget is acceptable.
 - Run records include the selected mode and limits in `model_metadata`; the API log records them too.
+
+### Enable Deep research
+
+Deep research is hidden from the user interface by default, because it can use a larger source and model-call budget. To make it a real selectable option, add the following to your private `.env` file and rebuild/restart the app:
+
+```text
+ENABLE_DEEP_RESEARCH=true
+```
+
+Do not commit `.env` to GitHub. Turning this on is an operator decision; per-user “higher privileges” would require an authentication and roles feature.
 
 ## Run with Docker
 
@@ -36,12 +45,6 @@ docker compose up --build
 ```
 
 Open [http://localhost:8000](http://localhost:8000) for the user interface. The developer API documentation remains at [http://localhost:8000/docs](http://localhost:8000/docs).
-
-To enable deep mode later, add this to `.env` and restart the containers:
-
-```text
-ENABLE_DEEP_RESEARCH=true
-```
 
 ## Run locally
 

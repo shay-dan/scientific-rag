@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Scientific RAG</title>
     <link rel="stylesheet" href="/static/styles.css">
+    <script src="https://unpkg.com/htmx.org@2.0.4" defer></script>
   </head>
   <body>
     <main class="shell">
@@ -13,33 +14,20 @@
         <h1>Scientific RAG</h1>
         <p class="subtitle">Ask a research question. The system mines academic sources, searches your private knowledge base, and writes a cited report.</p>
       </header>
-
-      <section class="card question-card">
+      <form class="card question-card" action="/ui/research" method="post" hx-post="/ui/research" hx-target="#research-result" hx-swap="innerHTML" hx-disabled-elt="#research-button">
         <label for="question">Research question</label>
-        <textarea id="question" maxlength="10000" placeholder="For example: What are recent applications of CRISPR in cancer treatment?"></textarea>
+        <textarea id="question" name="question" maxlength="10000" required placeholder="For example: What are recent applications of CRISPR in cancer treatment?"></textarea>
         <div class="mode-row" role="radiogroup" aria-label="Research depth">
-          <label class="mode"><input type="radio" name="mode" value="fast" checked><span><b>Fast</b><small>Lowest cost · focused answer</small></span></label>
+          <label class="mode"><input type="radio" name="mode" value="fast" checked><span><b>Fast</b><small>Lowest cost; focused answer</small></span></label>
           <label class="mode"><input type="radio" name="mode" value="standard"><span><b>Standard</b><small>Balanced source coverage</small></span></label>
-          <label class="mode {% if not deep_research_enabled %}disabled{% endif %}"><input type="radio" name="mode" value="deep" {% if not deep_research_enabled %}disabled{% endif %}><span><b>Deep</b><small>{% if deep_research_enabled %}More sources · higher cost{% else %}Disabled by budget policy{% endif %}</small></span></label>
+          {% if deep_research_enabled %}
+            <label class="mode"><input type="radio" name="mode" value="deep"><span><b>Deep</b><small>More sources; higher cost</small></span></label>
+          {% endif %}
         </div>
-        <div class="action-row">
-          <p id="cost-note">Fast mode uses the smallest research budget and is the default.</p>
-          <button id="research-button" type="button">Start research <span>→</span></button>
-        </div>
-      </section>
-
-      <section id="status" class="status hidden" aria-live="polite">
-        <div class="spinner"></div><div><strong>Research is running</strong><p id="stage">Planning the research approach…</p></div>
-      </section>
-
-      <section id="error" class="error hidden" role="alert"></section>
-      <section id="result" class="hidden">
-        <div class="result-header"><div><p class="eyebrow">RESEARCH REPORT</p><h2>Your result</h2></div><span id="result-meta" class="pill"></span></div>
-        <article id="answer" class="card answer"></article>
-        <section class="sources"><h3>Sources used</h3><div id="source-list"></div></section>
-      </section>
+        <div class="action-row"><p>Fast mode is the default and uses the smallest research budget.</p><button id="research-button" type="submit">Start research <span>→</span></button></div>
+      </form>
+      <section id="research-result" aria-live="polite"></section>
       <footer>Research modes limit source collection and model calls. Review cited sources before using results in decisions.</footer>
     </main>
-    <script src="/static/app.js"></script>
   </body>
 </html>

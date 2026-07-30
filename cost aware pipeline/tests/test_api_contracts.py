@@ -18,6 +18,8 @@ class ApiContractTests(unittest.TestCase):
             if hasattr(route, "methods")
         }
         self.assertIn(("/healthz", ("GET",)), routes)
+        self.assertIn(("/", ("GET",)), routes)
+        self.assertIn(("/ui/research", ("POST",)), routes)
         self.assertIn(("/v1/research", ("POST",)), routes)
         self.assertIn(("/v1/research/{run_id}", ("GET",)), routes)
 
