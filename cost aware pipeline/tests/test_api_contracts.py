@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import sys
 import unittest
 
@@ -7,7 +8,7 @@ sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(project_root / "src"))
 
 from app.main import app
-from app.schemas import ResearchMode, ResearchRequest
+from app.schemas import EvaluationDatasetInput, EvaluationRunInput, ResearchMode, ResearchRequest
 
 
 class ApiContractTests(unittest.TestCase):
@@ -29,3 +30,12 @@ class ApiContractTests(unittest.TestCase):
     def test_research_request_defaults_to_fast_mode(self) -> None:
         payload = ResearchRequest(question="What is the evidence for intervention X?")
         self.assertEqual(payload.mode, ResearchMode.fast)
+
+    def test_api_evaluation_runs_default_to_standard_mode(self) -> None:
+        self.assertEqual(EvaluationRunInput().mode, ResearchMode.standard)
+
+    def test_versioned_benchmark_matches_the_evaluation_dataset_contract(self) -> None:
+        benchmark_path = project_root / "evaluation" / "benchmark-v1.json"
+        benchmark = EvaluationDatasetInput.model_validate(json.loads(benchmark_path.read_text(encoding="utf-8")))
+        self.assertEqual(benchmark.name, "scientific-rag-benchmark-v1")
+        self.assertEqual(len(benchmark.cases), 10)

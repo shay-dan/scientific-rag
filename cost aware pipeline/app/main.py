@@ -22,7 +22,7 @@ from .auth import BetaLimiter, Principal, principal_for_key, require_api_key
 from .db import close_database, get_session, initialize_database
 from .logging_config import configure_logging
 from .models import EvaluationCase, EvaluationDataset, EvaluationResult, EvaluationRun, ResearchEvidence, ResearchRun, SourceDocument
-from .schemas import EvaluationDatasetInput, HealthResponse, ResearchMode, ResearchRequest, ResearchResponse
+from .schemas import EvaluationDatasetInput, EvaluationRunInput, HealthResponse, ResearchMode, ResearchRequest, ResearchResponse
 from .services import ResearchService, to_response
 from .evaluation import METRIC_NAMES, summarize_scores
 
@@ -353,13 +353,20 @@ async def create_evaluation_dataset(request: Request, payload: EvaluationDataset
 
 
 @app.post("/v1/evaluations/datasets/{dataset_id}/runs", tags=["evaluation"])
-async def queue_evaluation(request: Request, dataset_id: str, session: AsyncSession = Depends(get_session)):
+async def queue_evaluation(
+    request: Request,
+    dataset_id: str,
+    payload: EvaluationRunInput,
+    session: AsyncSession = Depends(get_session),
+):
     principal = require_api_key(request)
     if principal.role != "admin":
         raise HTTPException(status_code=403, detail="Admin role required")
+    if payload.mode is ResearchMode.deep and not get_settings().enable_deep_research:
+        raise HTTPException(status_code=400, detail="Deep research is disabled")
     dataset = (await session.execute(select(EvaluationDataset).where(EvaluationDataset.id == dataset_id))).scalar_one_or_none()
     if dataset is None: raise HTTPException(status_code=404, detail="Dataset not found")
-    run = EvaluationRun(dataset_id=dataset.id, status="queued")
+    run = EvaluationRun(dataset_id=dataset.id, status="queued", metrics={"mode": payload.mode.value})
     session.add(run); await session.commit(); await session.refresh(run)
     await request.app.state.redis.enqueue_job("run_evaluation_job", str(run.id))
     return {"evaluation_run_id": str(run.id), "status": run.status}

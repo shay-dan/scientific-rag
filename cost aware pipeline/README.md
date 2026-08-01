@@ -46,6 +46,17 @@ Admins can create a small, human-reviewed Q/A dataset through `/evaluation`. Eac
 
 Ragas uses the lower-cost `gemini-2.5-flash` judge by default (`RAGAS_JUDGE_MODEL`). For answer relevancy, it uses the same current native Gemini embedding configuration as the research pipeline, rather than an outdated LangChain embedding endpoint. If Ragas fails for one case, the worker records the error and uses the compact Gemini judge as a fallback rather than failing the entire evaluation.
 
+### Versioned benchmark
+
+`evaluation/benchmark-v1.json` is a committed 10-case, human-reviewed regression benchmark spanning biomedical and technical questions. It is an input dataset, not a claim of overall model quality. Run it with the admin API key from `.env`:
+
+```powershell
+$env:APP_API_KEY = "<the admin key from APP_API_KEYS>"
+.\scripts\run_benchmark.ps1 -Mode standard
+```
+
+The script assigns a timestamped dataset name so it is safe to run repeatedly, prints the API status URL, and leaves each result in PostgreSQL for comparison. Use `fast` for a cheaper smoke test. `deep` is accepted only after `ENABLE_DEEP_RESEARCH=true` is set and Compose is rebuilt.
+
 ## Run with Docker
 
 Copy `.env.example` to `.env`, set `GOOGLE_API_KEY`, `ENTREZ_EMAIL`, `POSTGRES_PASSWORD`, `APP_API_KEYS`, and `APP_SESSION_SECRET`, then run:

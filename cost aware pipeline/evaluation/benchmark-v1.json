@@ -1,0 +1,55 @@
+{
+  "name": "scientific-rag-benchmark-v1",
+  "cases": [
+    {
+      "question": "What are current uses of CRISPR in cancer research?",
+      "reference_answer": "CRISPR is used to identify cancer drivers in functional screens, create disease models, study mechanisms of treatment resistance, and engineer immune-cell therapies such as edited CAR-T cells. Translation to direct in-vivo cancer editing remains limited by delivery, off-target effects, immune responses, and the need to demonstrate clinical benefit.",
+      "reference_context": null
+    },
+    {
+      "question": "What are the main risks and limitations of CAR-T cell therapy?",
+      "reference_answer": "Important CAR-T risks include cytokine-release syndrome, neurologic toxicity, infections and prolonged cytopenias related to B-cell depletion or prior treatment, and relapse through antigen loss or limited persistence. Effectiveness in solid tumors is constrained by antigen heterogeneity, poor trafficking, and an immunosuppressive tumor microenvironment.",
+      "reference_context": null
+    },
+    {
+      "question": "What is known about the gut microbiome's role in colorectal cancer?",
+      "reference_answer": "Colorectal cancer is associated with gut dysbiosis and with enrichment of organisms such as Fusobacterium nucleatum and enterotoxigenic Bacteroides fragilis in some studies. Proposed mechanisms include inflammation, genotoxic metabolites, altered immune responses, and effects on epithelial signaling. Associations do not by themselves prove causation, and microbiome biomarkers and interventions still need prospective validation.",
+      "reference_context": null
+    },
+    {
+      "question": "How is artificial intelligence used in lung-cancer imaging, and what limits clinical adoption?",
+      "reference_answer": "AI can support lung-nodule detection, segmentation, malignancy-risk estimation, image triage, and radiology workflow prioritization. Clinical adoption is limited by dataset shift, variable image quality and acquisition protocols, biased or incomplete labels, limited external validation, explainability needs, and the requirement to demonstrate safe benefit in real workflows.",
+      "reference_context": null
+    },
+    {
+      "question": "What are the dangers and limitations of red light therapy?",
+      "reference_answer": "Red light therapy is generally studied as photobiomodulation, but evidence varies substantially by condition and device. Potential concerns include eye injury from inappropriate exposure, skin irritation or burns from excessive heat or dose, interactions with photosensitizing medicines or conditions, and delaying proven medical care. It should not be presented as an established treatment for serious disease without condition-specific clinical evidence.",
+      "reference_context": null
+    },
+    {
+      "question": "What are current approaches to quantum error correction using surface codes?",
+      "reference_answer": "Surface-code quantum error correction arranges physical qubits on a local lattice, repeatedly measures stabilizers to detect errors, and uses a decoder to infer corrections. Current work includes rotated layouts, lattice-surgery operations, improved decoders, fault-tolerant logical gates, and hardware demonstrations. Practical performance depends on physical error rates, correlated noise, measurement fidelity, connectivity, and the substantial qubit overhead needed for logical computation.",
+      "reference_context": null
+    },
+    {
+      "question": "What are key challenges in quantum error correction with superconducting qubits?",
+      "reference_answer": "Superconducting-qubit error correction must cope with gate and measurement errors, leakage outside the computational subspace, crosstalk, correlated noise, limited coherence, and the latency and accuracy of real-time decoding and feedback. A useful demonstration needs logical errors to be reduced relative to a comparable physical-qubit baseline as code size increases.",
+      "reference_context": null
+    },
+    {
+      "question": "What are the strengths and limitations of AlphaFold-style protein structure prediction for drug discovery?",
+      "reference_answer": "Structure prediction can accelerate target assessment, hypothesis generation, construct design, and interpretation of experimental data. It does not reliably determine whether a target is druggable, capture all conformational states, predict ligand binding affinity or selectivity, or replace experimental validation. Confidence scores and experimental context are essential when using predicted structures in discovery decisions.",
+      "reference_context": null
+    },
+    {
+      "question": "What is the current evidence for mRNA cancer vaccines?",
+      "reference_answer": "mRNA cancer vaccines can encode shared tumor antigens or patient-specific neoantigens to stimulate anti-tumor immunity, often in combination with checkpoint blockade. Early clinical studies show immunogenicity and signals of activity in selected settings, but durability of benefit, optimal antigen selection, manufacturing timelines, delivery, and results from larger randomized trials remain important open questions.",
+      "reference_context": null
+    },
+    {
+      "question": "How can antimicrobial resistance be reduced in healthcare settings?",
+      "reference_answer": "Reducing antimicrobial resistance requires antimicrobial stewardship, infection prevention and control, vaccination where available, diagnostic testing that supports targeted treatment, surveillance, and appropriate prescribing and duration of therapy. These measures reduce unnecessary exposure while maintaining effective treatment; local resistance patterns and clinical guidelines should guide implementation.",
+      "reference_context": null
+    }
+  ]
+}
