@@ -42,15 +42,16 @@ Do not commit `.env` to GitHub. Turning this on is an operator decision; per-use
 
 ## Evaluation with Ragas
 
-Admins can create a small, human-reviewed Q/A dataset and queue an evaluation run through `/v1/evaluations/datasets`. The worker runs the normal Fast research path for each question, then evaluates the answer and retrieved context with Ragas: faithfulness, answer relevancy, context precision, and context recall. Results and averages are available from `/v1/evaluations/runs/{evaluation_run_id}`.
+Admins can create a small, human-reviewed Q/A dataset through `/evaluation`. Each evaluation can choose Fast, Standard, or (when enabled) Deep research depth. The worker runs the selected normal research path for each question, then evaluates the answer and retrieved context with Ragas: faithfulness, answer relevancy, context precision, and context recall. When a verified reference source excerpt is supplied, context precision and recall use an additional semantic Gemini judge rather than brittle exact-word matching.
 
 Ragas uses the lower-cost `gemini-2.5-flash` judge by default (`RAGAS_JUDGE_MODEL`). For answer relevancy, it uses the same current native Gemini embedding configuration as the research pipeline, rather than an outdated LangChain embedding endpoint. If Ragas fails for one case, the worker records the error and uses the compact Gemini judge as a fallback rather than failing the entire evaluation.
 
 ## Run with Docker
 
-Copy `.env.example` to `.env`, add `GOOGLE_API_KEY` and `ENTREZ_EMAIL`, then run:
+Copy `.env.example` to `.env`, set `GOOGLE_API_KEY`, `ENTREZ_EMAIL`, `POSTGRES_PASSWORD`, `APP_API_KEYS`, and `APP_SESSION_SECRET`, then run:
 
 ```powershell
+Copy-Item .env.example .env
 docker compose up --build
 ```
 
@@ -68,10 +69,10 @@ python run_api.py
 
 ## Tests and logs
 
-Run visible unit and API-contract checks, with a copy saved to `logs/test-run-*.log`:
+Run unit and API-contract checks:
 
 ```powershell
-python scripts/run_checks.py
+python -m unittest discover -s tests -v
 ```
 
 During a real API run, request and research events are written to `logs/api.log` as well as the terminal. Follow them live with:
@@ -83,9 +84,7 @@ Get-Content .\logs\api.log -Wait
 The live PostgreSQL/pgvector test is intentionally opt-in. It requires a running test database and will otherwise be skipped:
 
 ```powershell
-$env:RUN_INTEGRATION_TESTS = "1"
-$env:DATABASE_URL_TEST = "postgresql://scientific_rag:scientific_rag@localhost:5432/scientific_rag"
-python scripts/run_checks.py
+docker compose run --rm --no-deps -v "${PWD}\tests\integration:/app/integration:ro" -e RUN_INTEGRATION_TESTS=1 api sh -lc 'DATABASE_URL_TEST="postgresql://scientific_rag:${POSTGRES_PASSWORD}@db:5432/scientific_rag" python -m unittest discover -s integration -t . -v'
 ```
 
 ## Security note
