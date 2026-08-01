@@ -1,0 +1,24 @@
+<section class="card evaluation-card">
+  <p class="eyebrow">{{ status|upper }}</p>
+  <h2>Ragas results</h2>
+  <p class="subtitle">Research depth: {{ mode|title }}</p>
+  <div class="metrics">
+    <div class="metric"><span>Faithfulness</span><b>{{ averages.faithfulness if averages.faithfulness is not none else "—" }}</b></div>
+    <div class="metric"><span>Answer relevancy</span><b>{{ averages.answer_relevancy if averages.answer_relevancy is not none else "—" }}</b></div>
+    <div class="metric"><span>Context precision</span><b>{{ averages.context_precision if averages.context_precision is not none else "—" }}</b></div>
+    <div class="metric"><span>Context recall</span><b>{{ averages.context_recall if averages.context_recall is not none else "—" }}</b></div>
+  </div>
+  {% for result in results %}
+  <article class="evaluation-case">
+    <p><strong>{{ result.question }}</strong></p>
+    <small>{{ result.status }} · {{ result.scores.get("engine", "no score") }}</small>
+    {% if result.scores.get("context_metrics_mode") == "verified_reference_excerpt_semantic_judge" %}<small><br>Context precision and recall use semantic comparison with the verified reference excerpt.</small>{% elif result.scores.get("context_metrics_mode") == "llm_reference_answer" %}<small><br>Context precision and recall use the reviewed reference answer.</small>{% endif %}
+    {% if result.error %}<small><br>{{ result.error }}</small>{% endif %}
+    {% if result.cache_diagnostics %}<small>{% if result.cache_diagnostics.get("decision") == "reuse_existing" %}Reused existing PostgreSQL evidence{% else %}Fresh sources mined{% endif %} · {{ result.cache_diagnostics.get("reason", "cache status unavailable") }}</small>{% endif %}
+    {% if result.answer %}<details><summary>Generated answer</summary><div class="evaluation-evidence">{{ result.answer }}</div></details>{% endif %}
+    {% if result.contexts %}<details><summary>Retrieved excerpts ({{ result.contexts|length }})</summary>{% for context in result.contexts %}<div class="evaluation-evidence">{{ context }}</div>{% endfor %}</details>{% endif %}
+    {% if result.source_diagnostics %}<details><summary>Source retrieval diagnostics</summary>{% for source, stats in result.source_diagnostics.items() %}<div class="evaluation-evidence"><strong>{{ source }}</strong>: requested {{ stats.get("requested", 0) }}, collected {{ stats.get("collected", 0) }}, used in answer {{ stats.get("used", 0) }}{% if stats.get("errors") %}<br><small>{{ stats.get("errors")|join("; ") }}</small>{% endif %}</div>{% endfor %}</details>{% endif %}
+    {% if result.sources %}<details><summary>Source records ({{ result.sources|length }})</summary>{% for source in result.sources %}<div class="evaluation-evidence">{% if source.source_url %}<a href="{{ source.source_url }}" target="_blank" rel="noreferrer">{% if source.citation_id %}[{{ source.citation_id }}] {% endif %}{{ source.title }}</a>{% else %}{% if source.citation_id %}[{{ source.citation_id }}] {% endif %}{{ source.title }}{% endif %}<br><small>{{ source.source }}</small></div>{% endfor %}</details>{% endif %}
+  </article>
+  {% endfor %}
+</section>

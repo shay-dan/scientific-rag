@@ -19,9 +19,12 @@ class ApiContractTests(unittest.TestCase):
         }
         self.assertIn(("/healthz", ("GET",)), routes)
         self.assertIn(("/", ("GET",)), routes)
+        self.assertIn(("/evaluation", ("GET",)), routes)
+        self.assertIn(("/ui/evaluations", ("POST",)), routes)
         self.assertIn(("/ui/research", ("POST",)), routes)
         self.assertIn(("/v1/research", ("POST",)), routes)
         self.assertIn(("/v1/research/{run_id}", ("GET",)), routes)
+        self.assertIn(("/v1/evaluations/runs/{evaluation_run_id}", ("GET",)), routes)
 
     def test_research_request_defaults_to_fast_mode(self) -> None:
         payload = ResearchRequest(question="What is the evidence for intervention X?")

@@ -14,9 +14,15 @@ class Settings(BaseSettings):
     request_timeout_seconds: int = 600
     allow_database_reset: bool = False
     embedding_model: str = "gemini-embedding-2"
+    ragas_judge_model: str = "gemini-2.5-flash"
     embedding_dimensions: int = 768
     enable_deep_research: bool = False
     allow_evaluation_dataset: bool = False
+    app_api_keys: str = ""
+    app_session_secret: str = ""
+    rate_limit_requests_per_minute: int = 30
+    research_runs_per_day: int = 10
+    redis_url: str = "redis://localhost:6379/0"
 
     def validate_research_configuration(self) -> None:
         missing = [name for name, value in (("GOOGLE_API_KEY", self.google_api_key), ("ENTREZ_EMAIL", self.entrez_email)) if not value]
@@ -26,6 +32,12 @@ class Settings(BaseSettings):
             raise ValueError("EMBEDDING_DIMENSIONS must be greater than zero")
         if self.embedding_dimensions != 768:
             raise ValueError("This schema is indexed for 768-dimensional embeddings; create a migration before changing it.")
+
+    def validate_security_configuration(self) -> None:
+        if not self.app_api_keys:
+            raise ValueError("APP_API_KEYS is required for the protected beta")
+        if not self.app_session_secret or len(self.app_session_secret) < 32:
+            raise ValueError("APP_SESSION_SECRET must be at least 32 characters")
 
 
 @lru_cache

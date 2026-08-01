@@ -1,0 +1,5 @@
+<div class="status live-progress" hx-get="/ui/evaluations/{{ run_id }}/status" hx-trigger="load delay:4s, every 4s" hx-swap="outerHTML">
+  <div class="spinner" aria-hidden="true"></div>
+  <div class="progress-copy"><strong>Evaluation is running</strong><p>Researching the test question, then calculating Ragas metrics.</p></div>
+  <dl class="timer"><div><dt>Elapsed</dt><dd>{{ elapsed }}</dd></div><div><dt>{% if past_estimate %}Past estimate{% else %}Estimated remaining{% endif %}</dt><dd>{% if past_estimate %}Taking longer than the {{ estimate }} estimate{% else %}~{{ remaining }}{% endif %}</dd></div></dl>
+</div>

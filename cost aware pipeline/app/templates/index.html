@@ -13,6 +13,7 @@
         <p class="eyebrow">EVIDENCE-LED RESEARCH</p>
         <h1>Scientific RAG</h1>
         <p class="subtitle">Ask a research question. The system mines academic sources, searches your private knowledge base, and writes a cited report.</p>
+        {% if is_admin %}<a class="admin-link" href="/evaluation">Evaluate retrieval with Ragas</a>{% endif %}
       </header>
       <form class="card question-card" action="/ui/research" method="post" hx-post="/ui/research" hx-target="#research-result" hx-swap="innerHTML" hx-disabled-elt="#research-button">
         <label for="question">Research question</label>

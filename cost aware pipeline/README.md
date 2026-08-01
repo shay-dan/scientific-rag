@@ -8,9 +8,13 @@ A Dockerized FastAPI, PostgreSQL full-text search, and pgvector research applica
 - `POST /v1/research` runs the research pipeline and persists the completed report, source audit records, chunks, full-text index, and vector embeddings.
 - `GET /v1/research/{run_id}` retrieves a prior run.
 - `GET /healthz` checks API and database health.
-- PostgreSQL tables for research runs, source documents, and pgvector-ready document chunks.
+- PostgreSQL tables for research runs, source documents, pgvector-ready chunks, and admin evaluation datasets/results.
 
-Research requests use PostgreSQL full-text search and pgvector cosine search, fused with reciprocal-rank fusion. The legacy planner, gatekeeper, source mining, and synthesis steps are retained while the retrieval layer is replaced.
+Research requests use PostgreSQL full-text search and pgvector cosine search, fused with reciprocal-rank fusion, early semantic MMR, and parent/child passages. The legacy planner, gatekeeper, source mining, and synthesis steps are retained while the retrieval layer is replaced.
+
+### Retrieval
+
+The final answer searches only sources collected for the current run, preventing unrelated historical papers from leaking into an answer. PostgreSQL is searched globally first as a cache; it is reused only if the gatekeeper finds enough strongly relevant evidence.
 
 ## Cost controls
 
@@ -36,6 +40,12 @@ ENABLE_DEEP_RESEARCH=true
 
 Do not commit `.env` to GitHub. Turning this on is an operator decision; per-user “higher privileges” would require an authentication and roles feature.
 
+## Evaluation with Ragas
+
+Admins can create a small, human-reviewed Q/A dataset and queue an evaluation run through `/v1/evaluations/datasets`. The worker runs the normal Fast research path for each question, then evaluates the answer and retrieved context with Ragas: faithfulness, answer relevancy, context precision, and context recall. Results and averages are available from `/v1/evaluations/runs/{evaluation_run_id}`.
+
+Ragas uses the lower-cost `gemini-2.5-flash` judge by default (`RAGAS_JUDGE_MODEL`). For answer relevancy, it uses the same current native Gemini embedding configuration as the research pipeline, rather than an outdated LangChain embedding endpoint. If Ragas fails for one case, the worker records the error and uses the compact Gemini judge as a fallback rather than failing the entire evaluation.
+
 ## Run with Docker
 
 Copy `.env.example` to `.env`, add `GOOGLE_API_KEY` and `ENTREZ_EMAIL`, then run:
@@ -43,6 +53,8 @@ Copy `.env.example` to `.env`, add `GOOGLE_API_KEY` and `ENTREZ_EMAIL`, then run
 ```powershell
 docker compose up --build
 ```
+
+Compose starts four services: the API, PostgreSQL/pgvector, Redis, and one durable research worker. The API stores a queued run in PostgreSQL and Redis delivers it to the worker, so an API restart does not cancel an already queued research request.
 
 Open [http://localhost:8000](http://localhost:8000) for the user interface. The developer API documentation remains at [http://localhost:8000/docs](http://localhost:8000/docs).
 
@@ -78,4 +90,4 @@ python scripts/run_checks.py
 
 ## Security note
 
-Do not deploy the API publicly until authentication and per-user rate limiting are added; each research request can consume your Gemini API budget.
+The protected beta requires `APP_API_KEYS` and a 32-character `APP_SESSION_SECRET`. API clients provide `X-API-Key`; the browser UI has a key-based login. The built-in rate limit is in-memory, so replace it with Redis-backed limits before a multi-instance public deployment.

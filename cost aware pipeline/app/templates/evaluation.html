@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Ragas evaluation · Scientific RAG</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <script src="https://unpkg.com/htmx.org@2.0.4" defer></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header>
+        <p class="eyebrow">ADMIN ONLY</p>
+        <h1>Ragas evaluation</h1>
+        <p class="subtitle">Run one reviewed question at a chosen research depth and inspect retrieval quality. This makes Gemini API calls.</p>
+        <a class="admin-link" href="/">← Back to research</a>
+      </header>
+      <form class="card evaluation-card" hx-post="/ui/evaluations" hx-target="#evaluation-result" hx-swap="innerHTML" hx-disabled-elt="#evaluate-button">
+        <label for="dataset_name">Dataset name</label>
+        <input id="dataset_name" name="dataset_name" required minlength="3" placeholder="Example: CRISPR smoke test">
+        <label for="question">Question</label>
+        <textarea id="question" name="question" required minlength="3" placeholder="What is CRISPR used for in cancer research?"></textarea>
+        <label for="reference_answer">Reviewed reference answer</label>
+        <textarea id="reference_answer" name="reference_answer" required minlength="3" placeholder="Write the answer you consider accurate and complete."></textarea>
+        <label for="reference_context">Verified reference source excerpt (optional)</label>
+        <textarea id="reference_context" name="reference_context" placeholder="Paste verified source text. When supplied, Ragas compares retrieved excerpts directly against it for context precision and recall."></textarea>
+        <fieldset class="mode-row" aria-label="Evaluation research depth">
+          <legend>Research depth</legend>
+          <label class="mode"><input type="radio" name="mode" value="fast" checked><span><b>Fast</b><small>Lowest cost; focused answer</small></span></label>
+          <label class="mode"><input type="radio" name="mode" value="standard"><span><b>Standard</b><small>Broader source coverage</small></span></label>
+          {% if deep_research_enabled %}<label class="mode"><input type="radio" name="mode" value="deep"><span><b>Deep</b><small>Most sources; highest cost</small></span></label>{% endif %}
+        </fieldset>
+        <div class="action-row"><p>Start with one case. Each submitted dataset has a unique name.</p><button id="evaluate-button" type="submit">Run Ragas evaluation</button></div>
+      </form>
+      <section id="evaluation-result" aria-live="polite"></section>
+      {% if recent_runs %}
+      <section class="card evaluation-card history-card">
+        <h2>Recent evaluations</h2>
+        <p>Open a completed run to inspect its answer, retrieved excerpts, and sources without rerunning it.</p>
+        {% for run in recent_runs %}
+        <button class="secondary history-run" type="button" hx-get="/ui/evaluations/{{ run.id }}/status" hx-target="#evaluation-result" hx-swap="innerHTML">{{ run.dataset_name }} · {{ run.status }}</button>
+        {% endfor %}
+      </section>
+      {% endif %}
+    </main>
+  </body>
+</html>

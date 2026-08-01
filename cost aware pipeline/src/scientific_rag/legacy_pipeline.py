@@ -119,6 +119,17 @@ def generate_content_with_fallback(client, role: str, contents: str, response_sc
             logger.warning("Model %s is unavailable for role %s; trying fallback %s", model, role, route.fallback)
 
 class MinerService:
+    ARXIV_TIMEOUT_SECONDS = 20
+    MAX_PMC_SECTIONS_PER_PAPER = 3
+    MAX_PMC_SECTION_CHARS = 4_000
+    _ARXIV_STOP_WORDS = {
+        "about", "applications", "current", "effects", "for", "from", "into", "latest",
+        "recent", "research", "the", "uses", "what", "with",
+    }
+    _ARXIV_GENERIC_TERMS = {
+        "approach", "approaches", "code", "codes", "correction", "error", "errors",
+        "method", "methods", "quantum", "study", "system", "systems", "using",
+    }
 
     @staticmethod
     def _normalize_title(title: str) -> str:
@@ -126,25 +137,46 @@ class MinerService:
             return ""
         return re.sub(r'\W+', '', title).lower()
 
+    @classmethod
+    def _arxiv_query_terms(cls, query: str) -> tuple[set[str], set[str]]:
+        """Return broad terms plus the domain-specific terms that must be present."""
+        terms = {
+            token.lower() for token in re.findall(r"[A-Za-z0-9-]+", query)
+            if len(token) > 2 and token.lower() not in cls._ARXIV_STOP_WORDS
+        }
+        specific_terms = terms - cls._ARXIV_GENERIC_TERMS
+        return terms, specific_terms
+
+    @staticmethod
+    def _arxiv_required_phrases(query: str) -> set[str]:
+        """Extract domain phrases whose individual words are too broad to trust."""
+        normalized = re.sub(r"[^a-z0-9]+", " ", query.lower()).strip()
+        phrases = set()
+        if re.search(r"\bsurface\s+codes?\b", normalized):
+            phrases.add("surface code")
+        return phrases
+
     @staticmethod
     def _get_keywords(query: str) -> List[str]:
-        stop_words = {'identify', 'evaluate', 'analyze', 'investigate', 'the', 'most', 'with', 'and', 'from', 'that', 'which', 'how', 'what', 'are'}
+        # PubMed handles a short, specific query much more reliably than a long
+        # natural-language question joined entirely with AND.  Keep the leading
+        # domain terms (the planner puts them first) and discard question/filler
+        # language before building the fielded query.
+        stop_words = {
+            'a', 'an', 'and', 'are', 'can', 'compare', 'do', 'does', 'evaluate',
+            'explain', 'for', 'from', 'how', 'identify', 'in', 'into',
+            'investigate', 'is', 'map', 'most', 'of', 'on', 'the', 'that',
+            'to', 'using', 'what', 'which', 'with',
+        }
         clean = re.sub(r'[^\w\s]', ' ', query).lower()
         words = clean.split()
-        return [w for w in words if w not in stop_words and len(w) > 2]
+        return [w for w in words if w not in stop_words and len(w) > 2][:5]
 
     @staticmethod
     def _format_pubmed_query(keywords: List[str]) -> str:
         return " AND ".join([f"{w}[tiab]" for w in keywords])
 
     @staticmethod
-    def _clean_query(query: str) -> str:
-        stop_words = {'identify', 'evaluate', 'analyze', 'investigate', 'the', 'most', 'with', 'and', 'from', 'that', 'which'}
-        clean = re.sub(r'[^\w\s]', ' ', query).lower()
-        words = clean.split()
-        important_keywords = [w for w in words if w not in stop_words and len(w) > 2]
-        return " AND ".join([f"{w}[tiab]" for w in important_keywords[:5]])
-
     @staticmethod
     def parse_pmc_xml(xml_text: str) -> List[Dict[str, str]]:
         print(f"DEBUG: Parsing PMC XML... (Data size: {len(xml_text)} bytes)")
@@ -206,10 +238,37 @@ class MinerService:
             return None
         return None
 
+    @classmethod
+    def select_pmc_sections(cls, sections: List[Dict]) -> List[Dict]:
+        """Keep a compact, readable evidence set before costly embedding work."""
+        priority_terms = ("conclusion", "result", "discussion", "introduction", "method")
+        excluded_terms = ("reference", "bibliograph", "acknowledg", "supplement", "author contribution")
+
+        def rank(section: Dict) -> tuple[int, int]:
+            title = str(section.get("section", "")).lower()
+            priority = next((index for index, term in enumerate(priority_terms) if term in title), len(priority_terms))
+            return priority, -len(str(section.get("text", "")))
+
+        selected = []
+        for section in sorted(sections, key=rank):
+            title = str(section.get("section", ""))
+            text = re.sub(r"\s+", " ", str(section.get("text", ""))).strip()
+            lowered_title = title.lower()
+            if not text or any(term in lowered_title for term in excluded_terms):
+                continue
+            # XML-to-text conversion can leave LaTex preambles and equation-heavy fragments.
+            latex_markers = sum(text.count(marker) for marker in ("\\usepackage", "\\begin{", "\\documentclass", "$$"))
+            alphabetic_fraction = sum(char.isalpha() for char in text) / max(len(text), 1)
+            if len(text) < 250 or latex_markers > 1 or alphabetic_fraction < 0.45:
+                continue
+            selected.append({**section, "text": text[:cls.MAX_PMC_SECTION_CHARS]})
+            if len(selected) == cls.MAX_PMC_SECTIONS_PER_PAPER:
+                break
+        return selected
+
     @staticmethod
-    def mine_pubmed(query: str, limit: int = 5, keywords: List[str] = None) -> List[Document]:
-        if keywords is None:
-            keywords = MinerService._get_keywords(query)
+    def mine_pubmed(query: str, limit: int = 5) -> List[Document]:
+        keywords = MinerService._get_keywords(query)
 
         if not keywords:
             return []
@@ -221,10 +280,6 @@ class MinerService:
             search_results = Entrez.read(handle)
             handle.close()
             pmids = search_results.get("IdList", [])
-
-            if not pmids and len(keywords) > 1:
-                print(f"DEBUG: No results for {len(keywords)} terms. Dropping least specific term...")
-                return MinerService.mine_pubmed(query, limit, keywords[:-1])
 
             print(f"DEBUG: PubMed IDs found: {pmids}")
         except Exception as e:
@@ -250,7 +305,9 @@ class MinerService:
                 pmcid = MinerService.get_pmcid_from_pmid(pmid)
                 if pmcid:
                     sections = MinerService.fetch_pmc_full_text(pmcid)
-                    for sec in sections:
+                    selected_sections = MinerService.select_pmc_sections(sections)
+                    print(f"DEBUG: Retained {len(selected_sections)}/{len(sections)} readable PMC sections for PMID {pmid}")
+                    for sec in selected_sections:
                         docs.append(Document(page_content=sec["text"], metadata={"doc_id": f"PMID:{pmid}", "pmcid": pmcid, "title": title, "section": sec["section"], "source": "pubmed", "type": "full_text"}))
                     time.sleep(0.35)
             except Exception as e:
@@ -259,21 +316,46 @@ class MinerService:
 
     @staticmethod
     def mine_arxiv(query: str, limit: int = 3) -> List[Document]:
-        # Placeholder integration context for LangChain's ArxivLoader implementation
-        from langchain_community.document_loaders import ArxivLoader
+        """Return small, citable arXiv abstracts before considering any full-text download."""
         print(f"DEBUG: Searching ArXiv for: '{query}'")
         docs = []
         try:
-            client = arxiv.Client()
-            search = arxiv.Search(query=query, max_results=limit, sort_by=arxiv.SortCriterion.Relevance)
-            arxiv_ids = [r.entry_id.split("/")[-1] for r in client.results(search)]
-            print(f"DEBUG: ArXiv IDs found: {arxiv_ids}")
-            for arxiv_id in arxiv_ids:
-                loader = ArxivLoader(query=arxiv_id, load_max_docs=1)
-                for doc in loader.load():
-                    doc.metadata.update({"title": doc.metadata.get("Title", "No Title"), "source": "arxiv", "type": "full_text"})
-                    print(f"Article Title from ARXIV:\n---{doc.metadata['title']}---")
-                    docs.append(doc)
+            client = arxiv.Client(page_size=max(limit * 3, 10), num_retries=1)
+            search = arxiv.Search(query=query, max_results=max(limit * 3, 10), sort_by=arxiv.SortCriterion.Relevance)
+            query_terms, specific_terms = MinerService._arxiv_query_terms(query)
+            required_phrases = MinerService._arxiv_required_phrases(query)
+            required_overlap = min(2, len(query_terms))
+            for result in client.results(search):
+                title = str(result.title).strip()
+                summary = str(result.summary).strip()
+                candidate_text = f"{title} {summary}".lower()
+                normalized_candidate = re.sub(r"[^a-z0-9]+", " ", candidate_text)
+                overlap = sum(term in candidate_text for term in query_terms)
+                if required_overlap and overlap < required_overlap:
+                    continue
+                # Broad terms such as "quantum", "error", and "correction" are
+                # insufficient evidence of relevance.  A surface-code question,
+                # for example, must retain "surface" in the candidate itself.
+                if specific_terms and not any(term in candidate_text for term in specific_terms):
+                    continue
+                if any(phrase not in normalized_candidate for phrase in required_phrases):
+                    continue
+                entry_url = str(result.entry_id)
+                arxiv_id = entry_url.rstrip("/").split("/")[-1]
+                print(f"Article Title from ARXIV:\n---{title}---")
+                docs.append(Document(
+                    page_content=summary,
+                    metadata={
+                        "doc_id": f"arxiv:{arxiv_id}",
+                        "title": title,
+                        "source": "arxiv",
+                        "source_url": entry_url,
+                        "url": entry_url,
+                        "type": "abstract",
+                    },
+                ))
+                if len(docs) >= limit:
+                    break
             print(f"DEBUG: ArXiv Mining complete. Total docs: {len(docs)}")
         except Exception as e:
             print(f"DEBUG: ArXiv Mining Failed: {e}")
@@ -286,9 +368,15 @@ class MinerService:
 
         raw_results = []
         if source == "pubmed":
-            raw_results = cls.mine_pubmed(query, limit)
+            raw_results = await asyncio.to_thread(cls.mine_pubmed, query, limit)
         elif source == "arxiv":
-            raw_results = cls.mine_arxiv(query, limit)
+            try:
+                raw_results = await asyncio.wait_for(
+                    asyncio.to_thread(cls.mine_arxiv, query, limit),
+                    timeout=cls.ARXIV_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                print(f"DEBUG: ArXiv search timed out after {cls.ARXIV_TIMEOUT_SECONDS}s")
         else:
             print(f"WARNING: Unknown source '{source}' requested.")
 
@@ -760,11 +848,24 @@ class ResearchAgent:
 
         combined_docs = list(unique_docs.values())[:self.max_context_documents]
 
+        # A citation identifies a source record, not an individual overlapping passage.
+        # This keeps repeated passages from one paper traceable to the same paper in the UI.
+        citation_ids = {}
+        for d in combined_docs:
+            source_key = (
+                d.metadata.get("doc_id")
+                or d.metadata.get("url")
+                or d.metadata.get("title")
+                or hashlib.md5(d.page_content.encode()).hexdigest()
+            )
+            citation_id = citation_ids.setdefault(str(source_key), f"S{len(citation_ids) + 1}")
+            d.metadata["citation_id"] = citation_id
+
         # 4. Synthesize with Hybrid Knowledge
         # If no docs are found, the LLM will rely more on internal knowledge
         context_blocks = [
-            f"--- [Source {i+1}: {d.metadata.get('title') or d.metadata.get('source') or 'Unknown Source'}] ---\n{d.page_content}"
-            for i, d in enumerate(combined_docs)
+            f"--- [{d.metadata['citation_id']}: {d.metadata.get('title') or d.metadata.get('source') or 'Unknown Source'}] ---\n{d.page_content}"
+            for d in combined_docs
         ]
         formatted_context = "\n\n".join(context_blocks) if context_blocks else "No external documents found."
 
@@ -773,9 +874,8 @@ class ResearchAgent:
         synthesis_prompt = ChatPromptTemplate.from_template("""
             Answer the user's question clearly and directly for an informed non-specialist.
 
-            You have access to:
-            1. PROVIDED CONTEXT (Mined from academic databases).
-            2. INTERNAL KNOWLEDGE (Your own foundational training).
+            You have access only to PROVIDED CONTEXT mined from academic databases.
+            Treat it as the complete evidence base for this answer.
 
             STYLE:
             - Start with the answer, not a title, author line, or formal report heading.
@@ -784,9 +884,11 @@ class ResearchAgent:
             - State limitations, uncertainty, or safety concerns plainly.
 
             CITATION RULES:
-            1. If information comes from the PROVIDED CONTEXT, cite it as [Source X].
-            2. If information comes from your INTERNAL KNOWLEDGE (because context was missing or for general definitions), do NOT use a [Source X] citation.
-            3. If the sources provide conflicting info, mention the conflict.
+            1. Every factual or technical claim must be directly supported by PROVIDED CONTEXT and cite its exact label, for example [S1].
+            2. Do not add general background, examples, numerical claims, limitations, or recommendations from internal knowledge.
+            3. If the context does not support part of the question, say "The retrieved sources do not establish this point" rather than filling the gap.
+            4. If the sources provide conflicting info, mention the conflict and cite both sources.
+            5. Do not invent citations or cite a source for a claim it does not support.
 
             PROVIDED CONTEXT:
             {context}
@@ -846,6 +948,27 @@ class Orchestrator:
     async def _progress(self, stage: str, role: str | None = None):
         if self.progress_callback:
             await self.progress_callback(stage, role)
+
+    @staticmethod
+    def enforce_source_policy(plan: QueryPlan) -> QueryPlan:
+        """Make source coverage predictable after the LLM has planned the sub-questions."""
+        technical_terms = ("ai", "algorithm", "computer vision", "deep learning", "machine learning", "model")
+        for step in plan.plan:
+            if step.source_type == "internal_knowledge":
+                step.external_sources = []
+                continue
+            query = step.query.lower()
+            technical_domain = bool({"technical", "physics", "education"}.intersection(step.domains))
+            technical_query = any(term in query for term in technical_terms)
+            medical_domain = "medical" in step.domains
+            if medical_domain and (technical_domain or technical_query):
+                step.external_sources = ["pubmed", "arxiv"]
+            elif technical_domain or technical_query:
+                step.external_sources = ["arxiv"]
+            else:
+                step.external_sources = ["pubmed"]
+            print(f"DEBUG: Source policy selected {step.external_sources} for: {step.query}")
+        return plan
 
     async def generate_plan(self, question: str) -> QueryPlan:
         """Decomposes the query into technical or general sub-questions."""
@@ -929,61 +1052,71 @@ class Orchestrator:
         return QueryPlan(plan=filtered_sub_queries), evaluations #[edit]
 
     async def ask_db(self, plan: QueryPlan, original_query: str):
+        """Return a cached report only when existing evidence is sufficient and relevant."""
         await self._progress("Searching existing evidence and embeddings", "embedding")
         all_docs = []
-        # Filter for only academic queries to check DB, or check all if desired
         tasks = [self.ra._get_docs_async(step.query) for step in plan.plan]
         results = await asyncio.gather(*tasks)
 
         for docs in results:
             all_docs.extend(docs)
+        unique_docs = {}
+        for document in all_docs:
+            key = document.metadata.get("doc_id") or document.metadata.get("url") or hashlib.sha256(document.page_content.encode()).hexdigest()
+            unique_docs[str(key)] = document
+        candidates = list(unique_docs.values())
+        minimum_contexts = max(2, min(4, self.ra.retrieval_documents))
+        diagnostics = {
+            "checked": True,
+            "candidate_contexts": len(candidates),
+            "minimum_contexts": minimum_contexts,
+            "decision": "mine_fresh",
+            "reason": "insufficient_existing_evidence",
+        }
+        if len(candidates) < minimum_contexts:
+            print(f"DEBUG: Internal DB has only {len(candidates)} usable contexts. Proceeding to mining.")
+            return None, diagnostics
 
-        """
-        if len(all_docs) >= 10:
-            print(f"DEBUG: Internal DB is warm ({len(all_docs)} docs). Skipping mining.")
-            res = await self.ra.run_research(original_query)
-        """ # [delete]
+        verification_prompt = ChatPromptTemplate.from_template("""
+            Decide whether the retrieved evidence is sufficient and directly relevant to answer the user's question.
+            Reuse it only when it supports a high-quality answer without fresh source mining.
 
-        # --- New Relevance-Aware DB Check ---
-        if len(all_docs) >= 10: # [new]
-            # Use the Gatekeeper to verify if the retrieved documents actually cover the topic
-            sample_context = "\n".join([doc.page_content[:200] for doc in all_docs]) # [new]
-            verification_prompt = f"""
-            Analyze if the following retrieved context is relevant and sufficient to answer the query.
-            Query: {original_query}
-            Context Snippets: {sample_context}
-            """ # [new]
+            Question: {question}
+            Retrieved evidence:
+            {context}
 
-            # Re-using the gate_keeper_llm for a quick quality check
-            verification = await ainvoke_with_fallback(
+            {format_instructions}
+        """)
+        sample_context = "\n\n".join(document.page_content[:500] for document in candidates[:6])
+        try:
+            review = await ainvoke_with_fallback(
                 "gatekeeper",
                 0,
-                lambda model: model,
-                verification_prompt + "\nReturn a JSON with 'relevance_score' (0-1) and 'should_skip' (true if unrelated).",
-            ) # [new]
-
-            # We parse the verification (simplified here, but can use self.review_parser)
-            if "relevance_score" in verification.content and '"relevance_score": 0.7' in verification.content: # [new] (Simplified check for example)
-                pass # Logic continues below
-
-            # More robust implementation using the parser:
-            try: # [new]
-                review = self.review_parser.parse(verification.content) # [new]
-                if review.relevance_score >= 0.7 and not review.should_skip: # [new]
-                    print(f"DEBUG: Internal DB is warm AND relevant ({len(all_docs)} docs). Skipping mining.") # [new]
-                    return await self.ra.run_research(original_query) # [new]
-                else: # [new]
-                    print(f"DEBUG: Internal DB has density but low relevance ({review.relevance_score}). Proceeding to Mining...") # [new]
-            except Exception: # [new]
-                print("DEBUG: Verification failed, defaulting to Mining for safety.") # [new]
-
-        print("DEBUG: Internal DB is cold or irrelevant. Proceeding to Mining...") # [edit]
-        return None
+                lambda model: verification_prompt | model | self.review_parser,
+                {
+                    "question": original_query,
+                    "context": sample_context,
+                    "format_instructions": self.review_parser.get_format_instructions(),
+                },
+            )
+            relevance_score = float(review["relevance_score"])
+            diagnostics["relevance_score"] = relevance_score
+            if relevance_score >= 0.85 and not review["should_skip"]:
+                diagnostics.update({"decision": "reuse_existing", "reason": "sufficient_relevant_evidence"})
+                print(f"DEBUG: Reusing {len(candidates)} relevant existing contexts (score={relevance_score:.2f}).")
+                return await self.ra.run_research(original_query), diagnostics
+            diagnostics["reason"] = "existing_evidence_not_relevant_enough"
+            print(f"DEBUG: Existing evidence score {relevance_score:.2f} did not meet reuse threshold. Proceeding to mining.")
+        except Exception as error:
+            diagnostics.update({"reason": "cache_verification_failed", "error": str(error)})
+            print("DEBUG: Cache verification failed; proceeding to mining for safety.")
+        return None, diagnostics
 
     async def run_mining_operation(self, plan: QueryPlan, limit=None):
-        """Executes multi-source mining based on the plan. Skips internal knowledge types.""" #[edit]
+        """Executes source mining concurrently while isolating individual source failures.""" #[edit]
         await self._progress("Collecting relevant academic sources")
         all_mined_docs = []
+        source_diagnostics = {}
         limit = limit or self.papers_per_source
         for step in plan.plan:
             if step.source_type == "internal_knowledge": #[new]
@@ -991,14 +1124,22 @@ class Orchestrator:
                 continue #[new]
 
             print(f"DEBUG: Mining Academic Source: {step.query}")
-            for source in step.external_sources:
-                try:
-                    docs = await MinerService.mine(step.query, source=source, limit=limit)
-                    all_mined_docs.extend(docs)
-                except Exception as e:
-                    print(f"Error mining {source}: {e}")
+            sources = step.external_sources
+            for source in sources:
+                source_diagnostics.setdefault(source, {"requested": 0, "collected": 0, "errors": []})["requested"] += 1
+            mined = await asyncio.gather(
+                *(MinerService.mine(step.query, source=source, limit=limit) for source in sources),
+                return_exceptions=True,
+            )
+            for source, result in zip(sources, mined):
+                if isinstance(result, Exception):
+                    print(f"Error mining {source}: {result}")
+                    source_diagnostics[source]["errors"].append(str(result))
+                    continue
+                source_diagnostics[source]["collected"] += len(result)
+                all_mined_docs.extend(result)
 
-        return all_mined_docs, len(all_mined_docs)
+        return all_mined_docs, len(all_mined_docs), source_diagnostics
 
     async def clear_knowledge_base(self):
         print("DEBUG: Clearing Vector Store...")
@@ -1012,6 +1153,7 @@ class Orchestrator:
         await self._progress("Indexing sources for semantic and full-text search", "embedding")
         print(f"DEBUG: Indexing {len(documents)} documents into Vector Store...")
         await self.vs.add_documents(documents)
+        self.vs.restrict_final_retrieval_to_current_run()
 
     async def synthesize_final_report(self, original_query: str):
         await self._progress("Preparing your answer from the evidence", "expert")
@@ -1031,14 +1173,18 @@ class Orchestrator:
 
         # 2. Filter
         refined_plan, evals = await self.filter_plan(original_query, raw_plan)
+        refined_plan = self.enforce_source_policy(refined_plan)
 
         # 3. DB Check
-        existing_report = None if skip_database_cache else await self.ask_db(refined_plan, original_query)
+        cache_diagnostics = {"checked": False, "decision": "mine_fresh", "reason": "cache_bypassed"}
+        existing_report = None
+        if not skip_database_cache:
+            existing_report, cache_diagnostics = await self.ask_db(refined_plan, original_query)
         if existing_report:
-            return {"report": existing_report, "status": "retrieved_from_cache"}
+            return {"report": existing_report, "status": "retrieved_from_cache", "metadata": {"cache": cache_diagnostics}}
 
         # 4. Mine (Only academic parts)
-        docs, doc_count = await self.run_mining_operation(refined_plan)
+        docs, doc_count, source_diagnostics = await self.run_mining_operation(refined_plan)
 
         # 5. Index & Synthesize
         if doc_count > 0:
@@ -1056,7 +1202,9 @@ class Orchestrator:
             "report": final_report,
             "metadata": {
                 "mined_count": doc_count,
-                "plan_executed": [s.query for s in refined_plan.plan]
+                "plan_executed": [s.query for s in refined_plan.plan],
+                "source_diagnostics": source_diagnostics,
+                "cache": cache_diagnostics,
             },
             "evaluation_dataset": golden_set
         }
