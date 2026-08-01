@@ -57,6 +57,8 @@ $env:APP_API_KEY = "<the admin key from APP_API_KEYS>"
 
 The script assigns a timestamped dataset name so it is safe to run repeatedly, prints the API status URL, and leaves each result in PostgreSQL for comparison. Use `fast` for a cheaper smoke test. `deep` is accepted only after `ENABLE_DEEP_RESEARCH=true` is set and Compose is rebuilt.
 
+The script waits for the API health check for up to one minute after Compose starts. If it times out, inspect startup output with `docker compose logs api`.
+
 ## Run with Docker
 
 Copy `.env.example` to `.env`, set `GOOGLE_API_KEY`, `ENTREZ_EMAIL`, `POSTGRES_PASSWORD`, `APP_API_KEYS`, and `APP_SESSION_SECRET`, then run:

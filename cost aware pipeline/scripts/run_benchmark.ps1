@@ -18,6 +18,25 @@ $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $benchmark.name = "$($benchmark.name)-$timestamp"
 $headers = @{ "X-API-Key" = $ApiKey }
 
+Write-Host "Waiting for API readiness at $BaseUrl/healthz ..."
+$ready = $false
+for ($attempt = 1; $attempt -le 30; $attempt++) {
+    try {
+        $health = Invoke-RestMethod -Method Get -Uri "$BaseUrl/healthz" -TimeoutSec 3
+        if ($health.status -eq "ok") {
+            $ready = $true
+            break
+        }
+    }
+    catch {
+        Start-Sleep -Seconds 2
+    }
+}
+
+if (-not $ready) {
+    throw "The API did not become ready within 60 seconds. Run 'docker compose logs api' to see the startup error."
+}
+
 $dataset = Invoke-RestMethod -Method Post -Uri "$BaseUrl/v1/evaluations/datasets" -Headers $headers -ContentType "application/json" -Body ($benchmark | ConvertTo-Json -Depth 10)
 $run = Invoke-RestMethod -Method Post -Uri "$BaseUrl/v1/evaluations/datasets/$($dataset.dataset_id)/runs" -Headers $headers -ContentType "application/json" -Body (@{ mode = $Mode } | ConvertTo-Json)
 
