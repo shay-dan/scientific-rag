@@ -19,11 +19,28 @@ from google.genai import types
 
 async def startup(ctx):
     await initialize_database()
+    await _mark_interrupted_evaluation_runs()
     ctx["service"] = ResearchService(get_settings())
 
 
 async def shutdown(ctx):
     await close_database()
+
+
+async def _mark_interrupted_evaluation_runs() -> None:
+    """A worker restart means this single-worker deployment cannot finish prior running jobs."""
+    async with session_factory() as session:
+        runs = list((await session.execute(select(EvaluationRun).where(EvaluationRun.status == "running"))).scalars())
+        for run in runs:
+            run.status = "failed"
+            run.metrics = {
+                **run.metrics,
+                "phase": "failed",
+                "failure": "Worker restarted before the evaluation completed. Queue a new run to retry.",
+            }
+            run.completed_at = datetime.now(timezone.utc)
+        if runs:
+            await session.commit()
 
 
 async def run_research_job(ctx, run_id: str, question: str, mode: str, force_mining: bool):
