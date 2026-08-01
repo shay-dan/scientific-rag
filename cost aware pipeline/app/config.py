@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     google_api_key: str = ""
     entrez_email: str = ""
     request_timeout_seconds: int = 600
+    evaluation_job_timeout_seconds: int = 3600
     allow_database_reset: bool = False
     embedding_model: str = "gemini-embedding-2"
     ragas_judge_model: str = "gemini-2.5-flash"
@@ -32,6 +33,8 @@ class Settings(BaseSettings):
             raise ValueError("EMBEDDING_DIMENSIONS must be greater than zero")
         if self.embedding_dimensions != 768:
             raise ValueError("This schema is indexed for 768-dimensional embeddings; create a migration before changing it.")
+        if self.evaluation_job_timeout_seconds < self.request_timeout_seconds:
+            raise ValueError("EVALUATION_JOB_TIMEOUT_SECONDS must be at least REQUEST_TIMEOUT_SECONDS")
 
     def validate_security_configuration(self) -> None:
         if not self.app_api_keys:

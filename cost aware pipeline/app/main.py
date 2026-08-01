@@ -81,6 +81,11 @@ def _evaluation_progress_context(run: EvaluationRun) -> dict:
         "estimate": _duration_label(_EVALUATION_ESTIMATE_SECONDS),
         "remaining": _duration_label(max(_EVALUATION_ESTIMATE_SECONDS - elapsed, 0)),
         "past_estimate": elapsed > _EVALUATION_ESTIMATE_SECONDS,
+        "phase": run.metrics.get("phase", "research"),
+        "total_cases": run.metrics.get("total_cases", 1),
+        "research_completed": run.metrics.get("research_completed", 0),
+        "evaluation_completed": run.metrics.get("evaluation_completed", 0),
+        "current_question": run.metrics.get("current_question"),
     }
 
 

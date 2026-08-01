@@ -59,6 +59,8 @@ The script assigns a timestamped dataset name so it is safe to run repeatedly, p
 
 The script waits for the API health check for up to one minute after Compose starts. If it times out, inspect startup output with `docker compose logs api`.
 
+Benchmark jobs have their own one-hour timeout (`EVALUATION_JOB_TIMEOUT_SECONDS=3600`), independent of the per-research-request timeout. The evaluation page reports research and judging progress for the current case.
+
 ## Run with Docker
 
 Copy `.env.example` to `.env`, set `GOOGLE_API_KEY`, `ENTREZ_EMAIL`, `POSTGRES_PASSWORD`, `APP_API_KEYS`, and `APP_SESSION_SECRET`, then run:

@@ -3,6 +3,7 @@ import asyncio
 from datetime import datetime, timezone
 
 from arq.connections import RedisSettings
+from arq.worker import func
 from uuid import UUID
 from sqlalchemy import select
 
@@ -29,14 +30,39 @@ async def run_research_job(ctx, run_id: str, question: str, mode: str, force_min
     await ctx["service"].run_queued(UUID(run_id), question, ResearchMode(mode), force_mining)
 
 
+async def _mark_evaluation_run_failed(evaluation_run_id: str, error: str) -> None:
+    async with session_factory() as session:
+        run = (await session.execute(select(EvaluationRun).where(EvaluationRun.id == UUID(evaluation_run_id)))).scalar_one_or_none()
+        if run is None:
+            return
+        run.status = "failed"
+        run.metrics = {**run.metrics, "phase": "failed", "failure": error}
+        run.completed_at = datetime.now(timezone.utc)
+        await session.commit()
+
+
 async def run_evaluation_job(ctx, evaluation_run_id: str):
+    try:
+        await _run_evaluation_job(ctx, evaluation_run_id)
+    except asyncio.CancelledError:
+        await asyncio.shield(_mark_evaluation_run_failed(evaluation_run_id, "Worker timeout reached before the benchmark completed."))
+        raise
+    except Exception as error:
+        await _mark_evaluation_run_failed(evaluation_run_id, f"Evaluation worker failed: {error}")
+        raise
+
+
+async def _run_evaluation_job(ctx, evaluation_run_id: str):
     async with session_factory() as session:
         run = (await session.execute(select(EvaluationRun).where(EvaluationRun.id == UUID(evaluation_run_id)))).scalar_one()
         run.status = "running"
         mode = ResearchMode(run.metrics.get("mode", "fast"))
         cases = list((await session.execute(select(EvaluationCase).where(EvaluationCase.dataset_id == run.dataset_id))).scalars())
+        run.metrics = {**run.metrics, "mode": mode.value, "phase": "research", "total_cases": len(cases), "research_completed": 0, "evaluation_completed": 0, "current_question": None}
         await session.commit()
-        for case in cases:
+        for case_index, case in enumerate(cases, start=1):
+            run.metrics = {**run.metrics, "phase": "research", "current_case": case_index, "current_question": case.question}
+            await session.commit()
             result = EvaluationResult(evaluation_run_id=run.id, evaluation_case_id=case.id, status="running")
             session.add(result); await session.commit()
             try:
@@ -49,13 +75,16 @@ async def run_evaluation_job(ctx, evaluation_run_id: str):
                 result.research_run_id, result.answer, result.retrieved_contexts, result.status = research.id, research.answer, contexts, "completed"
             except Exception as error:
                 result.status, result.error = "failed", str(error)
+            run.metrics = {**run.metrics, "research_completed": case_index}
             await session.commit()
         judge = genai.Client(api_key=get_settings().google_api_key)
         judge_model = get_settings().ragas_judge_model
         results = list((await session.execute(select(EvaluationResult).where(EvaluationResult.evaluation_run_id == run.id, EvaluationResult.status == "completed"))).scalars())
-        for result in results:
+        for evaluation_index, result in enumerate(results, start=1):
             try:
                 case = (await session.execute(select(EvaluationCase).where(EvaluationCase.id == result.evaluation_case_id))).scalar_one()
+                run.metrics = {**run.metrics, "phase": "evaluation", "current_case": evaluation_index, "current_question": case.question}
+                await session.commit()
                 result.judge_scores = await score_with_ragas(
                     question=case.question,
                     answer=result.answer or "",
@@ -86,6 +115,7 @@ async def run_evaluation_job(ctx, evaluation_run_id: str):
                     result.error = f"Ragas failed: {error}"
                 except Exception as fallback_error:
                     result.status, result.error = "judge_failed", f"Ragas failed: {error}; fallback failed: {fallback_error}"
+            run.metrics = {**run.metrics, "evaluation_completed": evaluation_index}
             await session.commit()
         judged = list((await session.execute(select(EvaluationResult).where(EvaluationResult.evaluation_run_id == run.id, EvaluationResult.status == "judged"))).scalars())
         run.metrics = summarize_scores([result.judge_scores for result in judged])
@@ -98,7 +128,10 @@ async def run_evaluation_job(ctx, evaluation_run_id: str):
 
 
 class WorkerSettings:
-    functions = [run_research_job, run_evaluation_job]
+    functions = [
+        func(run_research_job, timeout=get_settings().request_timeout_seconds),
+        func(run_evaluation_job, timeout=get_settings().evaluation_job_timeout_seconds, max_tries=1),
+    ]
     on_startup = startup
     on_shutdown = shutdown
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)

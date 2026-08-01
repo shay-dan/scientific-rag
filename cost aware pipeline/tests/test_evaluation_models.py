@@ -110,6 +110,15 @@ class EvaluationModelTests(unittest.TestCase):
         template = (project_root / "app" / "templates" / "partials" / "evaluation_progress.html").read_text(encoding="utf-8")
         self.assertIn("Elapsed", template)
         self.assertIn("Estimated remaining", template)
+        self.assertIn("research_completed", template)
+        self.assertIn("evaluation_completed", template)
+
+    def test_evaluation_worker_has_a_separate_timeout_and_persists_progress(self) -> None:
+        worker = (project_root / "app" / "worker.py").read_text(encoding="utf-8")
+        self.assertIn("evaluation_job_timeout_seconds", worker)
+        self.assertIn("max_tries=1", worker)
+        self.assertIn('"research_completed"', worker)
+        self.assertIn('"evaluation_completed"', worker)
 
     def test_native_gemini_embeddings_use_the_current_api_shape(self) -> None:
         class FakeVector:

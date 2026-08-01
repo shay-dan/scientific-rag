@@ -23,6 +23,11 @@ class ApiConfigurationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ResearchRequest(question="hi")
 
+    def test_evaluation_timeout_cannot_be_shorter_than_a_research_timeout(self) -> None:
+        settings = Settings(request_timeout_seconds=600, evaluation_job_timeout_seconds=599)
+        with self.assertRaises(ValueError):
+            settings.validate_research_configuration()
+
     def test_pgvector_chunk_and_run_tables_are_declared(self) -> None:
         self.assertIn("parent_documents", ParentDocument.metadata.tables)
         self.assertIn("parent_document_id", DocumentChunk.__table__.columns)
