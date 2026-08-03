@@ -1,7 +1,11 @@
 <section class="card evaluation-card">
   <p class="eyebrow">{{ status|upper }}</p>
   <h2>Ragas results</h2>
-  <p class="subtitle">Research depth: {{ mode|title }}</p>
+  <p class="subtitle">{{ dataset_name }} · {{ case_count }} cases · {{ duration }} · Research depth: {{ mode|title }}</p>
+  <div class="benchmark-summary">
+    <span><b>{{ scored_count }}</b> judged</span><span><b>{{ failed_count }}</b> failed</span><span><b>{{ case_count }}</b> total</span>
+    <a class="secondary export-link" href="/ui/evaluations/{{ run_id }}/export" target="_blank" rel="noreferrer">Download JSON</a>
+  </div>
   <div class="metrics">
     <div class="metric"><span>Faithfulness</span><b>{{ averages.faithfulness if averages.faithfulness is not none else "—" }}</b></div>
     <div class="metric"><span>Answer relevancy</span><b>{{ averages.answer_relevancy if averages.answer_relevancy is not none else "—" }}</b></div>
@@ -12,6 +16,7 @@
   <article class="evaluation-case">
     <p><strong>{{ result.question }}</strong></p>
     <small>{{ result.status }} · {{ result.scores.get("engine", "no score") }}</small>
+    {% if result.scores %}<div class="case-metrics"><span>Faithfulness <b>{{ result.scores.get("faithfulness", "—") }}</b></span><span>Relevancy <b>{{ result.scores.get("answer_relevancy", "—") }}</b></span><span>Precision <b>{{ result.scores.get("context_precision", "—") }}</b></span><span>Recall <b>{{ result.scores.get("context_recall", "—") }}</b></span></div>{% endif %}
     {% if result.scores.get("context_metrics_mode") == "verified_reference_excerpt_semantic_judge" %}<small><br>Context precision and recall use semantic comparison with the verified reference excerpt.</small>{% elif result.scores.get("context_metrics_mode") == "llm_reference_answer" %}<small><br>Context precision and recall use the reviewed reference answer.</small>{% endif %}
     {% if result.error %}<small><br>{{ result.error }}</small>{% endif %}
     {% if result.cache_diagnostics %}<small>{% if result.cache_diagnostics.get("decision") == "reuse_existing" %}Reused existing PostgreSQL evidence{% else %}Fresh sources mined{% endif %} · {{ result.cache_diagnostics.get("reason", "cache status unavailable") }}</small>{% endif %}

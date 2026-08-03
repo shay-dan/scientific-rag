@@ -8,7 +8,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
@@ -216,10 +216,19 @@ async def evaluation_ui_status(request: Request, evaluation_run_id: str, session
             sources_by_run[run_id] = [{key: value for key, value in source.items() if key != "key"} for source in run_sources]
     scored = [item.judge_scores for item in results if item.status == "judged"]
     averages = {name: summarize_scores(scored)[name] for name in METRIC_NAMES}
+    dataset = (await session.execute(select(EvaluationDataset).where(EvaluationDataset.id == run.dataset_id))).scalar_one()
+    completed_at = run.completed_at or datetime.now(timezone.utc)
+    duration_seconds = int((completed_at - run.created_at).total_seconds())
     return templates.TemplateResponse(request, "partials/evaluation_result.html", {
+        "run_id": run.id,
+        "dataset_name": dataset.name,
         "status": run.status,
         "mode": run.metrics.get("mode", "fast"),
         "averages": averages,
+        "case_count": len(results),
+        "scored_count": len(scored),
+        "failed_count": len([item for item in results if item.status != "judged"]),
+        "duration": _duration_label(duration_seconds),
         "results": [{
             "question": cases[item.evaluation_case_id].question,
             "status": item.status,
@@ -230,6 +239,38 @@ async def evaluation_ui_status(request: Request, evaluation_run_id: str, session
             "sources": sources_by_run.get(item.research_run_id, []),
             "source_diagnostics": diagnostics_by_run.get(item.research_run_id, {}),
             "cache_diagnostics": cache_by_run.get(item.research_run_id, {}),
+        } for item in results],
+    })
+
+
+@app.get("/ui/evaluations/{evaluation_run_id}/export", include_in_schema=False)
+async def export_evaluation_run(request: Request, evaluation_run_id: str, session: AsyncSession = Depends(get_session)):
+    _ui_admin(request)
+    run = (await session.execute(select(EvaluationRun).where(EvaluationRun.id == evaluation_run_id))).scalar_one_or_none()
+    if run is None:
+        raise HTTPException(status_code=404, detail="Evaluation run not found")
+    dataset = (await session.execute(select(EvaluationDataset).where(EvaluationDataset.id == run.dataset_id))).scalar_one()
+    results = list((await session.execute(select(EvaluationResult).where(EvaluationResult.evaluation_run_id == run.id))).scalars())
+    cases = {item.id: item for item in (await session.execute(select(EvaluationCase).where(EvaluationCase.dataset_id == run.dataset_id))).scalars()}
+    scored = [item.judge_scores for item in results if item.status == "judged"]
+    completed_at = run.completed_at or datetime.now(timezone.utc)
+    return JSONResponse({
+        "id": str(run.id),
+        "dataset_name": dataset.name,
+        "status": run.status,
+        "mode": run.metrics.get("mode", "fast"),
+        "created_at": run.created_at.isoformat(),
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        "duration_seconds": int((completed_at - run.created_at).total_seconds()),
+        "case_count": len(results),
+        "scored_count": len(scored),
+        "failed_count": len([item for item in results if item.status != "judged"]),
+        "averages": {name: summarize_scores(scored)[name] for name in METRIC_NAMES},
+        "results": [{
+            "question": cases[item.evaluation_case_id].question,
+            "status": item.status,
+            "scores": item.judge_scores,
+            "error": item.error,
         } for item in results],
     })
 

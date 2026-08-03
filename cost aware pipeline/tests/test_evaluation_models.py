@@ -80,6 +80,8 @@ class EvaluationModelTests(unittest.TestCase):
         self.assertIn("Generated answer", template)
         self.assertIn("Retrieved excerpts", template)
         self.assertIn("Source records", template)
+        self.assertIn("Download JSON", template)
+        self.assertIn("case-metrics", template)
         self.assertIn("citation_id", template)
         self.assertIn("Source retrieval diagnostics", template)
         self.assertIn("cache_diagnostics", template)

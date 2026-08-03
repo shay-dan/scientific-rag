@@ -1,3 +1,4 @@
+.benchmark-summary,.case-metrics { display:flex; flex-wrap:wrap; gap:9px; align-items:center; margin:14px 0; }.benchmark-summary span,.case-metrics span { padding:6px 9px; border-radius:999px; background:#f1f5f2; color:var(--muted); font-size:.82rem; }.benchmark-summary b,.case-metrics b { color:var(--ink); }.export-link { display:inline-block; padding:6px 10px; border-radius:999px; text-decoration:none; font-size:.82rem; font-weight:700; }
 :root { --ink:#17201e; --muted:#62716c; --paper:#f4f5ef; --card:#ffffff; --line:#dce2dc; --accent:#0c7059; --accent-dark:#075441; --warn:#8b5700; }
 * { box-sizing:border-box; }
 body { margin:0; color:var(--ink); background:radial-gradient(circle at 8% 0,#dceee5 0,transparent 33rem),var(--paper); font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif; }
