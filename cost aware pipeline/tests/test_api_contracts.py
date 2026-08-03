@@ -39,3 +39,8 @@ class ApiContractTests(unittest.TestCase):
         benchmark = EvaluationDatasetInput.model_validate(json.loads(benchmark_path.read_text(encoding="utf-8")))
         self.assertEqual(benchmark.name, "scientific-rag-benchmark-v1")
         self.assertEqual(len(benchmark.cases), 10)
+
+    def test_benchmark_runner_defaults_to_a_single_case(self) -> None:
+        runner = (project_root / "scripts" / "run_benchmark.ps1").read_text(encoding="utf-8")
+        self.assertIn("[int]$CaseCount = 1", runner)
+        self.assertIn("Select-Object -First $CaseCount", runner)

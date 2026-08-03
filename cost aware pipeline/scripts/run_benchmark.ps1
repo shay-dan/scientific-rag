@@ -1,6 +1,8 @@
 param(
     [ValidateSet("fast", "standard", "deep")]
     [string]$Mode = "standard",
+    [ValidateRange(1, 10)]
+    [int]$CaseCount = 1,
     [string]$BaseUrl = "http://localhost:8000",
     [string]$ApiKey = $env:APP_API_KEY
 )
@@ -15,7 +17,8 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 $benchmarkPath = Join-Path $projectRoot "evaluation\benchmark-v1.json"
 $benchmark = Get-Content -Raw $benchmarkPath | ConvertFrom-Json
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$benchmark.name = "$($benchmark.name)-$timestamp"
+$benchmark.cases = @($benchmark.cases | Select-Object -First $CaseCount)
+$benchmark.name = "$($benchmark.name)-$CaseCount-cases-$timestamp"
 $headers = @{ "X-API-Key" = $ApiKey }
 
 Write-Host "Waiting for API readiness at $BaseUrl/healthz ..."
@@ -40,7 +43,7 @@ if (-not $ready) {
 $dataset = Invoke-RestMethod -Method Post -Uri "$BaseUrl/v1/evaluations/datasets" -Headers $headers -ContentType "application/json" -Body ($benchmark | ConvertTo-Json -Depth 10)
 $run = Invoke-RestMethod -Method Post -Uri "$BaseUrl/v1/evaluations/datasets/$($dataset.dataset_id)/runs" -Headers $headers -ContentType "application/json" -Body (@{ mode = $Mode } | ConvertTo-Json)
 
-Write-Host "Benchmark dataset: $($benchmark.name) ($($dataset.case_count) cases)"
+Write-Host "Benchmark dataset: $($benchmark.name) ($($dataset.case_count) cases, $Mode mode)"
 Write-Host "Evaluation run: $($run.evaluation_run_id)"
 Write-Host "Live JSON status: $BaseUrl/v1/evaluations/runs/$($run.evaluation_run_id)"
 Write-Host "Browser UI: $BaseUrl/evaluation"

@@ -52,10 +52,10 @@ Ragas uses the lower-cost `gemini-2.5-flash` judge by default (`RAGAS_JUDGE_MODE
 
 ```powershell
 $env:APP_API_KEY = "<the admin key from APP_API_KEYS>"
-.\scripts\run_benchmark.ps1 -Mode standard
+.\scripts\run_benchmark.ps1 -Mode fast -CaseCount 1
 ```
 
-The script assigns a timestamped dataset name so it is safe to run repeatedly, prints the API status URL, and leaves each result in PostgreSQL for comparison. Use `fast` for a cheaper smoke test. `deep` is accepted only after `ENABLE_DEEP_RESEARCH=true` is set and Compose is rebuilt.
+The script assigns a timestamped dataset name so it is safe to run repeatedly, prints the API status URL, and leaves each result in PostgreSQL for comparison. It defaults to one case, so a full run requires `-CaseCount 10`. Use `fast` for a cheaper smoke test. `deep` is accepted only after `ENABLE_DEEP_RESEARCH=true` is set and Compose is rebuilt.
 
 The script waits for the API health check for up to one minute after Compose starts. If it times out, inspect startup output with `docker compose logs api`.
 
