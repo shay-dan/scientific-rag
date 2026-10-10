@@ -4,7 +4,9 @@ A production-oriented scientific research assistant that searches PubMed and arX
 
 [Watch the 47-second demo](cost%20aware%20pipeline/docs/demo/scientific-rag-demo.mp4) · [Run locally](#run-locally) · [Evaluation methodology](cost%20aware%20pipeline/README.md#evaluation)
 
-[![Scientific RAG demo preview](cost%20aware%20pipeline/docs/demo/demo-contact-sheet.png)](cost%20aware%20pipeline/docs/demo/scientific-rag-demo.mp4)
+[![Scientific RAG animated demo](cost%20aware%20pipeline/docs/demo/scientific-rag-preview.gif)](cost%20aware%20pipeline/docs/demo/scientific-rag-demo.mp4)
+
+The animation is a short preview. Click it to open the full 47-second walkthrough.
 
 ## Current application
 
