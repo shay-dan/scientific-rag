@@ -2,6 +2,12 @@
 
 A Dockerized FastAPI, PostgreSQL full-text search, and pgvector research application with an intentionally limited Gemini budget and a browser UI.
 
+[Watch the 47-second demo](docs/demo/scientific-rag-demo.mp4) · [Run locally with Docker](#run-with-docker) · [Recording notes](docs/demo/recording-guide.md)
+
+[![Scientific RAG demo preview](docs/demo/demo-contact-sheet.png)](docs/demo/scientific-rag-demo.mp4)
+
+The demo is a captioned walkthrough of a saved run, its source records, and an internal 10-case benchmark. It does not trigger live model calls. The aggregate benchmark scores shown are evaluation metrics, not claims of clinical accuracy.
+
 ## What it provides
 
 - `GET /` is the user-facing research interface.
@@ -63,12 +69,23 @@ Benchmark jobs have their own one-hour timeout (`EVALUATION_JOB_TIMEOUT_SECONDS=
 
 ## Run with Docker
 
+Install and start Docker Desktop (or use a working Docker Engine with Compose). For a fresh checkout of the application branch:
+
+```powershell
+git clone --branch codex/production-rag-evaluation --single-branch https://github.com/shay-dan/scientific-rag.git
+cd "scientific-rag/cost aware pipeline"
+```
+
+You need your own Gemini API key. Research and evaluations make billable provider calls; opening saved results does not start a new evaluation. This is a protected beta, not a public hosted service.
+
 Copy `.env.example` to `.env`, set `GOOGLE_API_KEY`, `ENTREZ_EMAIL`, `POSTGRES_PASSWORD`, `APP_API_KEYS`, and `APP_SESSION_SECRET`, then run:
 
 ```powershell
 Copy-Item .env.example .env
 docker compose up --build
 ```
+
+Copy the example only on first setup; do not overwrite an existing `.env`. Edit `.env` before starting Compose. Use the secret key portion after `admin:` in `APP_API_KEYS` to sign into the browser UI. Never commit `.env`.
 
 Compose starts four services: the API, PostgreSQL/pgvector, Redis, and one durable research worker. The API stores a queued run in PostgreSQL and Redis delivers it to the worker, so an API restart does not cancel an already queued research request.
 
