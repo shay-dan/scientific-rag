@@ -23,7 +23,10 @@ class ResearchBudget:
 _BUDGETS = {
     ResearchMode.fast: ResearchBudget(1, 2, 4, 5, 1, 5),
     ResearchMode.standard: ResearchBudget(2, 3, 6, 8, 2, 8),
-    ResearchMode.deep: ResearchBudget(3, 5, 8, 12, 3, 11),
+    # Deep deliberately increases breadth without sending an unbounded context
+    # to the Expert. Two-source questions may collect up to 12 papers; MMR and
+    # parent/child retrieval still select the final 14 evidence documents.
+    ResearchMode.deep: ResearchBudget(4, 6, 10, 14, 4, 15),
 }
 
 

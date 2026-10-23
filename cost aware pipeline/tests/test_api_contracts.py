@@ -29,6 +29,7 @@ class ApiContractTests(unittest.TestCase):
         self.assertIn(("/diagnostics", ("GET",)), routes)
         self.assertIn(("/ui/evaluations", ("POST",)), routes)
         self.assertIn(("/ui/research", ("POST",)), routes)
+        self.assertIn(("/ui/research/{run_id}/cancel", ("POST",)), routes)
         self.assertIn(("/v1/research", ("POST",)), routes)
         self.assertIn(("/v1/research/{run_id}", ("GET",)), routes)
         self.assertIn(("/v1/evaluations/runs/{evaluation_run_id}", ("GET",)), routes)
@@ -69,6 +70,14 @@ class ApiContractTests(unittest.TestCase):
         payload = ResearchRequest(question="What is the evidence for intervention X?")
         self.assertEqual(payload.mode, ResearchMode.fast)
         self.assertFalse(payload.fresh)
+
+    def test_deep_ui_is_explicit_about_time_cost_and_cancellation(self) -> None:
+        index = (project_root / "app" / "templates" / "index.html").read_text(encoding="utf-8")
+        progress = (project_root / "app" / "templates" / "partials" / "research_progress.html").read_text(encoding="utf-8")
+        self.assertIn("Deep · Experimental", index)
+        self.assertIn("6–10 min", index)
+        self.assertIn("highest API usage", index)
+        self.assertIn("Cancel research", progress)
 
     def test_cached_research_lookup_requires_current_pipeline_version(self) -> None:
         async def verify() -> None:

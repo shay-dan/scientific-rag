@@ -225,15 +225,20 @@ class ResearchService:
                     papers_per_source=budget.papers_per_source,
                     progress_callback=progress,
                 )
+                timeout_seconds = (
+                    self.settings.deep_research_timeout_seconds
+                    if mode is ResearchMode.deep
+                    else self.settings.request_timeout_seconds
+                )
                 try:
                     pipeline_result = await asyncio.wait_for(
                         orchestrator.execute_full_study(question, clear_db=False, generate_evaluation_dataset=generate_evaluation_dataset, skip_database_cache=force_mining),
-                        timeout=self.settings.request_timeout_seconds,
+                        timeout=timeout_seconds,
                     )
                 except TimeoutError as error:
                     stage = str((record.model_metadata or {}).get("progress", {}).get("stage") or "unknown stage")
                     raise TimeoutError(
-                        f"Research exceeded {self.settings.request_timeout_seconds} seconds during {stage}"
+                        f"Research exceeded {timeout_seconds} seconds during {stage}"
                     ) from error
                 report = pipeline_result["report"]
 

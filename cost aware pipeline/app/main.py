@@ -42,7 +42,11 @@ async def lifespan(app: FastAPI):
     app.state.redis = await create_pool(RedisSettings.from_dsn(get_settings().redis_url))
     app.state.research_service = ResearchService(get_settings(), app.state.redis)
     app.state.settings = get_settings()
-    app.state.limiter = BetaLimiter(get_settings().rate_limit_requests_per_minute, get_settings().research_runs_per_day)
+    app.state.limiter = BetaLimiter(
+        get_settings().rate_limit_requests_per_minute,
+        get_settings().research_runs_per_day,
+        get_settings().deep_research_runs_per_day,
+    )
     app.state.provider_checks = {}
     yield
     await app.state.redis.close()
@@ -54,7 +58,7 @@ app.add_middleware(SessionMiddleware, secret_key=get_settings().app_session_secr
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
 logger = logging.getLogger(__name__)
-_MODE_ESTIMATES_SECONDS = {ResearchMode.fast: 90, ResearchMode.standard: 180, ResearchMode.deep: 300}
+_MODE_ESTIMATES_SECONDS = {ResearchMode.fast: 90, ResearchMode.standard: 180, ResearchMode.deep: 480}
 _EVALUATION_ESTIMATE_SECONDS = 240
 
 
@@ -365,6 +369,12 @@ async def ops_cancel_queue_run(request: Request, run_id: str, session: AsyncSess
     run = (await session.execute(select(ResearchRun).where(ResearchRun.id == parsed_id))).scalar_one_or_none()
     if run is None or run.status not in {"queued", "running"}:
         raise HTTPException(status_code=409, detail="Only queued or running research jobs can be cancelled")
+    await _cancel_research_run(request, session, run, principal)
+    return await ops_queue_dashboard(request, session)
+
+
+async def _cancel_research_run(request: Request, session: AsyncSession, run: ResearchRun, principal: Principal) -> None:
+    """Abort one ARQ job and persist an auditable terminal state."""
     job_id = run.model_metadata.get("queue_job_id")
     try:
         if job_id:
@@ -381,7 +391,6 @@ async def ops_cancel_queue_run(request: Request, run_id: str, session: AsyncSess
     run.completed_at = datetime.now(timezone.utc)
     session.add(AuditEvent(actor=principal.name, action="research.cancel_requested", target_type="research_run", target_id=str(run.id), details={"previous_status": "queued_or_running"}))
     await session.commit()
-    return await ops_queue_dashboard(request, session)
 
 
 @app.get("/ui/ops/audit", response_class=HTMLResponse, include_in_schema=False)
@@ -710,8 +719,10 @@ async def research_ui_submit(
     try:
         principal = _ui_principal(request)
         request.app.state.limiter.check_request(principal)
-        request.app.state.limiter.consume_research_run(principal)
         selected_mode = ResearchMode(mode)
+        if selected_mode is ResearchMode.deep and not get_settings().enable_deep_research:
+            raise ValueError("Deep research is disabled")
+        request.app.state.limiter.consume_research_run(principal, selected_mode.value)
         service: ResearchService = request.app.state.research_service
         if action not in {"cached", "fresh", "extend"}:
             raise ValueError("Unknown research action")
@@ -731,6 +742,8 @@ async def research_ui_submit(
         # HTMX swaps successful HTML responses. The JSON API still returns 422
         # for validation errors; the UI returns an error fragment for display.
         return templates.TemplateResponse(request, "partials/research_error.html", {"message": str(error)})
+    except HTTPException as error:
+        return templates.TemplateResponse(request, "partials/research_error.html", {"message": str(error.detail)})
     except Exception:
         logger.exception("ui_research_failed")
         return templates.TemplateResponse(
@@ -738,6 +751,23 @@ async def research_ui_submit(
             "partials/research_error.html",
             {"message": "The research provider did not complete this request. Please try again shortly."},
         )
+
+
+@app.post("/ui/research/{run_id}/cancel", response_class=HTMLResponse, include_in_schema=False)
+async def research_ui_cancel(request: Request, run_id: str, session: AsyncSession = Depends(get_session)):
+    principal = _ui_principal(request)
+    request.app.state.limiter.check_request(principal)
+    try:
+        parsed_id = UUID(run_id)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail="Research run not found") from error
+    run = (await session.execute(select(ResearchRun).where(ResearchRun.id == parsed_id))).scalar_one_or_none()
+    if run is None or (principal.role != "admin" and run.requested_by != principal.name):
+        raise HTTPException(status_code=404, detail="Research run not found")
+    if run.status not in {"queued", "running"}:
+        raise HTTPException(status_code=409, detail="Only queued or running research jobs can be cancelled")
+    await _cancel_research_run(request, session, run, principal)
+    return templates.TemplateResponse(request, "partials/research_cancelled.html", {"run_id": str(run.id)})
 
 
 @app.get("/ui/research/{run_id}/status", response_class=HTMLResponse, include_in_schema=False)
@@ -789,7 +819,9 @@ async def health(session: AsyncSession = Depends(get_session)) -> HealthResponse
 async def research(request: Request, payload: ResearchRequest, session: AsyncSession = Depends(get_session)) -> ResearchResponse:
     principal = require_api_key(request)
     request.app.state.limiter.check_request(principal)
-    request.app.state.limiter.consume_research_run(principal)
+    if payload.mode is ResearchMode.deep and not get_settings().enable_deep_research:
+        raise HTTPException(status_code=422, detail="Deep research is disabled")
+    request.app.state.limiter.consume_research_run(principal, payload.mode.value)
     service: ResearchService = request.app.state.research_service
     try:
         return await service.run(session, payload.question, payload.mode, payload.generate_evaluation_dataset, actor=principal.name, fresh=payload.fresh)

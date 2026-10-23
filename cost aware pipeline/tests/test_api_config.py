@@ -28,6 +28,11 @@ class ApiConfigurationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             settings.validate_research_configuration()
 
+    def test_deep_timeout_cannot_be_shorter_than_standard_timeout(self) -> None:
+        settings = Settings(request_timeout_seconds=600, deep_research_timeout_seconds=599)
+        with self.assertRaisesRegex(ValueError, "DEEP_RESEARCH_TIMEOUT_SECONDS"):
+            settings.validate_research_configuration()
+
     def test_pgvector_chunk_and_run_tables_are_declared(self) -> None:
         self.assertIn("parent_documents", ParentDocument.metadata.tables)
         self.assertIn("parent_document_id", DocumentChunk.__table__.columns)

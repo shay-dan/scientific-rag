@@ -18,3 +18,7 @@ class CostPolicyTests(unittest.TestCase):
         self.assertLess(fast.papers_per_source, standard.papers_per_source)
         self.assertLess(standard.papers_per_source, deep.papers_per_source)
         self.assertLess(fast.estimated_max_generation_calls, deep.estimated_max_generation_calls)
+        self.assertEqual(deep.max_plan_steps, 4)
+        self.assertEqual(deep.papers_per_source, 6)
+        self.assertEqual(deep.max_context_documents, 14)
+        self.assertEqual(deep.estimated_max_generation_calls, 15)

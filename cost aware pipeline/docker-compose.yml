@@ -16,10 +16,12 @@ services:
     build: .
     command: arq app.worker.WorkerSettings
     healthcheck:
-      test: ["CMD", "arq", "--check", "app.worker.WorkerSettings"]
-      interval: 30s
-      timeout: 20s
-      start_period: 20s
+      # Check the heartbeat written by the running worker instead of importing
+      # the full application a second time inside every health probe.
+      test: ["CMD", "python", "-c", "import os, sys, redis; sys.exit(0 if redis.Redis.from_url(os.environ['REDIS_URL']).get('scientific_rag:worker:heartbeat') else 1)"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
       retries: 3
     env_file:
       - .env

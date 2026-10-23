@@ -191,7 +191,7 @@ async def _run_evaluation_job(ctx, evaluation_run_id: str):
 
 class WorkerSettings:
     functions = [
-        func(run_research_job, timeout=get_settings().request_timeout_seconds),
+        func(run_research_job, timeout=max(get_settings().request_timeout_seconds, get_settings().deep_research_timeout_seconds)),
         func(run_evaluation_job, timeout=get_settings().evaluation_job_timeout_seconds, max_tries=1),
     ]
     on_startup = startup
@@ -200,4 +200,4 @@ class WorkerSettings:
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
     max_jobs = 1
     allow_abort_jobs = True
-    job_timeout = get_settings().request_timeout_seconds + 60
+    job_timeout = max(get_settings().request_timeout_seconds, get_settings().deep_research_timeout_seconds) + 60

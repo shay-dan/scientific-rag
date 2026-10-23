@@ -1,11 +1,11 @@
-<form class="card question-card" action="/ui/research" method="post" hx-post="/ui/research" hx-target="#research-result" hx-swap="innerHTML" hx-disabled-elt="#research-button">
+<form class="card question-card" action="/ui/research" method="post" hx-post="/ui/research" hx-target="#research-result" hx-swap="innerHTML" hx-disabled-elt="#research-button" onsubmit="return confirmResearchMode(this)">
   <label for="question">Research question</label>
   <textarea id="question" name="question" maxlength="10000" required placeholder="For example: What are recent applications of CRISPR in cancer treatment?"></textarea>
   <div class="mode-row" role="radiogroup" aria-label="Research depth">
-    <label class="mode"><input type="radio" name="mode" value="fast" checked><span><b>Fast</b><small>Lowest cost; focused answer</small></span></label>
-    <label class="mode"><input type="radio" name="mode" value="standard"><span><b>Standard</b><small>Balanced source coverage</small></span></label>
-    {% if deep_research_enabled %}<label class="mode"><input type="radio" name="mode" value="deep"><span><b>Deep</b><small>More sources; higher cost</small></span></label>{% endif %}
+    <label class="mode"><input type="radio" name="mode" value="fast" checked onchange="updateResearchEstimate(this.form)"><span><b>Fast</b><small>~1–2 min · up to 5 model calls</small></span></label>
+    <label class="mode"><input type="radio" name="mode" value="standard" onchange="updateResearchEstimate(this.form)"><span><b>Standard</b><small>~3–5 min · up to 8 model calls</small></span></label>
+    {% if deep_research_enabled %}<label class="mode"><input type="radio" name="mode" value="deep" onchange="updateResearchEstimate(this.form)"><span><b>Deep · Experimental</b><small>~6–10 min · up to 12 papers · highest API usage</small></span></label>{% endif %}
   </div>
-  <div class="action-row"><p>Fast mode is the default and uses the smallest research budget.</p><button id="research-button" type="submit">Start research <span>→</span></button></div>
+  <div class="action-row"><p data-research-estimate>Fast: focused research with the smallest time and API budget.</p><button id="research-button" type="submit">Start research <span>→</span></button></div>
 </form>
 <section id="research-result" aria-live="polite"></section>

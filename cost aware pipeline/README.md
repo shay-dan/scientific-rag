@@ -86,7 +86,7 @@ Every request has a fixed research budget. The limits reduce the number of paper
 | --- | ---: | ---: | ---: | ---: |
 | Fast (default) | 1 | 2 | 5 | 5 |
 | Standard | 2 | 3 | 8 | 8 |
-| Deep | 3 | 5 | 12 | 11 |
+| Deep (experimental) | 4 | 6 (up to 12 across both sources) | 14 | 15 |
 
 - Exact repeated questions return the previously completed result without new model calls.
 - Synthetic evaluation-dataset generation is disabled by default.
@@ -94,13 +94,17 @@ Every request has a fixed research budget. The limits reduce the number of paper
 
 ### Enable Deep research
 
-Deep research is hidden from the user interface by default, because it can use a larger source and model-call budget. To make it a real selectable option, add the following to your private `.env` file and rebuild/restart the app:
+Deep research is hidden from the user interface by default, because it can use a larger source and model-call budget. It expands planning, source collection, hybrid retrieval, and final evidence context; it still applies source screening, RRF, MMR, parent/child retrieval, and a finite context cap. More papers can add noise, so Deep should be compared with Standard rather than assumed to be better.
+
+To make it a real selectable option, add the following to your private `.env` file and rebuild/restart the app:
 
 ```text
 ENABLE_DEEP_RESEARCH=true
+DEEP_RESEARCH_TIMEOUT_SECONDS=900
+DEEP_RESEARCH_RUNS_PER_DAY=1
 ```
 
-Do not commit `.env` to GitHub. Turning this on is an operator decision; per-user “higher privileges” would require an authentication and roles feature.
+Do not commit `.env` to GitHub. The UI labels Deep as experimental, displays its expected 6–10 minute runtime and higher API usage, and asks for confirmation before starting. Non-admin users have a separate daily Deep quota; admins are exempt. An owner can cancel a queued or active run from its progress panel, while admins can also cancel it from the Queue dashboard.
 
 ## Evaluation with Ragas
 

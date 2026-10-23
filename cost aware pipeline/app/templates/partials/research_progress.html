@@ -6,4 +6,7 @@
     {% if model %}<p class="model-line">Using <code>{{ model }}</code></p>{% endif %}
   </div>
   <dl class="timer"><div><dt>Elapsed</dt><dd>{{ elapsed }}</dd></div><div><dt>{% if past_estimate %}Past estimate{% else %}Estimated remaining{% endif %}</dt><dd>{% if past_estimate %}Taking longer than the {{ estimate }} estimate{% else %}~{{ remaining }}{% endif %}</dd></div></dl>
+  <form hx-post="/ui/research/{{ run_id }}/cancel" hx-target="closest .live-progress" hx-swap="outerHTML" hx-confirm="Cancel this research run?">
+    <button class="secondary" type="submit">Cancel research</button>
+  </form>
 </section>

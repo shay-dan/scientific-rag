@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     llm_request_timeout_seconds: int = 90
     entrez_email: str = ""
     request_timeout_seconds: int = 600
+    deep_research_timeout_seconds: int = 900
     evaluation_job_timeout_seconds: int = 3600
     evaluation_case_timeout_seconds: int = 300
     claim_diagnostic_timeout_seconds: int = 120
@@ -33,6 +34,7 @@ class Settings(BaseSettings):
     app_session_secret: str = ""
     rate_limit_requests_per_minute: int = 30
     research_runs_per_day: int = 10
+    deep_research_runs_per_day: int = 1
     redis_url: str = "redis://localhost:6379/0"
 
     @model_validator(mode="after")
@@ -51,6 +53,10 @@ class Settings(BaseSettings):
             raise ValueError("This schema is indexed for 768-dimensional embeddings; create a migration before changing it.")
         if self.evaluation_job_timeout_seconds < self.request_timeout_seconds:
             raise ValueError("EVALUATION_JOB_TIMEOUT_SECONDS must be at least REQUEST_TIMEOUT_SECONDS")
+        if self.deep_research_timeout_seconds < self.request_timeout_seconds:
+            raise ValueError("DEEP_RESEARCH_TIMEOUT_SECONDS must be at least REQUEST_TIMEOUT_SECONDS")
+        if self.deep_research_runs_per_day < 1:
+            raise ValueError("DEEP_RESEARCH_RUNS_PER_DAY must be at least one")
 
     def validate_security_configuration(self) -> None:
         if not self.app_api_keys:
