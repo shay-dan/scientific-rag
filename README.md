@@ -1,42 +1,52 @@
----
-title: Scientific RAG
-emoji: 🔬
-colorFrom: blue
-colorTo: purple
-sdk: docker
-app_port: 7860
-short_description: Search scholarly abstracts and generate cited answers.
----
-
 # Scientific RAG
 
-Scientific research assistant that plans and validates sub-queries, mines PubMed and arXiv, performs hybrid retrieval, and synthesizes a cited report with Gemini.
+A production-oriented scientific research assistant that searches PubMed and arXiv, retrieves evidence with PostgreSQL full-text search and pgvector, and generates source-grounded reports through a resilient Groq → OpenRouter → Gemini gateway.
 
-## Configuration
+[Watch the 55-second evaluation demo](cost%20aware%20pipeline/docs/demo/scientific-rag-demo.mp4) · [Run locally](#run-locally) · [Complete documentation](cost%20aware%20pipeline/README.md)
 
-Copy `.env.example` to `.env` and set `GOOGLE_API_KEY` and `ENTREZ_EMAIL`.
+[![Scientific RAG animated preview](cost%20aware%20pipeline/docs/demo/scientific-rag-preview.gif)](cost%20aware%20pipeline/docs/demo/scientific-rag-demo.mp4)
 
-The model settings are role-based. The default production policy uses Gemini 3.6 Flash for orchestration and final synthesis, Gemini 3.5 Flash-Lite for planning, gatekeeping, and QA generation, and compatible Gemini 2.5 fallbacks when a primary model returns a transient capacity error.
+The full video is a captioned walkthrough of a saved evaluation. It shows the claim-aware context-precision view, the original Ragas score, a side-by-side comparison, and the per-excerpt retrieval audit. It does not trigger live model calls.
+
+## Current application
+
+The maintained application is in [`cost aware pipeline/`](cost%20aware%20pipeline/). Earlier proof-of-concept implementations remain in Git history and older branches for comparison.
+
+The current version includes:
+
+- FastAPI and an HTMX browser interface.
+- PostgreSQL full-text retrieval and pgvector semantic search.
+- Parent/child passages, reciprocal-rank fusion, semantic MMR, and source-quality filtering.
+- Redis and an ARQ worker for durable background research and evaluation jobs.
+- PubMed and arXiv evidence mining with persisted source records.
+- A provider-agnostic Groq, OpenRouter, and Gemini LLM gateway with bounded fallback.
+- Cost-aware Fast and Standard research modes, with an operator-enabled Deep mode.
+- Ragas evaluation, claim-level diagnostics, per-excerpt audits, and versioned regression datasets.
+- Research history, run details, retrieval inspection, queue, provider, cost, health, feedback, configuration, and audit views.
+- Docker Compose setup for the API, worker, PostgreSQL/pgvector, and Redis.
 
 ## Run locally
 
-Create a virtual environment, install dependencies, then run `python production_app.py`. The interface is available on port 7860.
+Requirements: Docker Desktop (or Docker Engine with Compose) and at least one configured LLM provider key.
 
-The original pipeline is preserved in `new_scientific_rag.py`. The production application package lives in `src/scientific_rag/`; it currently calls `Orchestrator.execute_full_study` and therefore uses the planner, gatekeeper, miner, hybrid vector/BM25 retrieval, synthesizer, and optional synthetic QA generation.
+```powershell
+git clone https://github.com/shay-dan/scientific-rag.git
+cd "scientific-rag\cost aware pipeline"
+Copy-Item .env.example .env
+notepad .env
+docker compose up --build
+```
 
-## Run with Docker
+Set the private values described in [`.env.example`](cost%20aware%20pipeline/.env.example), then open [http://localhost:8000](http://localhost:8000). Never commit `.env` or API keys.
 
-Copy `.env.example` to `.env`, set the required values, then run `docker compose up --build`. Persistent Chroma data is stored in the `chroma_data` Docker volume.
+## Evaluation interpretation
 
-## Deploy to Hugging Face Spaces
+The evaluation screen preserves both context-precision views:
 
-1. Create a new Hugging Face Space and select **Docker** as its SDK.
-2. In the Space's **Settings**, add `GOOGLE_API_KEY` as a **Secret** and `ENTREZ_EMAIL` as a **Variable**.
-3. Add the Space as a Git remote, then push this repository:
+- **Claim-aware (recommended):** an excerpt counts when it supports at least one material reference claim; partial support receives half credit and rank still matters.
+- **Original Ragas:** the unmodified third-party score, which may assign zero to useful partial evidence when an individual excerpt does not cover the complete reference answer.
+- **Compare both:** displays both scores without replacing or hiding either result.
 
-   ```powershell
-   git remote add huggingface https://huggingface.co/spaces/YOUR-HF-USERNAME/scientific-rag.git
-   git push huggingface main
-   ```
+The repository includes saved validation notes and reproducible evaluation scripts. Scores are internal evaluation measurements, not claims of clinical accuracy.
 
-The free runtime may restart or sleep, which clears the local Chroma index. The app automatically rebuilds its index as users search.
+For architecture, provider configuration, evaluation methodology, testing, and operating instructions, see the [complete application README](cost%20aware%20pipeline/README.md).

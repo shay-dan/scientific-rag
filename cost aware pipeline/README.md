@@ -4,7 +4,7 @@ A Dockerized FastAPI, PostgreSQL full-text search, and pgvector research applica
 
 [Watch the 55-second demo](docs/demo/scientific-rag-demo.mp4) · [Run locally with Docker](#run-with-docker) · [Recording notes](docs/demo/recording-guide.md)
 
-[![Scientific RAG demo preview](docs/demo/demo-contact-sheet.png)](docs/demo/scientific-rag-demo.mp4)
+[![Scientific RAG animated demo](docs/demo/scientific-rag-preview.gif)](docs/demo/scientific-rag-demo.mp4)
 
 The demo is a captioned walkthrough of a saved evaluation, the claim-aware retrieval audit, and the original Ragas context-precision score. It does not trigger live model calls. The scores shown are evaluation metrics, not claims of clinical accuracy.
 
