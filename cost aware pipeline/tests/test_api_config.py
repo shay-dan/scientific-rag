@@ -29,7 +29,12 @@ class ApiConfigurationTests(unittest.TestCase):
             settings.validate_research_configuration()
 
     def test_deep_timeout_cannot_be_shorter_than_standard_timeout(self) -> None:
-        settings = Settings(request_timeout_seconds=600, deep_research_timeout_seconds=599)
+        settings = Settings(
+            google_api_key="test-key",
+            entrez_email="test@example.com",
+            request_timeout_seconds=600,
+            deep_research_timeout_seconds=599,
+        )
         with self.assertRaisesRegex(ValueError, "DEEP_RESEARCH_TIMEOUT_SECONDS"):
             settings.validate_research_configuration()
 
