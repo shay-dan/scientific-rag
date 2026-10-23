@@ -181,7 +181,7 @@ The live PostgreSQL/pgvector tests are intentionally opt-in. They use temporary 
 docker compose run --rm --no-deps -v "${PWD}\tests:/app/tests:ro" -e RUN_INTEGRATION_TESTS=1 api sh -lc 'DATABASE_URL_TEST="postgresql://scientific_rag:${POSTGRES_PASSWORD}@db:5432/scientific_rag" python -m unittest discover -s tests -v'
 ```
 
-CI uses a temporary pgvector PostgreSQL service to run the same tests on pushes and pull requests. For a small real-world Fast/Standard comparison without Ragas, run `docker compose exec -T api python scripts/compare_research_modes.py`; it runs six fresh research requests sequentially and prints one JSON result per case. It uses your configured model APIs, so it may incur charges. The one-run-per-case results are diagnostic, not a statistically reliable latency or quality benchmark.
+CI uses a temporary pgvector PostgreSQL service to run the same tests on pushes and pull requests. For a small real-world Fast/Standard comparison without Ragas, run `docker compose exec -T api python scripts/compare_research_modes.py`; it runs six fresh research requests sequentially and prints one JSON result per case. It uses your configured model APIs, so it may incur charges. The one-run-per-case results are diagnostic, not a statistically reliable latency or quality benchmark. A live three-question Deep-mode validation, one exact-match Ragas score, and the current production-readiness gap are documented in [`docs/deep-mode-validation-2026-10-24.md`](docs/deep-mode-validation-2026-10-24.md).
 
 ## Security note
 
