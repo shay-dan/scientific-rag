@@ -17,6 +17,7 @@ class ResearchRequest(BaseModel):
     question: str = Field(min_length=3, max_length=10_000)
     mode: ResearchMode = ResearchMode.fast
     generate_evaluation_dataset: bool = False
+    fresh: bool = False
 
 
 class SourceResponse(BaseModel):
@@ -25,6 +26,7 @@ class SourceResponse(BaseModel):
     source: str
     external_id: str | None = None
     source_url: str | None = None
+    study_design: str | None = None
 
 
 class ResearchResponse(BaseModel):
@@ -37,8 +39,10 @@ class ResearchResponse(BaseModel):
     completed_at: datetime | None = None
     mode: ResearchMode = ResearchMode.fast
     cached: bool = False
+    retrieval_version: str | None = None
     source_diagnostics: dict = Field(default_factory=dict)
     cache_diagnostics: dict = Field(default_factory=dict)
+    llm_diagnostics: dict = Field(default_factory=dict)
 
 
 class HealthResponse(BaseModel):
@@ -50,6 +54,7 @@ class EvaluationCaseInput(BaseModel):
     question: str = Field(min_length=3)
     reference_answer: str = Field(min_length=3)
     reference_context: str | None = None
+    reference_claims: list[str] = Field(default_factory=list, max_length=50)
 
 
 class EvaluationDatasetInput(BaseModel):

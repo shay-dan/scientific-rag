@@ -6,18 +6,52 @@
     <span><b>{{ scored_count }}</b> judged</span><span><b>{{ failed_count }}</b> failed</span><span><b>{{ case_count }}</b> total</span>
     <a class="secondary export-link" href="/ui/evaluations/{{ run_id }}/export" target="_blank" rel="noreferrer">Download JSON</a>
   </div>
+  <div class="precision-view-control">
+    <label for="precision-view-{{ run_id }}">Context precision view</label>
+    <select id="precision-view-{{ run_id }}" aria-describedby="precision-help-{{ run_id }}" onchange="const card=this.closest('.evaluation-card'),mode=this.value;card.querySelectorAll('[data-precision-mode]').forEach((item)=>{item.hidden=!(mode==='compare'||item.dataset.precisionMode===mode)});card.querySelectorAll('[data-precision-explanation]').forEach((item)=>{item.hidden=item.dataset.precisionExplanation!==mode})">
+      <option value="claim" selected>Claim-aware (Recommended)</option>
+      <option value="ragas">Original Ragas</option>
+      <option value="compare">Compare both</option>
+    </select>
+    <div id="precision-help-{{ run_id }}" class="precision-help">
+      <p data-precision-explanation="claim"><strong>Claim-aware:</strong> counts an excerpt when it supports at least one material claim in the reference answer. Partial support receives half credit, and higher-ranked evidence contributes more.</p>
+      <p data-precision-explanation="ragas" hidden><strong>Original Ragas:</strong> the unmodified third-party metric. In the installed Ragas version, each excerpt is judged against the complete reference answer, so useful partial evidence can receive zero.</p>
+      <p data-precision-explanation="compare" hidden><strong>Compare both:</strong> shows the original Ragas score beside the claim-aware audit. The gap distinguishes complete-answer coverage from useful claim-level evidence.</p>
+    </div>
+  </div>
   <div class="metrics">
     <div class="metric"><span>Faithfulness</span><b>{{ averages.faithfulness if averages.faithfulness is not none else "—" }}</b></div>
     <div class="metric"><span>Answer relevancy</span><b>{{ averages.answer_relevancy if averages.answer_relevancy is not none else "—" }}</b></div>
-    <div class="metric"><span>Context precision</span><b>{{ averages.context_precision if averages.context_precision is not none else "—" }}</b></div>
-    <div class="metric"><span>Context recall</span><b>{{ averages.context_recall if averages.context_recall is not none else "—" }}</b></div>
+    <div class="metric" data-precision-mode="claim"><span>Claim-aware precision · partial</span><b>{{ precision_views.claim_aware_partial_precision if precision_views.claim_aware_partial_precision is not none else "—" }}</b><small>{{ precision_views.claim_aware_scored_cases }} audited cases</small></div>
+    <div class="metric" data-precision-mode="claim"><span>Claim-aware precision · strict</span><b>{{ precision_views.claim_aware_strict_precision if precision_views.claim_aware_strict_precision is not none else "—" }}</b></div>
+    <div class="metric" data-precision-mode="ragas" hidden><span>Original Ragas precision</span><b>{{ precision_views.ragas_context_precision if precision_views.ragas_context_precision is not none else "—" }}</b></div>
+    <div class="metric"><span>Ragas context recall</span><b>{{ averages.context_recall if averages.context_recall is not none else "—" }}</b></div>
   </div>
   {% for result in results %}
   <article class="evaluation-case">
     <p><strong>{{ result.question }}</strong></p>
     <small>{{ result.status }} · {{ result.scores.get("engine", "no score") }}</small>
-    {% if result.scores %}<div class="case-metrics"><span>Faithfulness <b>{{ result.scores.get("faithfulness", "—") }}</b></span><span>Relevancy <b>{{ result.scores.get("answer_relevancy", "—") }}</b></span><span>Precision <b>{{ result.scores.get("context_precision", "—") }}</b></span><span>Recall <b>{{ result.scores.get("context_recall", "—") }}</b></span></div>{% endif %}
-    {% if result.scores.get("context_metrics_mode") == "verified_reference_excerpt_semantic_judge" %}<small><br>Context precision and recall use semantic comparison with the verified reference excerpt.</small>{% elif result.scores.get("context_metrics_mode") == "llm_reference_answer" %}<small><br>Context precision and recall use the reviewed reference answer.</small>{% endif %}
+    {% set retrieval_diagnostics = result.scores.get("retrieval_diagnostics") %}
+    {% if result.scores %}<div class="case-metrics"><span>Faithfulness <b>{{ result.scores.get("faithfulness", "—") }}</b></span><span>Relevancy <b>{{ result.scores.get("answer_relevancy", "—") }}</b></span><span data-precision-mode="claim">Claim-aware partial <b>{{ retrieval_diagnostics.get("partial_credit_ranked_precision", "—") if retrieval_diagnostics else "—" }}</b></span><span data-precision-mode="claim">Claim-aware strict <b>{{ retrieval_diagnostics.get("strict_ranked_precision", "—") if retrieval_diagnostics else "—" }}</b></span><span data-precision-mode="ragas" hidden>Original Ragas precision <b>{{ result.scores.get("ragas_context_precision", result.scores.get("context_precision", "—")) }}</b></span><span>Ragas recall <b>{{ result.scores.get("ragas_context_recall", result.scores.get("context_recall", "—")) }}</b></span>{% if result.scores.get("verified_context_precision") is not none %}<span>Verified-source precision <b>{{ result.scores.get("verified_context_precision") }}</b></span><span>Verified-source recall <b>{{ result.scores.get("verified_context_recall") }}</b></span>{% endif %}</div>{% endif %}
+    {% if result.scores.get("verified_context_precision") is not none %}<small><br>Ragas scores use the reviewed reference answer; verified-source scores independently compare against the supplied human-verified excerpt.</small>{% else %}<small><br>Ragas context scores use the reviewed reference answer.</small>{% endif %}
+    {% set claim_diagnostics = result.scores.get("claim_diagnostics") %}
+    {% if claim_diagnostics %}
+    <details class="claim-diagnostics"><summary>Claim-level retrieval coverage · {{ claim_diagnostics.get("supported_claims", 0) }} supported, {{ claim_diagnostics.get("partial_claims", 0) }} partial, {{ claim_diagnostics.get("unsupported_claims", 0) }} unsupported</summary>
+      <div class="evaluation-evidence"><strong>Strict recall:</strong> {{ claim_diagnostics.get("strict_claim_recall") }} · <strong>Partial-credit recall:</strong> {{ claim_diagnostics.get("partial_credit_claim_recall") }}</div>
+      {% for verdict in claim_diagnostics.get("verdicts", []) %}
+      <div class="evaluation-evidence"><strong>{{ verdict.get("verdict", "unknown")|upper }}</strong> — {{ verdict.get("claim") }}<br><small>{% if verdict.get("supporting_contexts") %}Supporting excerpts: {{ verdict.get("supporting_contexts")|join(", ") }} · {% endif %}{{ verdict.get("rationale") }}</small></div>
+      {% endfor %}
+    </details>
+    {% endif %}
+    {% if retrieval_diagnostics %}
+    <details class="claim-diagnostics"><summary>Per-excerpt retrieval audit · {{ retrieval_diagnostics.get("relevant_excerpts", 0) }} relevant, {{ retrieval_diagnostics.get("partial_excerpts", 0) }} partial, {{ retrieval_diagnostics.get("irrelevant_excerpts", 0) }} irrelevant</summary>
+      <div class="evaluation-evidence"><strong>Strict ranked precision:</strong> {{ retrieval_diagnostics.get("strict_ranked_precision") }} · <strong>Partial-credit ranked precision:</strong> {{ retrieval_diagnostics.get("partial_credit_ranked_precision") }}</div>
+      {% for verdict in retrieval_diagnostics.get("verdicts", []) %}
+      <div class="evaluation-evidence"><strong>#{{ verdict.get("rank") }} · {{ verdict.get("verdict", "unknown")|upper }}</strong>{% if verdict.get("supported_claims") %} · Claims {{ verdict.get("supported_claims")|join(", ") }}{% endif %}<br><small>{{ verdict.get("rationale") }} · Rank contribution: {{ verdict.get("strict_rank_contribution", 0) }}</small></div>
+      {% endfor %}
+    </details>
+    {% elif result.scores.get("retrieval_diagnostics_error") %}<small><br>Per-excerpt retrieval audit unavailable: {{ result.scores.get("retrieval_diagnostics_error") }}</small>
+    {% endif %}
     {% if result.error %}<small><br>{{ result.error }}</small>{% endif %}
     {% if result.cache_diagnostics %}<small>{% if result.cache_diagnostics.get("decision") == "reuse_existing" %}Reused existing PostgreSQL evidence{% else %}Fresh sources mined{% endif %} · {{ result.cache_diagnostics.get("reason", "cache status unavailable") }}</small>{% endif %}
     {% if result.answer %}<details><summary>Generated answer</summary><div class="evaluation-evidence">{{ result.answer }}</div></details>{% endif %}

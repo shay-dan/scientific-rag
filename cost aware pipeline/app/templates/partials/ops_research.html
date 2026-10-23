@@ -1,0 +1,11 @@
+<form class="card question-card" action="/ui/research" method="post" hx-post="/ui/research" hx-target="#research-result" hx-swap="innerHTML" hx-disabled-elt="#research-button">
+  <label for="question">Research question</label>
+  <textarea id="question" name="question" maxlength="10000" required placeholder="For example: What are recent applications of CRISPR in cancer treatment?"></textarea>
+  <div class="mode-row" role="radiogroup" aria-label="Research depth">
+    <label class="mode"><input type="radio" name="mode" value="fast" checked><span><b>Fast</b><small>Lowest cost; focused answer</small></span></label>
+    <label class="mode"><input type="radio" name="mode" value="standard"><span><b>Standard</b><small>Balanced source coverage</small></span></label>
+    {% if deep_research_enabled %}<label class="mode"><input type="radio" name="mode" value="deep"><span><b>Deep</b><small>More sources; higher cost</small></span></label>{% endif %}
+  </div>
+  <div class="action-row"><p>Fast mode is the default and uses the smallest research budget.</p><button id="research-button" type="submit">Start research <span>→</span></button></div>
+</form>
+<section id="research-result" aria-live="polite"></section>

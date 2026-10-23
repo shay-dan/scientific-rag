@@ -13,8 +13,24 @@
         <p class="eyebrow">EVIDENCE-LED RESEARCH</p>
         <h1>Scientific RAG</h1>
         <p class="subtitle">Ask a research question. The system mines academic sources, searches your private knowledge base, and writes a cited report.</p>
-        {% if is_admin %}<a class="admin-link" href="/evaluation">Evaluate retrieval with Ragas</a>{% endif %}
       </header>
+      <nav class="ops-tabs" role="tablist" aria-label="Application sections">
+        <button class="ops-tab active" type="button" role="tab" aria-selected="true" onclick="activateOpsTab(this)" hx-get="/ui/ops/research" hx-target="#ops-panel">Research</button>
+        <button class="ops-tab" type="button" role="tab" aria-selected="false" onclick="activateOpsTab(this)" hx-get="/ui/ops/history" hx-target="#ops-panel">Research history</button>
+        <button class="ops-tab" type="button" role="tab" aria-selected="false" onclick="activateOpsTab(this)" hx-get="/ui/ops/latest-run" hx-target="#ops-panel">Run details</button>
+        <button class="ops-tab" type="button" role="tab" aria-selected="false" onclick="activateOpsTab(this)" hx-get="/ui/ops/retrieval/latest" hx-target="#ops-panel">Retrieval inspector</button>
+        {% if is_admin %}
+        <button class="ops-tab" type="button" role="tab" aria-selected="false" onclick="activateOpsTab(this)" hx-get="/ui/ops/evaluations" hx-target="#ops-panel">Evaluation dashboard</button>
+        <button class="ops-tab" type="button" role="tab" aria-selected="false" onclick="activateOpsTab(this)" hx-get="/ui/ops/queue" hx-target="#ops-panel">Queue</button>
+        <button class="ops-tab" type="button" role="tab" aria-selected="false" onclick="activateOpsTab(this)" hx-get="/ui/ops/audit" hx-target="#ops-panel">Audit log</button>
+        <button class="ops-tab" type="button" role="tab" aria-selected="false" onclick="activateOpsTab(this)" hx-get="/ui/ops/configuration" hx-target="#ops-panel">Configuration</button>
+        <button class="ops-tab" type="button" role="tab" aria-selected="false" onclick="activateOpsTab(this)" hx-get="/ui/ops/diagnostics" hx-target="#ops-panel">Diagnostics</button>
+        <button class="ops-tab" type="button" role="tab" aria-selected="false" onclick="activateOpsTab(this)" hx-get="/ui/ops/costs" hx-target="#ops-panel">Costs</button>
+        <button class="ops-tab" type="button" role="tab" aria-selected="false" onclick="activateOpsTab(this)" hx-get="/ui/ops/health" hx-target="#ops-panel">System health</button>
+        <a class="ops-tab-link" href="/evaluation">Ragas evaluation</a>
+        {% endif %}
+      </nav>
+      <section id="ops-panel" role="tabpanel">
       <form class="card question-card" action="/ui/research" method="post" hx-post="/ui/research" hx-target="#research-result" hx-swap="innerHTML" hx-disabled-elt="#research-button">
         <label for="question">Research question</label>
         <textarea id="question" name="question" maxlength="10000" required placeholder="For example: What are recent applications of CRISPR in cancer treatment?"></textarea>
@@ -28,7 +44,18 @@
         <div class="action-row"><p>Fast mode is the default and uses the smallest research budget.</p><button id="research-button" type="submit">Start research <span>→</span></button></div>
       </form>
       <section id="research-result" aria-live="polite"></section>
+      </section>
       <footer>Research modes limit source collection and model calls. Review cited sources before using results in decisions.</footer>
     </main>
+    <script>
+      function activateOpsTab(button) {
+        document.querySelectorAll('.ops-tab').forEach(tab => { tab.classList.remove('active'); tab.setAttribute('aria-selected', 'false'); });
+        button.classList.add('active'); button.setAttribute('aria-selected', 'true');
+      }
+      function activateOpsTabByLabel(label) {
+        const tab = [...document.querySelectorAll('.ops-tab')].find(item => item.textContent.trim() === label);
+        if (tab) activateOpsTab(tab);
+      }
+    </script>
   </body>
 </html>

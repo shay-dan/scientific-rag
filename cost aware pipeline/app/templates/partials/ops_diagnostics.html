@@ -1,0 +1,8 @@
+<section class="ops-section"><div class="section-heading"><div><p class="eyebrow">LLM OPERATIONS</p><h2>Provider diagnostics</h2></div><span class="pill">{{ diagnostics.runs }} traced runs</span></div>
+  <div class="provider-summary"><span><b>{{ diagnostics.fallback_count }}</b> fallback events</span></div>
+  <div class="diagnostics-grid">
+    {% for provider, stats in diagnostics.providers.items() %}
+    <article class="card diagnostic-card"><p class="eyebrow">PROVIDER</p><h3>{{ provider|title }}</h3><span class="provider-state {% if stats.configured %}state-ok{% else %}state-off{% endif %}">{% if stats.configured %}Configured{% else %}API key not set{% endif %}</span><span class="metric-value">{{ stats.attempts }}</span><small>LLM calls</small><p>{{ stats.successes }} succeeded · {{ stats.failures }} failed · {{ stats.skips }} skipped before calling</p><p><b>{{ stats.average_latency_ms }} ms</b> average response</p><p><b>Expert:</b> {{ stats.expert.calls }} calls · {{ stats.expert.successes }} succeeded · {{ stats.expert.failures }} failed · {{ stats.expert.average_latency_ms }} ms average</p>{% if stats.models %}<p><small>Models: {{ stats.models|join(", ") }}</small></p>{% endif %}</article>
+    {% endfor %}
+  </div><p class="ops-note">Only research calls are counted. To check live connectivity, use the System health tab; each manual test sends one short API request.</p>
+</section>

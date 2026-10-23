@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Compile application modules
+        run: python -m compileall -q new_scientific_rag.py full_app.py src
+      - name: Run unit tests
+        run: PYTHONPATH=src python -m unittest discover -s tests -v
+
+  cost-aware-pipeline:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: scientific_rag
+          POSTGRES_PASSWORD: ci_test_only
+          POSTGRES_DB: scientific_rag
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U scientific_rag -d scientific_rag"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: cost aware pipeline
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install application dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Enable pgvector in the temporary CI database
+        run: docker exec -e PGPASSWORD=ci_test_only "${{ job.services.postgres.id }}" psql -U scientific_rag -d scientific_rag -c 'CREATE EXTENSION IF NOT EXISTS vector'
+      - name: Compile application modules
+        run: python -m compileall -q app src tests
+      - name: Run unit and PostgreSQL integration tests
+        env:
+          PYTHONPATH: .:src
+          RUN_INTEGRATION_TESTS: "1"
+          DATABASE_URL_TEST: postgresql://scientific_rag:ci_test_only@localhost:5432/scientific_rag
+        run: python -m unittest discover -s tests -v

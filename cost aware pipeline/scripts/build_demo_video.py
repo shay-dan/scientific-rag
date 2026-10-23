@@ -8,6 +8,7 @@ import imageio_ffmpeg
 ROOT = Path(__file__).resolve().parents[1]
 CAPTURES = ROOT / "docs" / "demo" / "captures"
 OUTPUT = ROOT / "docs" / "demo" / "scientific-rag-demo.mp4"
+PREVIEW = ROOT / "docs" / "demo" / "demo-contact-sheet.png"
 
 WIDTH, HEIGHT, FPS = 1280, 720, 15
 BG = "#07111f"
@@ -115,13 +116,100 @@ def metrics_scene(source):
     return frame
 
 
+def evaluation_mode_scene(mode):
+    descriptions = {
+        "claim": (
+            "CLAIM-AWARE VIEW",
+            "Useful evidence, measured per claim",
+            "Recommended: an excerpt counts when it supports at least one material reference claim. Partial support receives half credit.",
+            "Claim-aware (Recommended)",
+        ),
+        "ragas": (
+            "ORIGINAL RAGAS",
+            "Keep the third-party score visible",
+            "The installed Ragas metric compares each excerpt with the complete reference answer, so useful partial evidence may still receive zero.",
+            "Original Ragas",
+        ),
+        "compare": (
+            "COMPARE BOTH",
+            "Different metrics answer different questions",
+            "The gap separates complete-answer sufficiency from claim-level usefulness. Neither score is overwritten or hidden.",
+            "Compare both",
+        ),
+    }
+    kicker, title, body, selected = descriptions[mode]
+    step = {"claim": "02 / 05  •  Recommended view", "ragas": "03 / 05  •  Original metric", "compare": "04 / 05  •  Side-by-side"}[mode]
+    frame = base_frame(kicker, title, body, step)
+    d = ImageDraw.Draw(frame)
+    x, y = 500, 58
+    d.text((x, y), "COMPLETED", font=font(15, True), fill="#0c7059")
+    d.text((x, y + 31), "Ragas results", font=font(31, True), fill="#17201e")
+    d.text((x, y + 73), "Saved Standard run · no new API call", font=font(16), fill="#62716c")
+    d.text((x, y + 113), "Context precision view", font=font(16, True), fill="#17201e")
+    d.rounded_rectangle((x, y + 139, 1205, y + 188), radius=9, fill="#ffffff", outline="#9fb2a8", width=2)
+    d.text((x + 17, y + 152), selected, font=font(18, True), fill="#17201e")
+    d.polygon([(1172, y + 158), (1188, y + 158), (1180, y + 168)], fill="#62716c")
+
+    help_text = {
+        "claim": "Counts excerpts that support at least one material claim; rank still matters.",
+        "ragas": "Unmodified Ragas 0.2.x score; partial evidence can be judged as insufficient.",
+        "compare": "Shows original Ragas and claim-aware precision together for interpretation.",
+    }[mode]
+    d.rounded_rectangle((x, y + 204, 1205, y + 263), radius=10, fill="#f0f4ef")
+    for line_index, line in enumerate(wrap(d, help_text, 660, font(16))):
+        d.text((x + 16, y + 216 + line_index * 22), line, font=font(16), fill="#52635c")
+
+    if mode == "claim":
+        metrics = [("Claim-aware partial", "1.000", TEAL), ("Claim-aware strict", "1.000", BLUE), ("Relevant excerpts", "3 / 3", "#0c7059"), ("Ragas recall", "0.333", GOLD)]
+    elif mode == "ragas":
+        metrics = [("Original Ragas precision", "0.000", "#d2674d"), ("Faithfulness", "0.000", "#d2674d"), ("Answer relevancy", "0.525", BLUE), ("Ragas recall", "0.333", GOLD)]
+    else:
+        metrics = [("Original Ragas", "0.000", "#d2674d"), ("Claim-aware partial", "1.000", TEAL), ("Claim-aware strict", "1.000", BLUE), ("Relevant excerpts", "3 / 3", "#0c7059")]
+
+    for index, (label, value, color) in enumerate(metrics):
+        column, row = index % 2, index // 2
+        bx, by = x + column * 354, y + 282 + row * 133
+        d.rounded_rectangle((bx, by, bx + 330, by + 112), radius=14, fill="#eef9f4", outline="#dce2dc")
+        d.text((bx + 16, by + 15), label, font=font(15, True), fill="#62716c")
+        d.text((bx + 16, by + 46), value, font=font(32, True), fill=color)
+    d.text((x, 638), "Neural operators for partial differential equations · saved evaluation", font=font(15), fill="#62716c")
+    return frame
+
+
+def retrieval_audit_scene(progress):
+    frame = base_frame(
+        "AUDITABLE EVALUATION",
+        "See why each excerpt counted",
+        "The claim-aware audit is persisted with the run. Review the verdict, supported claims, rationale, and rank contribution.",
+        "05 / 05  •  Per-excerpt audit",
+    )
+    d = ImageDraw.Draw(frame)
+    d.text((500, 62), "Per-excerpt retrieval audit", font=font(29, True), fill="#17201e")
+    d.text((500, 104), "3 relevant · 0 partial · 0 irrelevant", font=font(18, True), fill="#0c7059")
+    d.rounded_rectangle((500, 143, 1215, 205), radius=12, fill="#eef9f4")
+    d.text((520, 158), "Strict ranked precision: 1.000", font=font(18, True), fill="#17201e")
+    d.text((865, 158), "Partial-credit: 1.000", font=font(18, True), fill="#17201e")
+    rows = [
+        ("#1 · RELEVANT", "Supports a material reference claim directly."),
+        ("#2 · RELEVANT", "Adds complementary evidence for the answer."),
+        ("#3 · RELEVANT", "On-topic evidence retained at a lower rank."),
+    ]
+    for index, (heading, reason) in enumerate(rows):
+        ry = 226 + index * 124
+        d.rounded_rectangle((500, ry, 1215, ry + 103), radius=13, fill="#f6f8f5", outline="#dce2dc")
+        d.text((520, ry + 16), heading, font=font(18, True), fill="#0c7059")
+        d.text((520, ry + 49), reason, font=font(17), fill="#52635c")
+        d.text((1043, ry + 17), f"rank {index + 1}", font=font(14, True), fill="#58a6ff")
+    return frame
+
+
 def end_scene(progress):
     frame = Image.new("RGB", (WIDTH, HEIGHT), BG)
     d = ImageDraw.Draw(frame)
     d.text((73, 86), "TRY IT LOCALLY", font=font(21, True), fill=TEAL)
     d.text((73, 150), "Run with Docker", font=font(58, True), fill=WHITE)
     d.text((76, 238), "Clone the repository, copy .env.example to .env,", font=font(25), fill=MUTED)
-    d.text((76, 278), "add your Gemini API key, then start the stack.", font=font(25), fill=MUTED)
+    d.text((76, 278), "add provider keys, then start the stack.", font=font(25), fill=MUTED)
     d.rounded_rectangle((74, 367, 1040, 502), radius=22, fill="#0e1d30")
     d.text((108, 397), "docker compose up --build", font=font(34, True), fill=BLUE)
     d.text((108, 452), "Open http://localhost:8000", font=font(24), fill=WHITE)
@@ -139,23 +227,17 @@ def fade(frame, local_t, duration, fade_time=0.45):
 
 def main():
     benchmark = Image.open(CAPTURES / "benchmark.png").convert("RGB")
-    details = Image.open(CAPTURES / "details.png").convert("RGB")
-
     scenes = [
         (5.0, lambda p: title_scene(p)),
-        (8.0, lambda p: screenshot_scene(
-            benchmark, (0, 0, 652, 1210), "RESEARCH WORKFLOW", "Ask a scientific question",
-            "Choose Fast or Standard depth. The interface reports the active stage, model, elapsed time, and an honest estimate.",
-            "01 / 05  •  Research input", contain=True)),
-        (10.0, lambda p: screenshot_scene(
-            details, (0, 2740 + int(p * 620), 652, 3560 + int(p * 620)), "GROUNDED ANSWERS", "Readable synthesis, backed by evidence",
-            "The generated report is tied to retrieved evidence instead of relying on the model's memory alone.",
-            "02 / 05  •  CAR-T example")),
-        (8.0, lambda p: screenshot_scene(
-            details, (0, 4140 + int(p * 380), 652, 4960 + int(p * 380)), "TRACEABLE SOURCES", "Inspect the papers behind the answer",
-            "Each result keeps its PubMed or arXiv source records so users can verify the evidence trail.",
-            "03 / 05  •  Six source records")),
-        (10.0, lambda p: metrics_scene(benchmark)),
+        (7.0, lambda p: screenshot_scene(
+            benchmark, (0, 1100, 652, 2250),
+            "SAVED EVALUATION", "Inspect quality without rerunning models",
+            "Open a completed Fast or Standard run. The answer, retrieved excerpts, sources, and judge output remain available.",
+            "01 / 05  •  Evaluation history", contain=True)),
+        (9.0, lambda p: evaluation_mode_scene("claim")),
+        (9.0, lambda p: evaluation_mode_scene("ragas")),
+        (10.0, lambda p: evaluation_mode_scene("compare")),
+        (9.0, lambda p: retrieval_audit_scene(p)),
         (6.0, lambda p: end_scene(p)),
     ]
 
@@ -173,6 +255,13 @@ def main():
             frame = fade(render(index / max(1, total - 1)), local_t, duration)
             writer.send(frame.tobytes())
     writer.close()
+    preview_frames = [title_scene(0), evaluation_mode_scene("compare"), retrieval_audit_scene(0)]
+    thumbs = [item.resize((640, 360), Image.Resampling.LANCZOS) for item in preview_frames]
+    sheet = Image.new("RGB", (1280, 720), BG)
+    sheet.paste(thumbs[0], (0, 0))
+    sheet.paste(thumbs[1], (640, 0))
+    sheet.paste(thumbs[2], (320, 360))
+    sheet.save(PREVIEW, quality=92)
     print(OUTPUT)
 
 

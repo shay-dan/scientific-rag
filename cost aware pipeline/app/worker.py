@@ -3,16 +3,17 @@ import asyncio
 from datetime import datetime, timezone
 
 from arq.connections import RedisSettings
+from arq import cron
 from arq.worker import func
 from uuid import UUID
 from sqlalchemy import select
 
 from .config import get_settings
 from .db import close_database, initialize_database, session_factory
-from .models import EvaluationCase, EvaluationResult, EvaluationRun, ResearchEvidence
+from .models import AuditEvent, EvaluationCase, EvaluationResult, EvaluationRun, ResearchEvidence, ResearchRun
 from .schemas import ResearchMode
 from .services import ResearchService
-from .evaluation import JUDGE_PROMPT, JudgeScore, score_with_ragas, summarize_scores
+from .evaluation import JUDGE_PROMPT, JudgeScore, diagnose_reference_claims, diagnose_retrieved_contexts, score_with_ragas, summarize_scores
 from google import genai
 from google.genai import types
 
@@ -20,7 +21,12 @@ from google.genai import types
 async def startup(ctx):
     await initialize_database()
     await _mark_interrupted_evaluation_runs()
-    ctx["service"] = ResearchService(get_settings())
+    ctx["service"] = ResearchService(get_settings(), ctx["redis"])
+    await ctx["redis"].set("scientific_rag:worker:heartbeat", datetime.now(timezone.utc).isoformat(), ex=60)
+
+
+async def worker_heartbeat(ctx):
+    await ctx["redis"].set("scientific_rag:worker:heartbeat", datetime.now(timezone.utc).isoformat(), ex=60)
 
 
 async def shutdown(ctx):
@@ -44,7 +50,17 @@ async def _mark_interrupted_evaluation_runs() -> None:
 
 
 async def run_research_job(ctx, run_id: str, question: str, mode: str, force_mining: bool):
-    await ctx["service"].run_queued(UUID(run_id), question, ResearchMode(mode), force_mining)
+    try:
+        await ctx["service"].run_queued(UUID(run_id), question, ResearchMode(mode), force_mining)
+    except asyncio.CancelledError:
+        async with session_factory() as session:
+            run = (await session.execute(select(ResearchRun).where(ResearchRun.id == UUID(run_id)))).scalar_one_or_none()
+            if run and run.status in {"queued", "running"}:
+                run.status = "cancelled"
+                run.completed_at = datetime.now(timezone.utc)
+                session.add(AuditEvent(actor=run.requested_by or "system", action="research.cancelled", target_type="research_run", target_id=run_id, details={"mode": run.model_metadata.get("mode", "fast")}))
+                await session.commit()
+        raise
 
 
 async def _mark_evaluation_run_failed(evaluation_run_id: str, error: str) -> None:
@@ -102,19 +118,48 @@ async def _run_evaluation_job(ctx, evaluation_run_id: str):
                 case = (await session.execute(select(EvaluationCase).where(EvaluationCase.id == result.evaluation_case_id))).scalar_one()
                 run.metrics = {**run.metrics, "phase": "evaluation", "current_case": evaluation_index, "current_question": case.question}
                 await session.commit()
-                result.judge_scores = await score_with_ragas(
+                settings = get_settings()
+                result.judge_scores = await asyncio.wait_for(score_with_ragas(
                     question=case.question,
                     answer=result.answer or "",
                     retrieved_contexts=result.retrieved_contexts,
                     reference_answer=case.reference_answer,
                     reference_context=case.reference_context,
-                    api_key=get_settings().google_api_key,
+                    api_key=settings.google_api_key,
                     judge_model=judge_model,
-                    embedding_model=get_settings().embedding_model,
-                    embedding_dimensions=get_settings().embedding_dimensions,
-                )
+                    embedding_model=settings.embedding_model,
+                    embedding_dimensions=settings.embedding_dimensions,
+                ), timeout=settings.evaluation_case_timeout_seconds)
+                if case.reference_claims:
+                    try:
+                        result.judge_scores["claim_diagnostics"] = await asyncio.wait_for(
+                            diagnose_reference_claims(
+                                question=case.question,
+                                reference_claims=list(case.reference_claims),
+                                retrieved_contexts=result.retrieved_contexts,
+                                api_key=settings.google_api_key,
+                                judge_model=judge_model,
+                            ),
+                            timeout=settings.claim_diagnostic_timeout_seconds,
+                        )
+                    except Exception as diagnostic_error:
+                        result.judge_scores["claim_diagnostics_error"] = type(diagnostic_error).__name__
+                try:
+                    result.judge_scores["retrieval_diagnostics"] = await asyncio.wait_for(
+                        diagnose_retrieved_contexts(
+                            question=case.question,
+                            reference_answer=case.reference_answer,
+                            reference_claims=list(case.reference_claims or []),
+                            retrieved_contexts=result.retrieved_contexts,
+                            api_key=settings.google_api_key,
+                            judge_model=judge_model,
+                        ),
+                        timeout=settings.claim_diagnostic_timeout_seconds,
+                    )
+                except Exception as diagnostic_error:
+                    result.judge_scores["retrieval_diagnostics_error"] = type(diagnostic_error).__name__
                 result.judge_scores["engine"] = "ragas"
-                result.judge_scores["context_metrics_mode"] = "verified_reference_excerpt_semantic_judge" if case.reference_context else "llm_reference_answer"
+                result.judge_scores["context_metrics_mode"] = "ragas_reference_answer"
                 result.status = "judged"
             except Exception as error:
                 try:
@@ -151,6 +196,8 @@ class WorkerSettings:
     ]
     on_startup = startup
     on_shutdown = shutdown
+    cron_jobs = [cron(worker_heartbeat, second={0, 15, 30, 45})]
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
     max_jobs = 1
+    allow_abort_jobs = True
     job_timeout = get_settings().request_timeout_seconds + 60

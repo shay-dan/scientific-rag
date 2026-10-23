@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -10,9 +11,18 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+asyncpg://scientific_rag:scientific_rag@localhost:5432/scientific_rag"
     google_api_key: str = ""
+    gemini_api_key: str = ""
+    groq_api_key: str = ""
+    openrouter_api_key: str = ""
+    llm_provider_order: str = "groq,openrouter,gemini"
+    groq_model: str = "openai/gpt-oss-120b"
+    openrouter_model: str = "openrouter/free"
+    llm_request_timeout_seconds: int = 90
     entrez_email: str = ""
     request_timeout_seconds: int = 600
     evaluation_job_timeout_seconds: int = 3600
+    evaluation_case_timeout_seconds: int = 300
+    claim_diagnostic_timeout_seconds: int = 120
     allow_database_reset: bool = False
     embedding_model: str = "gemini-embedding-2"
     ragas_judge_model: str = "gemini-2.5-flash"
@@ -24,6 +34,12 @@ class Settings(BaseSettings):
     rate_limit_requests_per_minute: int = 30
     research_runs_per_day: int = 10
     redis_url: str = "redis://localhost:6379/0"
+
+    @model_validator(mode="after")
+    def normalize_gemini_key(self) -> "Settings":
+        if not self.google_api_key and self.gemini_api_key:
+            self.google_api_key = self.gemini_api_key
+        return self
 
     def validate_research_configuration(self) -> None:
         missing = [name for name, value in (("GOOGLE_API_KEY", self.google_api_key), ("ENTREZ_EMAIL", self.entrez_email)) if not value]

@@ -22,6 +22,8 @@
         <textarea id="question" name="question" required minlength="3" placeholder="What is CRISPR used for in cancer research?"></textarea>
         <label for="reference_answer">Reviewed reference answer</label>
         <textarea id="reference_answer" name="reference_answer" required minlength="3" placeholder="Write the answer you consider accurate and complete."></textarea>
+        <label for="reference_claims">Atomic reference claims (optional, one per line)</label>
+        <textarea id="reference_claims" name="reference_claims" placeholder="Each line should contain one independently testable claim. Claim-level support will be stored and displayed with the Ragas result."></textarea>
         <label for="reference_context">Verified reference source excerpt (optional)</label>
         <textarea id="reference_context" name="reference_context" placeholder="Paste verified source text. When supplied, Ragas compares retrieved excerpts directly against it for context precision and recall."></textarea>
         <fieldset class="mode-row" aria-label="Evaluation research depth">

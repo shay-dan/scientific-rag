@@ -21,3 +21,6 @@ class LoggingTests(unittest.TestCase):
                 logging.getLogger("test.logger").info("visible test log message")
                 logging.shutdown()
             self.assertIn("visible test log message", log_path.read_text(encoding="utf-8"))
+        # The temporary file has been removed; leaving its closed handler on
+        # root logging makes later tests try to reopen a nonexistent path.
+        logging.getLogger().handlers.clear()

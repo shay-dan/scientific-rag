@@ -21,6 +21,8 @@ python-dotenv>=1,<2
 ragas>=0.2,<0.3
 rapidfuzz>=3,<4
 rank-bm25
+requests>=2.32,<3
 sqlalchemy[asyncio]>=2.0,<3
 tenacity
+tzdata>=2025.2,<2027
 uvicorn[standard]>=0.30,<1

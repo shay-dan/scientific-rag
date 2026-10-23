@@ -1,11 +1,15 @@
 """FastAPI application entry point."""
 
+import asyncio
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import logging
+import os
 import time
 import uuid
 from typing import Annotated
+from zoneinfo import ZoneInfo
+from uuid import UUID
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -14,17 +18,20 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 from arq import create_pool
 from arq.connections import RedisSettings
-from sqlalchemy import select, text
+from arq.jobs import Job
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import get_settings
 from .auth import BetaLimiter, Principal, principal_for_key, require_api_key
 from .db import close_database, get_session, initialize_database
 from .logging_config import configure_logging
-from .models import EvaluationCase, EvaluationDataset, EvaluationResult, EvaluationRun, ResearchEvidence, ResearchRun, SourceDocument
+from .models import AuditEvent, EvaluationCase, EvaluationDataset, EvaluationResult, EvaluationRun, ResearchEvidence, ResearchFeedback, ResearchRun, SourceDocument
 from .schemas import EvaluationDatasetInput, EvaluationRunInput, HealthResponse, ResearchMode, ResearchRequest, ResearchResponse
 from .services import ResearchService, to_response
-from .evaluation import METRIC_NAMES, summarize_scores
+from .cost_policy import budget_for
+from .evaluation import METRIC_NAMES, summarize_context_precision_views, summarize_scores
+from scientific_rag.llm_gateway import create_chat_model, model_for
 
 
 @asynccontextmanager
@@ -36,6 +43,7 @@ async def lifespan(app: FastAPI):
     app.state.research_service = ResearchService(get_settings(), app.state.redis)
     app.state.settings = get_settings()
     app.state.limiter = BetaLimiter(get_settings().rate_limit_requests_per_minute, get_settings().research_runs_per_day)
+    app.state.provider_checks = {}
     yield
     await app.state.redis.close()
     await close_database()
@@ -107,16 +115,23 @@ async def login_page(request: Request):
 
 
 @app.post("/login", response_class=HTMLResponse, include_in_schema=False)
-async def login(request: Request, api_key: Annotated[str, Form()]):
+async def login(request: Request, api_key: Annotated[str, Form()], session: AsyncSession = Depends(get_session)):
     principal = principal_for_key(api_key, get_settings().app_api_keys)
     if principal is None:
+        session.add(AuditEvent(actor="anonymous", action="auth.login_failed", details={"path": "/login"}))
+        await session.commit()
         return templates.TemplateResponse(request, "login.html", {"error": "Invalid access key"}, status_code=401)
     request.session["principal"] = {"name": principal.name, "role": principal.role}
+    session.add(AuditEvent(actor=principal.name, action="auth.login_succeeded", details={"role": principal.role}))
+    await session.commit()
     return RedirectResponse("/", status_code=303)
 
 
 @app.post("/logout", include_in_schema=False)
-async def logout(request: Request):
+async def logout(request: Request, session: AsyncSession = Depends(get_session)):
+    principal = request.session.get("principal", {})
+    session.add(AuditEvent(actor=principal.get("name", "anonymous"), action="auth.logout", details={}))
+    await session.commit()
     request.session.clear()
     return RedirectResponse("/login", status_code=303)
 
@@ -133,6 +148,410 @@ def _ui_admin(request: Request) -> Principal:
     if principal.role != "admin":
         raise HTTPException(status_code=403, detail="Admin role required")
     return principal
+
+
+def _aggregate_provider_diagnostics(runs: list[ResearchRun]) -> dict:
+    providers: dict[str, dict] = {provider: {"attempts": 0, "successes": 0, "failures": 0, "skips": 0, "latency_ms": 0.0, "models": set(), "expert": {"calls": 0, "successes": 0, "failures": 0, "latency_ms": 0.0}} for provider in ("groq", "openrouter", "gemini")}
+    total_fallbacks = 0
+    traced_runs = 0
+    for run in runs:
+        gateway = run.model_metadata.get("llm_gateway", {})
+        if not gateway:
+            continue
+        traced_runs += 1
+        total_fallbacks += int(gateway.get("fallback_count", 0))
+        for provider, stats in gateway.get("by_provider", {}).items():
+            bucket = providers.setdefault(provider, {"attempts": 0, "successes": 0, "failures": 0, "skips": 0, "latency_ms": 0.0, "models": set(), "expert": {"calls": 0, "successes": 0, "failures": 0, "latency_ms": 0.0}})
+            bucket["attempts"] += int(stats.get("attempts", 0))
+            bucket["successes"] += int(stats.get("successes", 0))
+            bucket["failures"] += int(stats.get("failures", 0))
+            bucket["skips"] += int(stats.get("skips", 0))
+            bucket["latency_ms"] += float(stats.get("latency_ms", 0.0))
+        for attempt in gateway.get("attempts", []):
+            provider = str(attempt.get("provider", "unknown"))
+            bucket = providers.setdefault(provider, {"attempts": 0, "successes": 0, "failures": 0, "skips": 0, "latency_ms": 0.0, "models": set(), "expert": {"calls": 0, "successes": 0, "failures": 0, "latency_ms": 0.0}})
+            if attempt.get("model"):
+                bucket["models"].add(str(attempt["model"]))
+            if attempt.get("role") == "expert" and not attempt.get("skipped"):
+                bucket["expert"]["calls"] += 1
+                bucket["expert"]["successes" if attempt.get("success") else "failures"] += 1
+                bucket["expert"]["latency_ms"] += float(attempt.get("latency_ms") or 0)
+    for bucket in providers.values():
+        bucket["average_latency_ms"] = round(bucket["latency_ms"] / bucket["attempts"], 1) if bucket["attempts"] else 0.0
+        bucket["latency_ms"] = round(bucket["latency_ms"], 1)
+        bucket["models"] = sorted(bucket["models"])
+        expert = bucket["expert"]
+        expert["average_latency_ms"] = round(expert["latency_ms"] / expert["calls"], 1) if expert["calls"] else 0.0
+    for provider, bucket in providers.items():
+        bucket["configured"] = bool(os.getenv({"groq": "GROQ_API_KEY", "openrouter": "OPENROUTER_API_KEY", "gemini": "GOOGLE_API_KEY"}.get(provider, "")) or (provider == "gemini" and bool(os.getenv("GEMINI_API_KEY"))))
+    return {"runs": traced_runs, "fallback_count": total_fallbacks, "providers": providers}
+
+
+@app.get("/diagnostics", response_class=HTMLResponse, include_in_schema=False)
+async def provider_diagnostics_ui(request: Request, session: AsyncSession = Depends(get_session)):
+    _ui_admin(request)
+    runs = list((await session.execute(select(ResearchRun).order_by(ResearchRun.created_at.desc()).limit(100))).scalars())
+    return templates.TemplateResponse(request, "diagnostics.html", {"diagnostics": _aggregate_provider_diagnostics(runs)})
+
+
+def _operations_partial(request: Request, name: str, context: dict):
+    return templates.TemplateResponse(request, f"partials/ops_{name}.html", context)
+
+
+@app.get("/ui/ops/research", response_class=HTMLResponse, include_in_schema=False)
+async def ops_research_tab(request: Request):
+    _ui_principal(request)
+    return _operations_partial(request, "research", {"deep_research_enabled": get_settings().enable_deep_research})
+
+
+@app.get("/ui/ops/diagnostics", response_class=HTMLResponse, include_in_schema=False)
+async def ops_diagnostics(request: Request, session: AsyncSession = Depends(get_session)):
+    _ui_admin(request)
+    runs = list((await session.execute(select(ResearchRun).order_by(ResearchRun.created_at.desc()).limit(100))).scalars())
+    return _operations_partial(request, "diagnostics", {"diagnostics": _aggregate_provider_diagnostics(runs)})
+
+
+@app.get("/ui/ops/history", response_class=HTMLResponse, include_in_schema=False)
+async def ops_history(request: Request, start_date: str = "", end_date: str = "", status: str = "", provider: str = "", session: AsyncSession = Depends(get_session)):
+    principal = _ui_principal(request)
+    query = select(ResearchRun).order_by(ResearchRun.created_at.desc()).limit(500)
+    if principal.role != "admin":
+        query = query.where(ResearchRun.requested_by == principal.name)
+    runs = list((await session.execute(query)).scalars())
+    evidence_counts = {}
+    if runs:
+        counts = await session.execute(select(ResearchEvidence.research_run_id, func.count()).where(ResearchEvidence.research_run_id.in_([run.id for run in runs])).group_by(ResearchEvidence.research_run_id))
+        evidence_counts = dict(counts.all())
+    rows = []
+    for run in runs:
+        created = (run.created_at or datetime.now(timezone.utc)).astimezone(ZoneInfo("Asia/Jerusalem"))
+        gateway = run.model_metadata.get("llm_gateway", {})
+        used_providers = sorted({item.get("provider", "") for item in gateway.get("attempts", []) if item.get("provider")})
+        if start_date and created.date().isoformat() < start_date:
+            continue
+        if end_date and created.date().isoformat() > end_date:
+            continue
+        if status and run.status != status:
+            continue
+        if provider and provider not in used_providers:
+            continue
+        model_names = sorted({f"{item.get('provider')}:{item.get('model')}" for item in gateway.get("attempts", []) if item.get("model")})
+        rows.append({"run": run, "local_created_at": created, "providers": used_providers, "models": model_names,
+                     "sources_used": evidence_counts.get(run.id, 0),
+                     "cost": gateway.get("estimated_cost_usd"), "fallbacks": gateway.get("fallback_count", 0)})
+    return _operations_partial(request, "history", {"rows": rows, "filters": {"start_date": start_date, "end_date": end_date, "status": status, "provider": provider}})
+
+
+@app.get("/ui/ops/run/{run_id}", response_class=HTMLResponse, include_in_schema=False)
+async def ops_run_detail(request: Request, run_id: str, session: AsyncSession = Depends(get_session)):
+    principal = _ui_principal(request)
+    try:
+        parsed_run_id = UUID(run_id)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail="Research run not found") from error
+    run = (await session.execute(select(ResearchRun).where(ResearchRun.id == parsed_run_id))).scalar_one_or_none()
+    if run is None or (principal.role != "admin" and run.requested_by != principal.name):
+        raise HTTPException(status_code=404, detail="Research run not found")
+    evidence = list((await session.execute(select(ResearchEvidence).where(ResearchEvidence.research_run_id == run.id).order_by(ResearchEvidence.ordinal))).scalars())
+    metadata = run.model_metadata or {}
+    return _operations_partial(request, "run_detail", {"run": run, "timeline": metadata.get("timeline", []),
+        "gateway": metadata.get("llm_gateway", {}), "source_diagnostics": metadata.get("source_diagnostics", {}),
+        "cache": metadata.get("cache", {}), "evidence": evidence,
+        "feedback_enabled": True,
+        "duration": metadata.get("duration_seconds"), "mined_count": metadata.get("mined_count", 0)})
+
+
+@app.get("/ui/ops/latest-run", response_class=HTMLResponse, include_in_schema=False)
+async def ops_latest_run(request: Request, session: AsyncSession = Depends(get_session)):
+    principal = _ui_principal(request)
+    query = select(ResearchRun).order_by(ResearchRun.created_at.desc()).limit(1)
+    if principal.role != "admin":
+        query = query.where(ResearchRun.requested_by == principal.name)
+    run = (await session.execute(query)).scalar_one_or_none()
+    if run is None:
+        return _operations_partial(request, "run_detail", {"run": None})
+    return await ops_run_detail(request, str(run.id), session)
+
+
+@app.get("/ui/ops/retrieval/latest", response_class=HTMLResponse, include_in_schema=False)
+async def ops_latest_retrieval(request: Request, session: AsyncSession = Depends(get_session)):
+    _ui_principal(request)
+    query = select(ResearchRun).order_by(ResearchRun.created_at.desc()).limit(1)
+    if _ui_principal(request).role != "admin":
+        query = query.where(ResearchRun.requested_by == _ui_principal(request).name)
+    run = (await session.execute(query)).scalar_one_or_none()
+    return await ops_retrieval_detail(request, str(run.id), session) if run else _operations_partial(request, "retrieval", {"run": None, "traces": []})
+
+
+@app.get("/ui/ops/retrieval/{run_id}", response_class=HTMLResponse, include_in_schema=False)
+async def ops_retrieval_detail(request: Request, run_id: str, session: AsyncSession = Depends(get_session)):
+    principal = _ui_principal(request)
+    try:
+        parsed_id = UUID(run_id)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail="Research run not found") from error
+    run = (await session.execute(select(ResearchRun).where(ResearchRun.id == parsed_id))).scalar_one_or_none()
+    if run is None or (principal.role != "admin" and run.requested_by != principal.name):
+        raise HTTPException(status_code=404, detail="Research run not found")
+    model_metadata = run.model_metadata or {}
+    traces = model_metadata.get("retrieval_inspector", [])
+    pubmed_traces = model_metadata.get("pubmed_inspector", [])
+    arxiv_traces = model_metadata.get("arxiv_inspector", [])
+    return _operations_partial(request, "retrieval", {"run": run, "traces": traces, "pubmed_traces": pubmed_traces, "arxiv_traces": arxiv_traces})
+
+
+@app.get("/ui/ops/evaluations", response_class=HTMLResponse, include_in_schema=False)
+async def ops_evaluation_dashboard(request: Request, session: AsyncSession = Depends(get_session)):
+    _ui_admin(request)
+    evaluation_runs = list((await session.execute(select(EvaluationRun).order_by(EvaluationRun.created_at))).scalars())
+    datasets = {item.id: item for item in (await session.execute(select(EvaluationDataset))).scalars()}
+    results = list((await session.execute(select(EvaluationResult).where(EvaluationResult.status == "judged"))).scalars())
+    research_ids = [item.research_run_id for item in results if item.research_run_id is not None]
+    research = {item.id: item for item in (await session.execute(select(ResearchRun).where(ResearchRun.id.in_(research_ids)))).scalars()} if research_ids else {}
+    rows, groups = [], {}
+    for run in evaluation_runs:
+        dataset = datasets.get(run.dataset_id)
+        metrics = run.metrics or {}
+        mode = str(metrics.get("mode", "unknown"))
+        associated = [item for item in results if item.evaluation_run_id == run.id]
+        providers = sorted({str(attempt.get("provider")) for item in associated for source_run in [research.get(item.research_run_id)] if source_run for attempt in source_run.model_metadata.get("llm_gateway", {}).get("attempts", []) if attempt.get("success")})
+        versions = sorted({str(research[item.research_run_id].model_metadata.get("retrieval_version", "legacy/unknown")) for item in associated if item.research_run_id in research})
+        fixed = bool(dataset and "benchmark" in dataset.name.lower())
+        row = {"run": run, "dataset": dataset.name if dataset else "Deleted dataset", "mode": mode, "fixed": fixed, "providers": providers, "retrieval_versions": versions,
+               "faithfulness": metrics.get("faithfulness"), "answer_relevancy": metrics.get("answer_relevancy"), "context_precision": metrics.get("context_precision"), "context_recall": metrics.get("context_recall")}
+        rows.append(row)
+        if run.status in {"completed", "completed_with_errors"}:
+            groups.setdefault((mode, ", ".join(providers) or "unknown", ", ".join(versions) or "legacy/unknown"), []).append(row)
+    comparisons = [{"mode": key[0], "provider": key[1], "retrieval": key[2], "runs": len(items),
+        **{metric: round(sum(float(item[metric]) for item in items if item[metric] is not None) / max(sum(1 for item in items if item[metric] is not None), 1), 4) if any(item[metric] is not None for item in items) else None
+           for metric in ("faithfulness", "answer_relevancy", "context_precision", "context_recall")}} for key, items in groups.items()]
+    regression = []
+    for row in rows:
+        baseline_key = "fixed-benchmark" if row["fixed"] else row["dataset"]
+        prior_rows = rows[:rows.index(row)]
+        previous = next((older for older in reversed(prior_rows) if ("fixed-benchmark" if older["fixed"] else older["dataset"]) == baseline_key and older["mode"] == row["mode"] and older["run"].status in {"completed", "completed_with_errors"}), None)
+        if previous:
+            drops = {metric: round(float(previous[metric]) - float(row[metric]), 4) for metric in ("faithfulness", "answer_relevancy", "context_precision", "context_recall") if previous[metric] is not None and row[metric] is not None and float(previous[metric]) - float(row[metric]) >= 0.1}
+            if drops:
+                regression.append({"current": row, "previous": previous, "drops": drops})
+    trend_values = [float(row["faithfulness"]) for row in rows if row["faithfulness"] is not None and row["run"].status in {"completed", "completed_with_errors"}][-30:]
+    trend_points = " ".join(f"{(index / max(len(trend_values) - 1, 1)) * 600:.1f},{100 - value * 90:.1f}" for index, value in enumerate(trend_values))
+    return _operations_partial(request, "evaluation_dashboard", {"rows": list(reversed(rows)), "comparisons": comparisons, "regressions": regression,
+        "trend_points": trend_points, "trend_count": len(trend_values)})
+
+
+@app.get("/ui/ops/queue", response_class=HTMLResponse, include_in_schema=False)
+async def ops_queue_dashboard(request: Request, session: AsyncSession = Depends(get_session)):
+    _ui_admin(request)
+    runs = list((await session.execute(select(ResearchRun).order_by(ResearchRun.created_at.desc()).limit(200))).scalars())
+    now = datetime.now(timezone.utc)
+    queued = [run for run in runs if run.status == "queued"]
+    active = [run for run in runs if run.status == "running"]
+    completed = [run for run in runs if run.completed_at and run.status in {"completed", "failed", "cancelled"}]
+    durations = [float(run.model_metadata.get("duration_seconds")) for run in completed if run.model_metadata.get("duration_seconds") is not None]
+    waits = [(now - run.created_at).total_seconds() for run in queued if run.created_at]
+    return _operations_partial(request, "queue", {"queued": queued, "active": active, "failed": [run for run in runs if run.status == "failed"][:50],
+        "avg_wait": round(sum(waits) / len(waits), 1) if waits else None, "avg_processing": round(sum(durations) / len(durations), 1) if durations else None,
+        "checked_at": now.astimezone(ZoneInfo("Asia/Jerusalem")).strftime("%Y-%m-%d %H:%M:%S Jerusalem")})
+
+
+@app.post("/ui/ops/queue/{run_id}/cancel", response_class=HTMLResponse, include_in_schema=False)
+async def ops_cancel_queue_run(request: Request, run_id: str, session: AsyncSession = Depends(get_session)):
+    principal = _ui_admin(request)
+    try:
+        parsed_id = UUID(run_id)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail="Run not found") from error
+    run = (await session.execute(select(ResearchRun).where(ResearchRun.id == parsed_id))).scalar_one_or_none()
+    if run is None or run.status not in {"queued", "running"}:
+        raise HTTPException(status_code=409, detail="Only queued or running research jobs can be cancelled")
+    job_id = run.model_metadata.get("queue_job_id")
+    try:
+        if job_id:
+            aborted = await Job(job_id, request.app.state.redis).abort(timeout=5)
+            if not aborted:
+                raise HTTPException(status_code=409, detail="ARQ could not confirm cancellation; refresh queue status")
+        elif run.status == "queued":
+            raise RuntimeError("Queue job identifier was not stored")
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(status_code=503, detail=f"The queue could not confirm cancellation ({type(error).__name__})") from error
+    run.status = "cancelled"
+    run.completed_at = datetime.now(timezone.utc)
+    session.add(AuditEvent(actor=principal.name, action="research.cancel_requested", target_type="research_run", target_id=str(run.id), details={"previous_status": "queued_or_running"}))
+    await session.commit()
+    return await ops_queue_dashboard(request, session)
+
+
+@app.get("/ui/ops/audit", response_class=HTMLResponse, include_in_schema=False)
+async def ops_audit_log(request: Request, session: AsyncSession = Depends(get_session)):
+    _ui_admin(request)
+    events = list((await session.execute(select(AuditEvent).order_by(AuditEvent.created_at.desc()).limit(250))).scalars())
+    return _operations_partial(request, "audit", {"events": events})
+
+
+@app.get("/ui/ops/configuration", response_class=HTMLResponse, include_in_schema=False)
+async def ops_configuration(request: Request):
+    _ui_admin(request)
+    settings = get_settings()
+    from scientific_rag.llm_gateway import provider_order
+    return _operations_partial(request, "configuration", {"settings": settings, "provider_order": provider_order(),
+        "models": {provider: {role: model_for(provider, role) for role in ("planner", "gate_keeper", "expert")} for provider in ("groq", "openrouter", "gemini")},
+        "budgets": {mode.value: budget_for(mode).as_dict() for mode in ResearchMode},
+        "provider_configured": {"groq": bool(settings.groq_api_key), "openrouter": bool(settings.openrouter_api_key), "gemini": bool(settings.google_api_key)}})
+
+
+@app.post("/ui/research/{run_id}/feedback", response_class=HTMLResponse, include_in_schema=False)
+async def submit_research_feedback(request: Request, run_id: str, rating: Annotated[str, Form()], categories: Annotated[list[str], Form()] = [], comment: Annotated[str, Form(max_length=2000)] = "", session: AsyncSession = Depends(get_session)):
+    principal = _ui_principal(request)
+    request.app.state.limiter.check_request(principal)
+    try:
+        parsed_id = UUID(run_id)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail="Research run not found") from error
+    run = (await session.execute(select(ResearchRun).where(ResearchRun.id == parsed_id))).scalar_one_or_none()
+    if run is None or (principal.role != "admin" and run.requested_by != principal.name):
+        raise HTTPException(status_code=404, detail="Research run not found")
+    allowed_categories = {"irrelevant_source", "unsupported_claim", "incomplete_answer", "other"}
+    if rating not in {"helpful", "not_helpful"} or any(item not in allowed_categories for item in categories):
+        raise HTTPException(status_code=422, detail="Invalid feedback selection")
+    session.add(ResearchFeedback(research_run_id=run.id, submitted_by=principal.name, rating=rating, categories=categories, comment=comment.strip() or None))
+    session.add(AuditEvent(actor=principal.name, action="research.feedback_submitted", target_type="research_run", target_id=str(run.id), details={"rating": rating, "categories": categories}))
+    await session.commit()
+    return _operations_partial(request, "feedback_thanks", {})
+
+
+@app.post("/ui/ops/retry/{run_id}", response_class=HTMLResponse, include_in_schema=False)
+async def ops_retry_failed_run(request: Request, run_id: str, session: AsyncSession = Depends(get_session)):
+    principal = _ui_principal(request)
+    try:
+        parsed_run_id = UUID(run_id)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail="Research run not found") from error
+    failed = (await session.execute(select(ResearchRun).where(ResearchRun.id == parsed_run_id))).scalar_one_or_none()
+    if failed is None or (principal.role != "admin" and failed.requested_by != principal.name):
+        raise HTTPException(status_code=404, detail="Research run not found")
+    if failed.status != "failed":
+        raise HTTPException(status_code=409, detail="Only failed research runs can be restarted")
+    mode = ResearchMode(failed.model_metadata.get("mode", "fast"))
+    queued = await request.app.state.research_service.queue(session, failed.question, mode, actor=principal.name, bypass_cache=True, force_mining=True)
+    record = (await session.execute(select(ResearchRun).where(ResearchRun.id == queued.id))).scalar_one()
+    updated_metadata = dict(record.model_metadata)
+    updated_metadata["retry_count"] = int(failed.model_metadata.get("retry_count", 0)) + 1
+    updated_metadata["retry_of"] = str(failed.id)
+    record.model_metadata = updated_metadata
+    session.add(AuditEvent(actor=principal.name, action="research.retry_queued", target_type="research_run", target_id=str(record.id), details={"retry_of": str(failed.id), "mode": mode.value}))
+    await session.commit()
+    return templates.TemplateResponse(request, "partials/research_progress.html", _progress_context(record))
+
+
+def _cost_dashboard(runs: list[ResearchRun]) -> dict:
+    now = datetime.now(ZoneInfo("Asia/Jerusalem"))
+    today = now.date()
+    month_start = today.replace(day=1)
+    priced = [run for run in runs if run.model_metadata.get("llm_gateway", {}).get("estimated_cost_usd") is not None]
+    daily_runs = [run for run in runs if run.created_at and run.created_at.astimezone(ZoneInfo("Asia/Jerusalem")).date() == today]
+    monthly_runs = [run for run in runs if run.created_at and run.created_at.astimezone(ZoneInfo("Asia/Jerusalem")).date() >= month_start]
+    daily_cost = sum(float(run.model_metadata["llm_gateway"]["estimated_cost_usd"]) for run in priced if run.created_at and run.created_at.astimezone(ZoneInfo("Asia/Jerusalem")).date() == today)
+    monthly_cost = sum(float(run.model_metadata["llm_gateway"]["estimated_cost_usd"]) for run in priced if run.created_at and run.created_at.astimezone(ZoneInfo("Asia/Jerusalem")).date() >= month_start)
+    by_provider: dict[str, dict] = {}
+    cache_hits = sum(1 for run in runs if run.model_metadata.get("cache_hit"))
+    for run in runs:
+        gateway = run.model_metadata.get("llm_gateway", {})
+        for model_key, stats in gateway.get("by_model", {}).items():
+            bucket = by_provider.setdefault(model_key, {"provider": stats.get("provider"), "model": stats.get("model"), "calls": 0, "input_tokens": 0, "output_tokens": 0, "estimated_cost_usd": 0.0, "cost_available": True})
+            bucket["calls"] += int(stats.get("attempts", 0))
+            bucket["input_tokens"] += int(stats.get("input_tokens", 0))
+            bucket["output_tokens"] += int(stats.get("output_tokens", 0))
+            if stats.get("estimated_cost_usd") is None:
+                bucket["cost_available"] = False
+            else:
+                bucket["estimated_cost_usd"] += float(stats["estimated_cost_usd"])
+    for model in by_provider.values():
+        model["estimated_cost_usd"] = round(model["estimated_cost_usd"], 6) if model["cost_available"] else None
+    daily_budget = float(os.getenv("COST_DAILY_BUDGET_USD", "0") or 0)
+    monthly_budget = float(os.getenv("COST_MONTHLY_BUDGET_USD", "0") or 0)
+    fresh_costs = [float(run.model_metadata["llm_gateway"]["estimated_cost_usd"]) for run in priced if not run.model_metadata.get("cache_hit")]
+    cache_savings_estimate = (sum(fresh_costs) / len(fresh_costs) * cache_hits) if fresh_costs else None
+    recent_runs = [{"id": str(run.id), "question": run.question, "status": run.status,
+                    "created_at": run.created_at.astimezone(ZoneInfo("Asia/Jerusalem")).strftime("%Y-%m-%d %H:%M") if run.created_at else "—",
+                    "cost": run.model_metadata.get("llm_gateway", {}).get("estimated_cost_usd")} for run in runs[:50]]
+    usage_calls = sum(int(run.model_metadata.get("llm_gateway", {}).get("usage_attempts", 0)) for run in runs)
+    total_llm_calls = sum(int(run.model_metadata.get("llm_gateway", {}).get("total_attempts", 0)) for run in runs)
+    return {"run_count": len(runs), "runs": recent_runs, "priced_runs": len(priced), "today": today.isoformat(), "month": today.strftime("%B %Y"),
+        "daily_cost": round(daily_cost, 6), "monthly_cost": round(monthly_cost, 6), "daily_budget": daily_budget or None,
+        "daily_total_runs": len(daily_runs), "daily_priced_runs": sum(1 for run in daily_runs if run in priced),
+        "monthly_total_runs": len(monthly_runs), "monthly_priced_runs": sum(1 for run in monthly_runs if run in priced),
+        "monthly_budget": monthly_budget or None, "daily_alert": bool(daily_budget and daily_cost > daily_budget),
+        "monthly_alert": bool(monthly_budget and monthly_cost > monthly_budget), "cache_hits": cache_hits,
+        "cache_savings_estimate": round(cache_savings_estimate, 6) if cache_savings_estimate is not None else None,
+        "models": list(by_provider.values()), "input_tokens": sum(item["input_tokens"] for item in by_provider.values()),
+        "output_tokens": sum(item["output_tokens"] for item in by_provider.values()),
+        "token_usage_available": any(run.model_metadata.get("llm_gateway", {}).get("input_tokens") is not None for run in runs),
+        "usage_calls": usage_calls, "total_llm_calls": total_llm_calls}
+
+
+@app.get("/ui/ops/costs", response_class=HTMLResponse, include_in_schema=False)
+async def ops_costs(request: Request, session: AsyncSession = Depends(get_session)):
+    _ui_admin(request)
+    runs = list((await session.execute(select(ResearchRun).order_by(ResearchRun.created_at.desc()))).scalars())
+    return _operations_partial(request, "costs", {"costs": _cost_dashboard(runs)})
+
+
+@app.get("/ui/ops/health", response_class=HTMLResponse, include_in_schema=False)
+async def ops_system_health(request: Request, session: AsyncSession = Depends(get_session)):
+    _ui_admin(request)
+    checked_at = datetime.now(timezone.utc)
+    statuses = {"api": {"ok": True, "detail": "Request handled successfully"}, "postgresql": {"ok": False, "detail": "Checking database"},
+                "redis": {"ok": False, "detail": "Checking queue"}}
+    try:
+        await session.execute(text("SELECT 1"))
+        vector_version = (await session.execute(text("SELECT extversion FROM pg_extension WHERE extname = 'vector'"))).scalar_one_or_none()
+        statuses["postgresql"] = {"ok": bool(vector_version), "detail": f"Connected · pgvector {vector_version}" if vector_version else "Connected, but pgvector extension is missing"}
+    except Exception as error:
+        statuses["postgresql"] = {"ok": False, "detail": type(error).__name__}
+    redis = request.app.state.redis
+    queue_size = 0
+    heartbeat_age = None
+    try:
+        await redis.ping()
+        queue_size = await redis.zcard("arq:queue")
+        heartbeat = await redis.get("scientific_rag:worker:heartbeat")
+        ttl = await redis.ttl("scientific_rag:worker:heartbeat") if heartbeat else -2
+        heartbeat_age = max(60 - int(ttl), 0) if ttl >= 0 else None
+        statuses["redis"] = {"ok": True, "detail": "Connected"}
+    except Exception as error:
+        statuses["redis"] = {"ok": False, "detail": type(error).__name__}
+    worker_ok = heartbeat_age is not None and heartbeat_age < 60
+    statuses["worker"] = {"ok": worker_ok, "detail": f"Heartbeat {heartbeat_age}s ago" if worker_ok else "No recent worker heartbeat"}
+    running_since = checked_at - timedelta(minutes=20)
+    active_jobs = (await session.execute(select(func.count()).select_from(ResearchRun).where(ResearchRun.status == "running"))).scalar_one()
+    stuck_jobs = (await session.execute(select(func.count()).select_from(ResearchRun).where(ResearchRun.status == "running", ResearchRun.created_at < running_since))).scalar_one()
+    pending_jobs = (await session.execute(select(func.count()).select_from(ResearchRun).where(ResearchRun.status == "queued"))).scalar_one()
+    provider_states = []
+    for provider, key_name in (("groq", "GROQ_API_KEY"), ("openrouter", "OPENROUTER_API_KEY"), ("gemini", "GOOGLE_API_KEY")):
+        configured = bool(os.getenv(key_name) or (provider == "gemini" and os.getenv("GEMINI_API_KEY")))
+        check = request.app.state.provider_checks.get(provider, {})
+        provider_states.append({"name": provider, "configured": configured, "result": check.get("result", "Not tested"), "checked_at": check.get("checked_at"), "model": check.get("model")})
+    return _operations_partial(request, "health", {"statuses": statuses, "queue_size": queue_size, "pending_jobs": pending_jobs,
+        "active_jobs": active_jobs, "stuck_jobs": stuck_jobs, "providers": provider_states, "checked_at": checked_at.isoformat()})
+
+
+@app.post("/ui/ops/providers/{provider}/test", response_class=HTMLResponse, include_in_schema=False)
+async def ops_test_provider(request: Request, provider: str):
+    _ui_admin(request)
+    if provider not in {"groq", "openrouter", "gemini"}:
+        raise HTTPException(status_code=404, detail="Unknown provider")
+    model = model_for(provider, "expert")
+    check = {"checked_at": datetime.now(timezone.utc).isoformat(), "model": model}
+    try:
+        response = await asyncio.wait_for(create_chat_model(provider, "expert", 0).ainvoke("Reply with exactly: PROVIDER_OK"), timeout=30)
+        check.update({"result": "Connection successful", "ok": "PROVIDER_OK" in str(response.content)})
+    except Exception as error:
+        check.update({"result": f"Failed: {type(error).__name__}", "ok": False})
+    request.app.state.provider_checks[provider] = check
+    return _operations_partial(request, "provider_test", {"provider": provider, "check": check})
 
 
 @app.get("/evaluation", response_class=HTMLResponse, include_in_schema=False)
@@ -153,6 +572,7 @@ async def evaluation_ui_submit(
     question: Annotated[str, Form(min_length=3, max_length=10_000)],
     reference_answer: Annotated[str, Form(min_length=3, max_length=10_000)],
     reference_context: Annotated[str, Form()] = "",
+    reference_claims: Annotated[str, Form()] = "",
     mode: Annotated[str, Form()] = "fast",
     session: AsyncSession = Depends(get_session),
 ):
@@ -169,6 +589,7 @@ async def evaluation_ui_submit(
             question=question,
             reference_answer=reference_answer,
             reference_context=reference_context or None,
+            reference_claims=[line.strip() for line in reference_claims.splitlines() if line.strip()],
             provenance="human",
         ))
         run = EvaluationRun(dataset_id=dataset.id, status="queued", metrics={"mode": selected_mode.value})
@@ -216,6 +637,7 @@ async def evaluation_ui_status(request: Request, evaluation_run_id: str, session
             sources_by_run[run_id] = [{key: value for key, value in source.items() if key != "key"} for source in run_sources]
     scored = [item.judge_scores for item in results if item.status == "judged"]
     averages = {name: summarize_scores(scored)[name] for name in METRIC_NAMES}
+    precision_views = summarize_context_precision_views(scored)
     dataset = (await session.execute(select(EvaluationDataset).where(EvaluationDataset.id == run.dataset_id))).scalar_one()
     completed_at = run.completed_at or datetime.now(timezone.utc)
     duration_seconds = int((completed_at - run.created_at).total_seconds())
@@ -225,6 +647,7 @@ async def evaluation_ui_status(request: Request, evaluation_run_id: str, session
         "status": run.status,
         "mode": run.metrics.get("mode", "fast"),
         "averages": averages,
+        "precision_views": precision_views,
         "case_count": len(results),
         "scored_count": len(scored),
         "failed_count": len([item for item in results if item.status != "judged"]),
@@ -266,6 +689,7 @@ async def export_evaluation_run(request: Request, evaluation_run_id: str, sessio
         "scored_count": len(scored),
         "failed_count": len([item for item in results if item.status != "judged"]),
         "averages": {name: summarize_scores(scored)[name] for name in METRIC_NAMES},
+        "context_precision_views": summarize_context_precision_views(scored),
         "results": [{
             "question": cases[item.evaluation_case_id].question,
             "status": item.status,
@@ -368,9 +792,11 @@ async def research(request: Request, payload: ResearchRequest, session: AsyncSes
     request.app.state.limiter.consume_research_run(principal)
     service: ResearchService = request.app.state.research_service
     try:
-        return await service.run(session, payload.question, payload.mode, payload.generate_evaluation_dataset, actor=principal.name)
+        return await service.run(session, payload.question, payload.mode, payload.generate_evaluation_dataset, actor=principal.name, fresh=payload.fresh)
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+    except TimeoutError as error:
+        raise HTTPException(status_code=504, detail=str(error) or "Research timed out") from error
     except Exception as error:
         raise HTTPException(status_code=502, detail="Research provider request failed") from error
 
@@ -393,7 +819,7 @@ async def create_evaluation_dataset(request: Request, payload: EvaluationDataset
     dataset = EvaluationDataset(name=payload.name, created_by=principal.name)
     session.add(dataset)
     await session.flush()
-    session.add_all([EvaluationCase(dataset_id=dataset.id, question=item.question, reference_answer=item.reference_answer, reference_context=item.reference_context, provenance="human") for item in payload.cases])
+    session.add_all([EvaluationCase(dataset_id=dataset.id, question=item.question, reference_answer=item.reference_answer, reference_context=item.reference_context, reference_claims=item.reference_claims, provenance="human") for item in payload.cases])
     await session.commit()
     return {"dataset_id": str(dataset.id), "case_count": len(payload.cases)}
 
@@ -431,6 +857,6 @@ async def get_evaluation_run(request: Request, evaluation_run_id: str, session: 
     averages = {name: summarize_scores(scored)[name] for name in METRIC_NAMES}
     cases = {item.id: item for item in (await session.execute(select(EvaluationCase).where(EvaluationCase.dataset_id == run.dataset_id))).scalars()}
     return {
-        "id": str(run.id), "status": run.status, "mode": run.metrics.get("mode", "fast"), "case_count": len(results), "scored_count": len(scored), "averages": averages,
+        "id": str(run.id), "status": run.status, "mode": run.metrics.get("mode", "fast"), "case_count": len(results), "scored_count": len(scored), "averages": averages, "context_precision_views": summarize_context_precision_views(scored),
         "results": [{"case_id": str(item.evaluation_case_id), "question": cases[item.evaluation_case_id].question, "status": item.status, "scores": item.judge_scores, "rationale": item.judge_scores.get("rationale"), "error": item.error} for item in results],
     }

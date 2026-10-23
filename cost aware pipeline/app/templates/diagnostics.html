@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Provider diagnostics · Scientific RAG</title><link rel="stylesheet" href="/static/styles.css"></head>
+  <body><main class="shell">
+    <header><p class="eyebrow">OPERATIONS</p><h1>Provider diagnostics</h1><p class="subtitle">Aggregated LLM usage from the latest 100 research runs.</p><nav class="admin-nav"><a class="admin-link" href="/">Research</a><a class="admin-link" href="/evaluation">Ragas evaluation</a></nav></header>
+    <div class="provider-summary"><span><b>{{ diagnostics.runs }}</b> traced runs</span><span><b>{{ diagnostics.fallback_count }}</b> fallbacks</span></div>
+    <section class="diagnostics-grid">
+      {% for provider, stats in diagnostics.providers.items() %}
+      <article class="card diagnostic-card"><p class="eyebrow">PROVIDER</p><h2>{{ provider|title }}</h2><span class="metric-value">{{ stats.attempts }}</span><small>Total calls</small><p>{{ stats.successes }} succeeded · {{ stats.failures }} failed</p><p><b>{{ stats.average_latency_ms }} ms</b> average latency</p>{% if stats.models %}<p><small>Models: {{ stats.models|join(", ") }}</small></p>{% endif %}</article>
+      {% else %}<article class="card diagnostic-card"><p>No provider traces have been recorded yet.</p></article>{% endfor %}
+    </section>
+  </main></body>
+</html>

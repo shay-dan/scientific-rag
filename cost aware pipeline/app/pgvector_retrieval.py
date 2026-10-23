@@ -113,6 +113,7 @@ class PostgresVectorService:
         self.parent_splitter = RecursiveCharacterTextSplitter(chunk_size=PARENT_CHUNK_SIZE, chunk_overlap=PARENT_CHUNK_OVERLAP)
         self.child_splitter = RecursiveCharacterTextSplitter(chunk_size=CHILD_CHUNK_SIZE, chunk_overlap=CHILD_CHUNK_OVERLAP)
         self.client = genai.Client(api_key=settings.google_api_key)
+        self.retrieval_traces: list[dict] = []
 
     def restrict_final_retrieval_to_current_run(self) -> None:
         self.restrict_to_current_run = True
@@ -236,7 +237,7 @@ class PostgresVectorService:
         )
         tsquery = func.websearch_to_tsquery("english", query)
         text_statement = (
-            select(DocumentChunk, SourceDocument)
+            select(DocumentChunk, SourceDocument, func.ts_rank_cd(DocumentChunk.search_vector, tsquery).label("text_score"))
             .join(SourceDocument, DocumentChunk.source_document_id == SourceDocument.id)
             .where(DocumentChunk.search_vector.op("@@")(tsquery), run_scope)
             .order_by(func.ts_rank_cd(DocumentChunk.search_vector, tsquery).desc())
@@ -244,7 +245,8 @@ class PostgresVectorService:
         )
         vector_candidates = [RetrievalCandidate(chunk=row[0], source=row[1]) for row in (await self.session.execute(vector_statement)).all()]
         vector_results = maximal_marginal_relevance(vector_candidates, query_embedding, limit=candidate_limit)
-        text_results = [RetrievalCandidate(chunk=row[0], source=row[1]) for row in (await self.session.execute(text_statement)).all()]
+        text_rows = (await self.session.execute(text_statement)).all()
+        text_results = [RetrievalCandidate(chunk=row[0], source=row[1]) for row in text_rows]
         fused_candidates = reciprocal_rank_fusion(vector_results, text_results, limit=candidate_limit)
         fused_results: list[RetrievalCandidate] = []
         seen_contexts: set[uuid.UUID] = set()
@@ -256,6 +258,49 @@ class PostgresVectorService:
             fused_results.append(candidate)
             if len(fused_results) == top_n:
                 break
+        vector_ranks = {item.chunk.id: rank for rank, item in enumerate(vector_candidates, start=1)}
+        mmr_ranks = {item.chunk.id: rank for rank, item in enumerate(vector_results, start=1)}
+        mmr_effect: dict[uuid.UUID, dict] = {}
+        mmr_selected: list[RetrievalCandidate] = []
+        for rank, item in enumerate(vector_results, start=1):
+            relevance = _cosine_similarity(query_embedding, list(item.chunk.embedding))
+            redundancy = max((_cosine_similarity(list(item.chunk.embedding), list(other.chunk.embedding)) for other in mmr_selected), default=0.0)
+            mmr_effect[item.chunk.id] = {"relevance": round(relevance, 6), "redundancy_to_prior": round(redundancy, 6),
+                "mmr_score_lambda_0_5": round(0.5 * relevance - 0.5 * redundancy, 6), "mmr_rank": rank}
+            mmr_selected.append(item)
+        text_ranks = {row[0].id: (rank, float(row[2] or 0.0)) for rank, row in enumerate(text_rows, start=1)}
+        fused_scores: dict[uuid.UUID, float] = {}
+        for result_set in (vector_results, text_results):
+            for rank, item in enumerate(result_set, start=1):
+                fused_scores[item.chunk.id] = fused_scores.get(item.chunk.id, 0.0) + 1 / (60 + rank)
+        selected_ids = {item.chunk.id for item in fused_results}
+        selected_parent_ids = {item.chunk.parent_document_id for item in fused_results if item.chunk.parent_document_id}
+        all_candidates = {item.chunk.id: item for item in [*vector_candidates, *text_results]}
+        candidate_trace = []
+        for candidate_id, item in all_candidates.items():
+            vector_rank = vector_ranks.get(candidate_id)
+            text_info = text_ranks.get(candidate_id)
+            selected = candidate_id in selected_ids
+            rejection = None if selected else (
+                "duplicate_parent_context" if item.chunk.parent_document_id in selected_parent_ids else
+                "outside_final_top_n_after_rrf" if candidate_id in {x.chunk.id for x in fused_candidates} else
+                "not_in_fused_candidate_window"
+            )
+            candidate_trace.append({
+                "chunk_id": str(candidate_id), "source_document_id": str(item.source.id),
+                "parent_document_id": str(item.chunk.parent_document_id) if item.chunk.parent_document_id else None,
+                "title": item.source.title, "source": item.source.source,
+                "vector_rank": vector_rank, "vector_similarity": round(_cosine_similarity(list(item.chunk.embedding), query_embedding), 6) if vector_rank and item.chunk.embedding else None,
+                "mmr_rank": mmr_ranks.get(candidate_id), "fulltext_rank": text_info[0] if text_info else None,
+                "fulltext_score": round(text_info[1], 6) if text_info else None,
+                "mmr_effect": mmr_effect.get(candidate_id),
+                "rrf_score": round(fused_scores.get(candidate_id, 0.0), 8), "selected": selected,
+                "rejection_reason": rejection,
+            })
+        candidate_trace.sort(key=lambda item: item["rrf_score"], reverse=True)
+        self.retrieval_traces.append({"query": query, "top_n": top_n, "vector_count": len(vector_candidates),
+            "mmr_count": len(vector_results), "fulltext_count": len(text_results), "selected_count": len(fused_results),
+            "candidates": candidate_trace[:100]})
         parent_ids = [candidate.chunk.parent_document_id for candidate in fused_results if candidate.chunk.parent_document_id]
         parents_by_id = {
             parent.id: parent

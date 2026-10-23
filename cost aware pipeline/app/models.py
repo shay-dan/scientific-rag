@@ -67,6 +67,30 @@ class ResearchEvidence(Base):
     metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
 
 
+class ResearchFeedback(Base):
+    __tablename__ = "research_feedback"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    research_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("research_runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    submitted_by: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    rating: Mapped[str] = mapped_column(String(32), nullable=False)
+    categories: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    comment: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class AuditEvent(Base):
+    __tablename__ = "audit_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    actor: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    action: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    target_type: Mapped[str | None] = mapped_column(String(64))
+    target_id: Mapped[str | None] = mapped_column(String(128))
+    details: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+
 class EvaluationDataset(Base):
     __tablename__ = "evaluation_datasets"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -82,6 +106,7 @@ class EvaluationCase(Base):
     question: Mapped[str] = mapped_column(Text, nullable=False)
     reference_answer: Mapped[str] = mapped_column(Text, nullable=False)
     reference_context: Mapped[str | None] = mapped_column(Text)
+    reference_claims: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     provenance: Mapped[str] = mapped_column(String(32), nullable=False, default="human")
 
 

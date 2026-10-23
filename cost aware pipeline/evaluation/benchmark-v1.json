@@ -4,6 +4,14 @@
     {
       "question": "What are current uses of CRISPR in cancer research?",
       "reference_answer": "CRISPR is used to identify cancer drivers in functional screens, create disease models, study mechanisms of treatment resistance, and engineer immune-cell therapies such as edited CAR-T cells. Translation to direct in-vivo cancer editing remains limited by delivery, off-target effects, immune responses, and the need to demonstrate clinical benefit.",
+      "reference_claims": [
+        "CRISPR is used to identify cancer drivers in functional screens.",
+        "CRISPR is used to create cancer disease models.",
+        "CRISPR is used to study mechanisms of treatment resistance in cancer.",
+        "CRISPR is used to engineer immune-cell therapies such as edited CAR-T cells.",
+        "Direct in-vivo cancer editing is limited by delivery, off-target effects, and immune responses.",
+        "Direct in-vivo cancer editing still needs demonstrated clinical benefit."
+      ],
       "reference_context": null
     },
     {

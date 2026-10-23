@@ -1,0 +1,44 @@
+{
+  "name": "claim-diagnostics-smoke-v1",
+  "cases": [
+    {
+      "question": "How are liquid biopsies used in cancer care, and what limits their clinical reliability?",
+      "reference_answer": "Liquid biopsies analyze tumor-derived material in blood, especially circulating tumor DNA, to support molecular profiling, treatment selection, detection of resistance alterations, disease monitoring, and investigation of minimal residual disease. Reliability is limited by low or variable tumor shedding, differences among assays and pre-analytic workflows, clonal hematopoiesis and other non-tumor signals, incomplete representation of spatial tumor heterogeneity, and uncertain clinical utility in some screening or early-disease settings. Negative results may therefore require confirmation with tumor tissue or other clinical evidence.",
+      "reference_claims": [
+        "Liquid biopsies can support molecular profiling and treatment selection in cancer care.",
+        "Liquid biopsies can detect resistance alterations and monitor disease over time.",
+        "Liquid biopsies are being investigated for minimal residual disease detection.",
+        "Low or variable tumor shedding can reduce liquid-biopsy sensitivity.",
+        "Assay variability, pre-analytic factors, and clonal hematopoiesis can reduce reliability.",
+        "A negative liquid-biopsy result may require confirmation with tumor tissue or other clinical evidence."
+      ],
+      "reference_context": null
+    },
+    {
+      "question": "What are current approaches to neural operators for solving partial differential equations?",
+      "reference_answer": "Neural operators learn mappings between function spaces rather than predictions on one fixed discretization. Major approaches include Fourier neural operators, DeepONet-style branch-and-trunk architectures, graph or mesh-based neural operators, and multiscale or physics-informed variants. They can provide fast surrogate solutions after training and may transfer across resolutions, but performance depends on training-distribution coverage, boundary conditions and geometry, numerical stability, conservation or physical constraints, and computational cost for high-resolution or three-dimensional problems.",
+      "reference_claims": [
+        "Neural operators learn mappings between function spaces rather than only predictions on one fixed discretization.",
+        "Fourier neural operators are a major approach for learning PDE solution operators.",
+        "DeepONet-style branch-and-trunk architectures are a major neural-operator approach.",
+        "Graph or mesh-based and physics-informed variants are used for irregular geometry or physical constraints.",
+        "After training, neural operators can act as fast surrogate PDE solvers and may transfer across resolutions.",
+        "Limitations include distribution shift, boundary conditions and geometry, stability, physical consistency, and high-resolution computational cost."
+      ],
+      "reference_context": null
+    },
+    {
+      "question": "How are machine-learning models used to predict protein-ligand binding, and what limits their use in real-world drug discovery?",
+      "reference_answer": "Machine-learning models are used for virtual screening, pose or affinity prediction, hit prioritization, and rescoring of docking candidates using ligand, protein-sequence, structural, graph, or geometric representations. Their real-world value is limited by biased and noisy experimental datasets, train-test leakage and scaffold overlap, uncertain protein conformations and protonation states, weak generalization to new targets and chemical space, inadequate uncertainty calibration, and the gap between benchmark accuracy and prospective experimental validation.",
+      "reference_claims": [
+        "Machine-learning models are used for virtual screening and hit prioritization.",
+        "Machine-learning models are used for protein-ligand pose or binding-affinity prediction and docking rescoring.",
+        "These models can use ligand, protein-sequence, structural, graph, or geometric representations.",
+        "Biased or noisy data, train-test leakage, and scaffold overlap can inflate benchmark performance.",
+        "Protein conformational uncertainty and weak generalization to new targets or chemical space limit reliability.",
+        "Prospective experimental validation and calibrated uncertainty are needed for real-world drug-discovery decisions."
+      ],
+      "reference_context": null
+    }
+  ]
+}

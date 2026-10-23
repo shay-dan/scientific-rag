@@ -1,0 +1,12 @@
+<section class="ops-section"><div class="section-heading"><div><p class="eyebrow">PAST WORK</p><h2>Research history</h2></div><span class="pill">{{ rows|length }} runs</span></div>
+  <form class="history-filters card" hx-get="/ui/ops/history" hx-target="#ops-panel">
+    <label>From <input type="date" name="start_date" value="{{ filters.start_date }}"></label><label>To <input type="date" name="end_date" value="{{ filters.end_date }}"></label>
+    <label>Status <select name="status"><option value="">All</option>{% for value in ["completed", "failed", "running", "queued", "cancelled"] %}<option value="{{ value }}" {% if filters.status == value %}selected{% endif %}>{{ value|title }}</option>{% endfor %}</select></label>
+    <label>Provider <select name="provider"><option value="">All</option>{% for value in ["groq", "openrouter", "gemini"] %}<option value="{{ value }}" {% if filters.provider == value %}selected{% endif %}>{{ value|title }}</option>{% endfor %}</select></label>
+    <button type="submit">Filter</button>
+  </form>
+  {% for row in rows %}<article class="card history-run-card"><div class="history-run-head"><div><strong>{{ row.run.question }}</strong><small>{{ row.local_created_at.strftime("%Y-%m-%d %H:%M Jerusalem") }} · {{ row.run.model_metadata.get("mode", "fast")|title }}</small></div><span class="pill status-{{ row.run.status }}">{{ row.run.status|title }}</span></div>
+    <div class="history-meta"><span>{{ row.sources_used }} selected sources</span><span>{{ row.providers|join(", ") if row.providers else "No provider calls recorded" }}</span><span>{{ "$%.6f"|format(row.cost) if row.cost is not none else "Cost unavailable" }}</span><span>{{ row.fallbacks }} fallbacks</span></div>
+    <div class="history-actions"><button type="button" class="secondary" onclick="activateOpsTabByLabel('Run details')" hx-get="/ui/ops/run/{{ row.run.id }}" hx-target="#ops-panel">Open run details</button>{% if row.run.status == "failed" %}<form hx-post="/ui/ops/retry/{{ row.run.id }}" hx-target="#ops-panel"><button type="submit">Retry research</button></form>{% endif %}</div>
+  </article>{% else %}<p class="empty">No research runs match these filters.</p>{% endfor %}
+</section>
