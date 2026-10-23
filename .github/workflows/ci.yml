@@ -4,22 +4,30 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
-  test:
+  legacy-unit-tests:
+    name: Legacy application unit tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
       - name: Compile application modules
-        run: python -m compileall -q new_scientific_rag.py full_app.py src
+        run: python -m compileall -q new_scientific_rag.py full_app.py src tests
       - name: Run unit tests
-        run: PYTHONPATH=src python -m unittest discover -s tests -v
+        env:
+          PYTHONPATH: src
+        run: python -m unittest discover -s tests -v
 
-  cost-aware-pipeline:
+  production-image-tests:
+    name: Production Docker image tests
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -35,23 +43,77 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
-    defaults:
-      run:
-        working-directory: cost aware pipeline
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Install application dependencies
-        run: python -m pip install -r requirements.txt
-      - name: Enable pgvector in the temporary CI database
-        run: docker exec -e PGPASSWORD=ci_test_only "${{ job.services.postgres.id }}" psql -U scientific_rag -d scientific_rag -c 'CREATE EXTENSION IF NOT EXISTS vector'
-      - name: Compile application modules
-        run: python -m compileall -q app src tests
-      - name: Run unit and PostgreSQL integration tests
-        env:
-          PYTHONPATH: .:src
-          RUN_INTEGRATION_TESTS: "1"
-          DATABASE_URL_TEST: postgresql://scientific_rag:ci_test_only@localhost:5432/scientific_rag
-        run: python -m unittest discover -s tests -v
+
+      - name: Build the production image
+        run: docker build --tag scientific-rag-ci:local "cost aware pipeline"
+
+      - name: Compile application and tests in the production image
+        run: >-
+          docker run --rm
+          --env PYTHONPYCACHEPREFIX=/tmp/pycache
+          --volume "$PWD/cost aware pipeline/tests:/app/tests:ro"
+          scientific-rag-ci:local
+          python -m compileall -q app src tests model_policy.py run_api.py
+
+      - name: Run unit tests in the production image
+        run: >-
+          docker run --rm
+          --volume "$PWD/cost aware pipeline/tests:/app/tests:ro"
+          scientific-rag-ci:local
+          python -m unittest discover -s tests -v
+
+      - name: Enable pgvector in the integration database
+        run: >-
+          docker exec -e PGPASSWORD=ci_test_only
+          "${{ job.services.postgres.id }}"
+          psql -U scientific_rag -d scientific_rag
+          -c 'CREATE EXTENSION IF NOT EXISTS vector'
+
+      - name: Run PostgreSQL/pgvector and Redis integration tests
+        run: >-
+          docker run --rm --network host
+          --env RUN_INTEGRATION_TESTS=1
+          --env DATABASE_URL_TEST=postgresql://scientific_rag:ci_test_only@127.0.0.1:5432/scientific_rag
+          --env REDIS_URL_TEST=redis://127.0.0.1:6379/0
+          --volume "$PWD/cost aware pipeline/tests:/app/tests:ro"
+          scientific-rag-ci:local
+          python -m unittest discover -s tests/integration -t . -v
+
+      - name: Start the production image for a smoke test
+        run: |
+          docker run --detach --name scientific-rag-smoke --network host \
+            --env DATABASE_URL=postgresql+asyncpg://scientific_rag:ci_test_only@127.0.0.1:5432/scientific_rag \
+            --env REDIS_URL=redis://127.0.0.1:6379/0 \
+            --env APP_API_KEYS=admin:ci-test-access-key \
+            --env APP_SESSION_SECRET=ci-test-session-secret-at-least-32-characters \
+            scientific-rag-ci:local
+
+      - name: Verify /healthz
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error http://127.0.0.1:8000/healthz; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs scientific-rag-smoke
+          exit 1
+
+      - name: Show smoke-test logs on failure
+        if: failure()
+        run: docker logs scientific-rag-smoke || true
+
+      - name: Stop smoke-test container
+        if: always()
+        run: docker rm --force scientific-rag-smoke || true
