@@ -14,7 +14,6 @@ from model_policy import ModelPolicy
 class PipelineConfig:
     entrez_email: str = field(default_factory=lambda: os.getenv("ENTREZ_EMAIL", ""))
     google_api_key: str = field(default_factory=lambda: os.getenv("GOOGLE_API_KEY", "") or os.getenv("GEMINI_API_KEY", ""))
-    chroma_path: str = field(default_factory=lambda: os.getenv("CHROMA_PATH", "./chroma_db_prod"))
     embedding_model: str = field(default_factory=lambda: os.getenv("MODEL_EMBEDDING", "models/gemini-embedding-001"))
     model_policy: ModelPolicy = field(default_factory=ModelPolicy.from_environment)
 
@@ -26,10 +25,6 @@ class PipelineConfig:
     @property
     def GOOGLE_API_KEY(self) -> str:
         return self.google_api_key
-
-    @property
-    def CHROMA_PATH(self) -> str:
-        return self.chroma_path
 
     @property
     def MODEL_EMBEDDING(self) -> str:

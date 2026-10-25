@@ -8,7 +8,6 @@ fastapi>=0.115,<1
 google-genai
 jinja2>=3.1,<4
 itsdangerous>=2.2,<3
-langchain-chroma>=0.2,<0.3
 langchain-community>=0.3,<0.4
 langchain-core>=0.3,<0.4
 langchain-google-genai>=2,<3

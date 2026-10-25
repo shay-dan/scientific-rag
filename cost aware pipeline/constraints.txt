@@ -7,9 +7,7 @@ langchain-community==0.3.31
 langchain-google-genai==2.1.12
 langchain-openai==0.3.35
 langchain-text-splitters==0.3.11
-langchain-chroma==0.2.6
 langsmith==0.14.11
-chromadb==1.5.9
 openai==2.54.0
 google-genai==2.32.0
 google-ai-generativelanguage==0.12.1

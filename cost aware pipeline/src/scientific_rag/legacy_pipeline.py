@@ -7,7 +7,6 @@ import logging
 import os
 import re
 import requests
-import shutil
 import threading
 import time
 from typing import Any, Dict, List, Literal, Optional
@@ -26,17 +25,8 @@ from langchain_core.documents import Document
 from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
-# LangChain Text Splitters & Retrievers
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.retrievers import BM25Retriever
+# LangChain loader used by the preserved mining implementation
 from langchain_community.document_loaders import ArxivLoader
-
-# LangChain Vector Stores
-from langchain_chroma import Chroma  # Replaces langchain_community.vectorstores.Chroma
-
-# LangChain Integrations (Google, OpenAI, Groq, HuggingFace)
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
-
 
 # Pydantic
 from pydantic import BaseModel, Field
@@ -1230,176 +1220,6 @@ Abstract:
 
         print(f"SUCCESS: Synthetic compilation generated {len(final_flat_list)} golden QA records.")
         return final_flat_list
-
-class VectorService:
-    def __init__(self, persist_path: str = config.CHROMA_PATH):
-        self.persist_path = persist_path
-
-        # 1. Google Gemini Embeddings
-        self.embedding_model = GoogleGenerativeAIEmbeddings(
-            model=config.MODEL_EMBEDDING,
-            google_api_key=config.GOOGLE_API_KEY,
-            task_type="retrieval_document"
-        )
-
-        # 2. Local Re-ranker
-        # self.reranker = CrossEncoder(config.MODEL_CROSS_ENCODER)
-
-
-        # 4. Scientific Splitters
-        separators = ["\n\n", "\n", ". ", " ", ""]
-        self.parent_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=2500,
-            chunk_overlap=500,
-            separators=separators
-        )
-        self.child_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=500,
-            chunk_overlap=75,
-            separators=separators
-        )
-
-        # 5. Storage & Retrieval States
-        self.vector_store = self.init_db()
-        self.parent_docstore: Dict[str, Document] = {}
-        self.bm25_retriever = None
-
-    def init_db(self):
-        try:
-            return Chroma(
-                persist_directory=self.persist_path,
-                embedding_function=self.embedding_model,
-                collection_name="sci_rag_v1"
-            )
-        except Exception as e:
-            print(f"ERROR: Failed to initialize VectorDB: {e}")
-            raise
-
-    def reset_database(self):
-        if os.path.exists(self.persist_path):
-            shutil.rmtree(self.persist_path)
-        self.parent_docstore = {}
-        self.vector_store = self.init_db()
-        print("DEBUG: Database reset for new chunk sizes.")
-
-    def _generate_id(self, doc: Document) -> str:
-        source = doc.metadata.get('source', 'unknown')
-        page = doc.metadata.get('page', '0')
-        content_hash = hashlib.md5(doc.page_content.encode()).hexdigest()
-        return f"{source}_p{page}_{content_hash}"
-
-    async def add_documents(self, raw_documents: List[Document], batch_size: int = 100):
-        if not raw_documents:
-            return
-
-        parents = self.parent_splitter.split_documents(raw_documents)
-        child_chunks = []
-        new_parent_docs = []
-
-        for parent in parents:
-            parent_id = self._generate_id(parent)
-            if parent_id in self.parent_docstore:
-                continue
-
-            parent.metadata["parent_id"] = parent_id
-            self.parent_docstore[parent_id] = parent
-            new_parent_docs.append(parent)
-
-            sub_docs = self.child_splitter.split_documents([parent])
-            for i, child in enumerate(sub_docs):
-                child.metadata["parent_id"] = parent_id
-                child.metadata["child_id"] = f"{parent_id}_c{i}"
-                child_chunks.append(child)
-
-        if child_chunks:
-            all_child_ids = [c.metadata["child_id"] for c in child_chunks]
-            existing_data = self.vector_store.get(ids=all_child_ids)
-            existing_ids = set(existing_data['ids'])
-
-            final_children = [c for c in child_chunks if c.metadata["child_id"] not in existing_ids]
-            final_ids = [c.metadata["child_id"] for c in final_children]
-
-            if final_children:
-                print(f"DEBUG: Indexing {len(final_children)} new child chunks...")
-                for i in range(0, len(final_children), batch_size):
-                    batch_docs = final_children[i : i + batch_size]
-                    batch_ids = final_ids[i : i + batch_size]
-                    print(f"DEBUG: Indexing batch {i//batch_size + 1}/{(len(final_children)-1)//batch_size + 1}...")
-
-                    await self.vector_store.aadd_documents(documents=batch_docs, ids=batch_ids)
-                    await asyncio.sleep(1.5)
-
-        if new_parent_docs or not self.bm25_retriever:
-            self.bm25_retriever = BM25Retriever.from_documents(list(self.parent_docstore.values()))
-            print(f"DEBUG: BM25 updated. Total parents: {len(self.parent_docstore)}")
-
-    # --- NEW HELPER FOR CANDIDATE FETCHING ---
-    async def _get_base_candidates(self, query: str, k: int, fetch_k: int, lambda_mult: float, method: str):
-        """Standardized logic for hybrid retrieval and lineage logging"""
-        child_hits = await self.vector_store.amax_marginal_relevance_search(
-            query, k=k, fetch_k=fetch_k, lambda_mult=lambda_mult
-        )
-
-        print(f"\n--- LINEAGE REPORT: {method} ---")
-        vector_parent_ids = set()
-        for i, c in enumerate(child_hits[:3]):
-            pid = c.metadata.get("parent_id")
-            if pid in self.parent_docstore:
-                print(f"  Child {i} -> Found Parent: {pid}")
-                vector_parent_ids.add(pid)
-
-        loop = asyncio.get_running_loop()
-        bm25_hits = await loop.run_in_executor(None, self.bm25_retriever.invoke, query) if self.bm25_retriever else []
-
-        candidates = []
-        seen_hashes = set()
-        all_potential_parents = [self.parent_docstore[pid] for pid in vector_parent_ids] + bm25_hits
-
-        for doc in all_potential_parents:
-            h = hashlib.md5(doc.page_content.encode()).hexdigest()
-            if h not in seen_hashes:
-                candidates.append(doc)
-                seen_hashes.add(h)
-        return candidates
-
-    async def retrieve_context(self, query: str, top_n: int = 5, lambda_mult: float = 0.5) -> List[Document]:
-        """
-        Pure Hybrid Retrieval: Combines Vector (MMR) and BM25
-        without a reranker/filter to ensure maximum recall.
-        """
-        # 1. Get Child chunks via Vector Search (MMR)
-        child_hits = await self.vector_store.amax_marginal_relevance_search(
-            query,
-            k=top_n * 4, # Fetch more to allow for overlap with BM25
-            fetch_k=50,
-            lambda_mult=lambda_mult
-        )
-
-        # 2. Get Parent IDs from those children
-        vector_parent_ids = {c.metadata["parent_id"] for c in child_hits}
-
-        # 3. Get Keyword-based hits from BM25 (Parents only)
-        loop = asyncio.get_running_loop()
-        bm25_hits = await loop.run_in_executor(None, self.bm25_retriever.invoke, query) if self.bm25_retriever else []
-
-        # 4. Merge candidates and deduplicate
-        candidates = []
-        seen_hashes = set()
-
-        # Prioritize Vector hits, then BM25
-        all_potential_parents = [self.parent_docstore[pid] for pid in vector_parent_ids if pid in self.parent_docstore] + bm25_hits
-
-        for doc in all_potential_parents:
-            content_hash = hashlib.md5(doc.page_content.encode()).hexdigest()
-            if content_hash not in seen_hashes:
-                candidates.append(doc)
-                seen_hashes.add(content_hash)
-
-            if len(candidates) >= top_n:
-                break
-
-        print(f"DEBUG: Retrieved {len(candidates)} documents via Hybrid Search")
-        return candidates
 
 class ResearchAgent:
     def __init__(self, vector_service, max_synthesis_subquestions: int = 2, retrieval_documents: int = 6, max_context_documents: int = 8, progress_callback=None):

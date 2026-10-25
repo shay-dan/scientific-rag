@@ -18,7 +18,7 @@ The application should be treated as able to process sensitive research question
 | Abuse and cost exhaustion | Shared Redis request/daily quotas, provider throttles, atomic cost reservations | Per-tenant budgets and alert delivery |
 | Secret leakage | `.env` ignored, log redaction, CI secret scan | Move production secrets to a managed secret store |
 | Prompt injection in papers | Evidence is treated as source text; structured roles and citation checks | Add explicit untrusted-document delimiters and adversarial corpus tests |
-| Dependency/container compromise | CI dependency/filesystem/image scanning | **Blocker:** the 2026-10-24 local audit found 22 advisories across 8 installed packages; migrate the active LangChain/Ragas stack, remove legacy Chroma dependencies, then regenerate pins and SBOM |
+| Dependency/container compromise | CI dependency/filesystem/image scanning | **Open release gate:** legacy Chroma dependencies were removed on 2026-10-26; the remaining active LangChain/Ragas stack still requires a clean CI audit or documented, time-bounded exceptions before release |
 | Database loss | Persistent volume and scripted logical backup/restore check | Encrypted off-host scheduled backups and recurring restore drill |
 | Sensitive logs | No prompts/answers in audit events; credential redaction | Define retention, access control, deletion, and centralized log policy |
 | Service outage | Health checks, durable queue, recovery probes | Multi-host staging, monitored backups, SLOs and incident runbook |
@@ -44,7 +44,7 @@ The application should be treated as able to process sensitive research question
 
 ## Open dependency findings
 
-`pip-audit` reported 22 advisory records across `langchain-core`, `langchain-openai`, `langchain-text-splitters`, `langchain`, `ragas`, `requests`, `chromadb`, and `diskcache`. Some records are duplicate aliases, but the result is a failed release gate, not a clean scan. Several fixes require a major LangChain/Ragas migration; Chroma and related packages are legacy-only and should be removed from the production image. `requests` can be upgraded independently. Do not publish the service until a rebuilt image has a clean critical/high policy result or every residual finding has a documented, time-bounded exception.
+The 2026-10-24 `pip-audit` reported 22 advisory records across `langchain-core`, `langchain-openai`, `langchain-text-splitters`, `langchain`, `ragas`, `requests`, `chromadb`, and `diskcache`. Some records are duplicate aliases, but the result remains a failed release gate rather than a clean scan. On 2026-10-26 the unused Chroma/Gradio path and its direct `langchain-chroma`/`chromadb` dependencies were removed, and `requests` now resolves to a patched release. The active LangChain/Ragas dependencies must still pass the rebuilt CI audit, or each residual finding needs a documented, time-bounded exception. Do not publish the service before that gate is satisfied.
 
 ## Production gates
 
