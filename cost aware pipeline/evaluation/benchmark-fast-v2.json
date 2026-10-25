@@ -1,0 +1,280 @@
+{
+  "name": "scientific-rag-fast-benchmark-v2",
+  "version": "2.0.0",
+  "frozen_at": "2026-10-24",
+  "review_policy": "Reference answers and contexts are concise human-authored paraphrases of the linked PubMed or arXiv records. URLs are part of the frozen provenance.",
+  "matrix_name": "scientific-rag-fast-baseline-10x3",
+  "matrix_case_ids": ["P01", "P02", "P10", "A01", "A03", "A06", "M01", "M05", "M06", "M09"],
+  "cases": [
+    {
+      "case_id": "P01",
+      "cohort": "pubmed",
+      "challenge_tags": ["biomedical", "translation"],
+      "question": "What are current uses of CRISPR in cancer research, and what limits clinical translation?",
+      "reference_answer": "CRISPR is used for functional screens, cancer models, resistance studies, target validation, and engineering immune-cell therapies. Direct therapeutic editing remains constrained by delivery, off-target changes, immune effects, tumor heterogeneity, and limited clinical-outcome evidence.",
+      "reference_claims": ["CRISPR supports functional cancer screens and target validation.", "CRISPR is used to build cancer models and study resistance.", "CRISPR is used to engineer immune-cell therapies.", "Delivery, off-target effects, immune responses, heterogeneity, and limited clinical evidence constrain translation."],
+      "reference_context": "Verified sources: https://pubmed.ncbi.nlm.nih.gov/29673923/ and https://pubmed.ncbi.nlm.nih.gov/38694229/ . Reviewed evidence summary: CRISPR supports functional screens, cancer models, and engineered-cell approaches, while safe and specific in-vivo delivery remains a material barrier."
+    },
+    {
+      "case_id": "P02",
+      "cohort": "pubmed",
+      "challenge_tags": ["clinical", "safety"],
+      "question": "What are the main risks and limitations of CAR-T cell therapy?",
+      "reference_answer": "Major risks include cytokine-release syndrome, immune-effector-cell-associated neurotoxicity, infections, cytopenias, and B-cell aplasia. Relapse can follow antigen loss or weak persistence, while solid tumors add trafficking, antigen-heterogeneity, and immunosuppressive-microenvironment barriers.",
+      "reference_claims": ["CAR-T can cause cytokine-release syndrome and neurologic toxicity.", "Infections, cytopenias, and B-cell aplasia are important risks.", "Antigen loss and limited persistence can cause relapse.", "Solid tumors create trafficking, heterogeneity, and microenvironment barriers."],
+      "reference_context": "Verified sources: https://pubmed.ncbi.nlm.nih.gov/37080711/ and https://pubmed.ncbi.nlm.nih.gov/34794490/ . Reviewed evidence summary: CAR-T toxicities include CRS, neurotoxicity, hematologic and infectious complications; efficacy limitations include relapse and difficult solid-tumor biology."
+    },
+    {
+      "case_id": "P03",
+      "cohort": "pubmed",
+      "challenge_tags": ["biomedical", "causality"],
+      "question": "What is known about the gut microbiome's role in colorectal cancer?",
+      "reference_answer": "Colorectal cancer is associated with dysbiosis and enrichment of organisms including Fusobacterium nucleatum and enterotoxigenic Bacteroides fragilis in some cohorts. Proposed mechanisms include inflammation, genotoxic products, altered immunity, and epithelial signaling, but association alone does not prove causation and biomarkers need prospective validation.",
+      "reference_claims": ["Colorectal cancer is associated with gut dysbiosis.", "Fusobacterium nucleatum and enterotoxigenic Bacteroides fragilis are recurrently implicated.", "Inflammation, genotoxicity, immunity, and epithelial signaling are proposed mechanisms.", "Associations do not establish causality and biomarkers need prospective validation."],
+      "reference_context": "Verified sources: https://pubmed.ncbi.nlm.nih.gov/31915144/ and https://pubmed.ncbi.nlm.nih.gov/38509359/ . Reviewed evidence summary: reviews describe reproducible microbial associations and several plausible mechanisms, while emphasizing heterogeneity and the need for causal and prospective evidence."
+    },
+    {
+      "case_id": "P04",
+      "cohort": "pubmed",
+      "challenge_tags": ["clinical", "emerging-evidence"],
+      "question": "What is the current clinical evidence for mRNA cancer vaccines?",
+      "reference_answer": "mRNA cancer vaccines encode shared antigens or patient-specific neoantigens and are often combined with checkpoint blockade. Early trials demonstrate immunogenicity and activity signals in selected settings, but larger randomized studies must establish durable clinical benefit, optimal antigen selection, delivery, and feasible manufacturing timelines.",
+      "reference_claims": ["mRNA cancer vaccines can encode shared antigens or personalized neoantigens.", "They are often studied with checkpoint blockade.", "Early studies show immunogenicity and selected activity signals.", "Durability, antigen selection, delivery, manufacturing, and randomized evidence remain open issues."],
+      "reference_context": "Verified source: https://pubmed.ncbi.nlm.nih.gov/37470066/ . Reviewed evidence summary: the review describes shared and personalized vaccine strategies, early clinical signals, and unresolved delivery, manufacturing, and confirmatory-trial questions."
+    },
+    {
+      "case_id": "P05",
+      "cohort": "pubmed",
+      "challenge_tags": ["clinical", "public-health"],
+      "question": "How can antimicrobial resistance be reduced in healthcare settings?",
+      "reference_answer": "Healthcare systems reduce resistance through antimicrobial stewardship, infection prevention and control, vaccination where applicable, rapid diagnostics, surveillance, and prescribing the right drug, dose, route, and duration. Programs must use local resistance data and monitor both antibiotic use and patient outcomes.",
+      "reference_claims": ["Antimicrobial stewardship reduces unnecessary exposure.", "Infection prevention, control, and vaccination reduce transmission and need for antibiotics.", "Diagnostics and surveillance support targeted treatment.", "Local resistance data and outcome monitoring are needed."],
+      "reference_context": "Verified sources: https://pubmed.ncbi.nlm.nih.gov/39335069/ and https://pubmed.ncbi.nlm.nih.gov/42663382/ . Reviewed evidence summary: stewardship and infection-control interventions are complementary and should be paired with diagnostics, surveillance, and local implementation data."
+    },
+    {
+      "case_id": "P06",
+      "cohort": "pubmed",
+      "challenge_tags": ["clinical", "trials"],
+      "question": "What does clinical evidence show about fecal microbiota transplantation for ulcerative colitis?",
+      "reference_answer": "Randomized trials and syntheses suggest that fecal microbiota transplantation can induce remission in a subset of people with active ulcerative colitis, but protocols, donor selection, route, dose, durability, and adverse-event reporting vary. It is not uniformly effective and requires screened material and controlled clinical practice.",
+      "reference_claims": ["FMT can induce remission in a subset of patients with active ulcerative colitis.", "Results and protocols are heterogeneous.", "Donor screening and controlled clinical practice are required.", "Durability and optimal delivery remain uncertain."],
+      "reference_context": "Verified sources: https://pubmed.ncbi.nlm.nih.gov/25857665/ and https://pubmed.ncbi.nlm.nih.gov/34863330/ . Reviewed evidence summary: controlled trials and reviews report remission benefit in some patients alongside substantial procedural heterogeneity and safety requirements."
+    },
+    {
+      "case_id": "P07",
+      "cohort": "pubmed",
+      "challenge_tags": ["clinical", "diagnostics"],
+      "question": "What are the strengths and current limitations of blood-based multi-cancer early detection tests?",
+      "reference_answer": "Blood-based multi-cancer tests may detect signals from several cancers and help identify a likely tissue of origin, but sensitivity varies strongly by cancer and stage. False positives, false negatives, diagnostic follow-up, overdiagnosis, equitable performance, and evidence that screening reduces mortality remain unresolved.",
+      "reference_claims": ["MCED tests can search for signals from multiple cancers.", "Sensitivity varies by cancer type and stage.", "Positive results require diagnostic follow-up and can cause harm.", "Mortality benefit and equitable real-world performance are not yet established."],
+      "reference_context": "Verified sources: https://pubmed.ncbi.nlm.nih.gov/40514453/ and https://pubmed.ncbi.nlm.nih.gov/42548867/ . Reviewed evidence summary: MCED technology is promising, but clinical utility depends on stage-specific sensitivity, downstream work-up, harms, and prospective outcome trials."
+    },
+    {
+      "case_id": "P08",
+      "cohort": "pubmed",
+      "challenge_tags": ["safety", "insufficient-evidence"],
+      "question": "What are the established risks and evidence limitations of red-light photobiomodulation?",
+      "reference_answer": "Photobiomodulation outcomes depend on wavelength, irradiance, dose, device, and condition. Reported short-term harms are often mild, but inappropriate eye exposure, excessive heat or dose, photosensitizing conditions or medicines, and delaying effective care are concerns. Evidence cannot be generalized across devices or serious diseases.",
+      "reference_claims": ["Photobiomodulation effects depend on treatment parameters and indication.", "Eye exposure and excessive heat or dose can be hazardous.", "Photosensitivity and delay of proven care are relevant concerns.", "Evidence for one device or condition cannot be generalized broadly."],
+      "reference_context": "Verified sources: https://pubmed.ncbi.nlm.nih.gov/28891192/ and https://pubmed.ncbi.nlm.nih.gov/40253006/ . Reviewed evidence summary: safety and efficacy are parameter- and indication-specific; eye protection, dose control, and avoiding unsupported disease claims are important."
+    },
+    {
+      "case_id": "P09",
+      "cohort": "pubmed",
+      "challenge_tags": ["clinical", "benefit-risk"],
+      "question": "What benefits and risks have clinical trials shown for lecanemab in early Alzheimer's disease?",
+      "reference_answer": "Lecanemab lowers brain amyloid and trials report a modest slowing of clinical decline in early Alzheimer's disease rather than reversal of disease. Important risks include infusion reactions and amyloid-related imaging abnormalities, including edema and hemorrhagic changes, requiring patient selection and MRI monitoring.",
+      "reference_claims": ["Lecanemab reduces brain amyloid.", "Clinical benefit is a modest slowing, not a cure or reversal.", "Infusion reactions and ARIA are important risks.", "Selection and MRI monitoring are part of safe use."],
+      "reference_context": "Verified source: https://pubmed.ncbi.nlm.nih.gov/33865446/ . Reviewed evidence summary: the phase 2b trial showed amyloid reduction and later clinical signals, missed its 12-month primary endpoint, and reported ARIA; subsequent use requires benefit-risk monitoring."
+    },
+    {
+      "case_id": "P10",
+      "cohort": "pubmed",
+      "challenge_tags": ["clinical", "long-term"],
+      "question": "What happens after semaglutide is stopped in adults treated for obesity?",
+      "reference_answer": "Trial extensions show substantial weight regain after semaglutide withdrawal and movement of many cardiometabolic improvements toward baseline. Responses vary, but the evidence supports obesity as a chronic condition for which maintenance usually requires continued treatment or another durable strategy.",
+      "reference_claims": ["Substantial weight regain commonly follows semaglutide withdrawal.", "Many cardiometabolic improvements move toward baseline after withdrawal.", "Individual responses vary.", "Long-term maintenance generally requires continued or alternative durable management."],
+      "reference_context": "Verified sources: https://pubmed.ncbi.nlm.nih.gov/35441470/ and https://pubmed.ncbi.nlm.nih.gov/33755728/ . Reviewed evidence summary: withdrawal studies observed regain, while continued treatment maintained or extended weight loss, supporting chronic management."
+    },
+    {
+      "case_id": "A01",
+      "cohort": "arxiv",
+      "challenge_tags": ["quantum", "technical"],
+      "question": "How do XZZX and rotated surface-code approaches improve quantum error correction, and what trade-offs remain?",
+      "reference_answer": "Rotated layouts reduce physical-qubit overhead for a given code distance, while the XZZX variant tailors local stabilizers and decoding to biased noise and can improve thresholds and sub-threshold scaling. Benefits depend on the real noise model, reliable syndrome measurement, decoder latency, logical operations, and implementation overhead.",
+      "reference_claims": ["Rotated surface-code layouts can reduce qubit overhead.", "XZZX exploits biased noise with modified stabilizers and decoding.", "Threshold and sub-threshold scaling can improve under suitable noise.", "Measurement, decoding, logical operations, and hardware overhead remain constraints."],
+      "reference_context": "Verified source: https://arxiv.org/abs/2009.07851 . Reviewed evidence summary: the XZZX paper reports strong thresholds and resource scaling under structured noise while retaining local checks and practical decoding, with performance tied to realistic noise and faulty measurements."
+    },
+    {
+      "case_id": "A02",
+      "cohort": "arxiv",
+      "challenge_tags": ["quantum", "hardware"],
+      "question": "What are the main hardware and control challenges for quantum error correction with superconducting qubits?",
+      "reference_answer": "Superconducting error correction must manage gate and readout errors, leakage, crosstalk, correlated noise, coherence limits, calibration drift, and low-latency decoding and feedback. Scaling also demands repeated stabilizer measurement and evidence that logical error decreases as code size grows.",
+      "reference_claims": ["Gate, readout, leakage, and crosstalk errors matter.", "Noise correlations, coherence, and calibration drift complicate scaling.", "Real-time decoding and feedback impose latency constraints.", "A scalable demonstration should show improving logical error with code size."],
+      "reference_context": "Verified sources: https://arxiv.org/abs/1905.13641 and https://arxiv.org/abs/2203.07205 . Reviewed evidence summary: superconducting hardware faces coherence, control, readout, leakage, crosstalk, and calibration constraints, while repeated multi-round QEC adds syndrome-measurement and decoding demands."
+    },
+    {
+      "case_id": "A03",
+      "cohort": "arxiv",
+      "challenge_tags": ["machine-learning", "pde"],
+      "question": "What do Fourier neural operators learn for parametric PDEs, and what are their main limitations?",
+      "reference_answer": "Fourier neural operators learn mappings between input and solution functions for families of PDEs, using Fourier-domain parameterization of an integral kernel. They can evaluate trained surrogates quickly and transfer across resolutions, but accuracy depends on representative training distributions, discretization, boundary geometry, stability, and validation against trusted solvers or experiments.",
+      "reference_claims": ["FNOs learn operators between function spaces for PDE families.", "They parameterize an integral kernel in Fourier space.", "Trained inference can be much faster than repeatedly solving a PDE.", "Generalization, geometry, stability, and physical validation limit use."],
+      "reference_context": "Verified source: https://arxiv.org/abs/2010.08895 . Reviewed evidence summary: FNO learns parametric solution operators and reports fast, resolution-transferable results on benchmark PDEs; benchmark performance is not universal physical validity."
+    },
+    {
+      "case_id": "A04",
+      "cohort": "arxiv",
+      "challenge_tags": ["privacy", "distributed-learning"],
+      "question": "What privacy risks remain in federated learning even when raw data never leaves client devices?",
+      "reference_answer": "Model updates can leak membership, attributes, or reconstructed examples; a central server or clients can be malicious; poisoning and backdoors can exploit aggregation; and metadata can reveal participation. Secure aggregation, differential privacy, clipping, robust aggregation, authentication, and auditing reduce different risks but introduce utility, compute, and trust trade-offs.",
+      "reference_claims": ["Shared model updates can leak private information.", "Servers or clients can be malicious.", "Poisoning and backdoors remain possible.", "Secure aggregation, differential privacy, and robust aggregation mitigate different risks with trade-offs."],
+      "reference_context": "Verified source: https://arxiv.org/abs/2405.03636 . Reviewed evidence summary: federated learning limits raw-data movement but does not itself prevent inference, reconstruction, poisoning, or metadata leakage; defenses have distinct assumptions and costs."
+    },
+    {
+      "case_id": "A05",
+      "cohort": "arxiv",
+      "challenge_tags": ["generative-ai", "technical"],
+      "question": "How do diffusion models generate samples, and what practical limitations do they have?",
+      "reference_answer": "Diffusion models learn to reverse a gradual noising process, commonly by predicting noise or a related score at successive timesteps. They produce high-quality and diverse samples, but iterative sampling is computationally expensive, training is resource intensive, conditioning and evaluation remain difficult, and outputs inherit dataset bias and provenance concerns.",
+      "reference_claims": ["Diffusion models reverse a progressive noising process.", "Training often predicts noise or a score across timesteps.", "They can generate high-quality diverse samples.", "Sampling cost, training cost, evaluation, bias, and provenance are limitations."],
+      "reference_context": "Verified source: https://arxiv.org/abs/2209.00796 . Reviewed evidence summary: the survey describes forward noising and learned reverse generation, major model families, strong sample quality, and computational and evaluation challenges."
+    },
+    {
+      "case_id": "A06",
+      "cohort": "arxiv",
+      "challenge_tags": ["rag", "hallucination"],
+      "question": "How can retrieval-augmented generation reduce LLM hallucination, and why can it still fail?",
+      "reference_answer": "RAG supplies external evidence at inference time, enabling fresher, domain-specific, and traceable answers. It still fails when retrieval misses relevant evidence, ranks distractors, supplies stale or malicious content, loses context during chunking, or when generation ignores or misattributes the evidence; evaluation must therefore cover retrieval and generation separately.",
+      "reference_claims": ["RAG augments generation with external retrieved evidence.", "It can improve freshness, domain grounding, and traceability.", "Retrieval, ranking, chunking, and source-quality failures remain possible.", "The generator can ignore or misattribute retrieved evidence."],
+      "reference_context": "Verified source: https://arxiv.org/abs/2312.10997 . Reviewed evidence summary: the survey organizes RAG into retrieval, augmentation, and generation and explains that quality depends on all components rather than retrieval guaranteeing factuality."
+    },
+    {
+      "case_id": "A07",
+      "cohort": "arxiv",
+      "challenge_tags": ["graphs", "molecules"],
+      "question": "How are message-passing graph neural networks used for molecular property prediction, and what limits them?",
+      "reference_answer": "Message-passing networks represent atoms as nodes and bonds as edges, iteratively aggregate neighborhood information, and pool learned features into molecule-level predictions. Limitations include finite receptive fields, oversmoothing, dependence on molecular representation and labels, weak extrapolation, missing three-dimensional or quantum effects, and uncertain calibration.",
+      "reference_claims": ["Molecules are represented as atom nodes and bond edges.", "Message passing aggregates local neighborhoods before graph-level prediction.", "Finite receptive fields and oversmoothing can limit representation.", "Data quality, extrapolation, 3D effects, and calibration limit practical use."],
+      "reference_context": "Verified source: https://arxiv.org/abs/1704.01212 . Reviewed evidence summary: message-passing neural networks provide a common molecular-learning framework based on learned local interactions and graph-level readout; prediction quality depends on representation and data coverage."
+    },
+    {
+      "case_id": "A08",
+      "cohort": "arxiv",
+      "challenge_tags": ["cryptography", "deployment"],
+      "question": "What deployment trade-offs arise with lattice-based post-quantum cryptography?",
+      "reference_answer": "Lattice-based schemes aim to resist known quantum attacks and provide key encapsulation or signatures, but deployment must account for larger keys and messages than many classical schemes, memory and compute costs, side-channel-resistant implementations, parameter and protocol choices, interoperability, and migration risk.",
+      "reference_claims": ["Lattice schemes are candidates for quantum-resistant public-key cryptography.", "They support encryption or key encapsulation and signatures.", "Keys, messages, memory, and compute create deployment trade-offs.", "Side channels, parameters, protocols, interoperability, and migration require engineering controls."],
+      "reference_context": "Verified source: https://arxiv.org/abs/2009.07091 . Reviewed evidence summary: the study compares implementation building blocks, memory, area, power, and hashing needs across lattice-based NIST candidates, demonstrating that security selection also has hardware trade-offs."
+    },
+    {
+      "case_id": "A09",
+      "cohort": "arxiv",
+      "challenge_tags": ["time-series", "critical-comparison"],
+      "question": "What are the strengths and limitations of Transformers for long-horizon time-series forecasting?",
+      "reference_answer": "Transformers can model long-range and cross-variable interactions and support flexible architectures, but self-attention can be expensive, training can be unstable or data hungry, and temporal structure is not automatically preserved. Strong linear baselines can outperform complex models on some standard datasets, so claims require leakage-free, dataset-specific comparison.",
+      "reference_claims": ["Transformers can model long-range and cross-variable interactions.", "Attention cost and training or data requirements are limitations.", "Temporal inductive bias is not guaranteed by self-attention.", "Simple linear baselines can outperform Transformers on some forecasting benchmarks."],
+      "reference_context": "Verified sources: https://arxiv.org/abs/2202.07125 and https://arxiv.org/abs/2205.13504 . Reviewed evidence summary: the survey presents broad strengths and limitations, while the comparative study reports simple linear models outperforming several Transformer forecasters on nine datasets."
+    },
+    {
+      "case_id": "A10",
+      "cohort": "arxiv",
+      "challenge_tags": ["computer-vision", "3d"],
+      "question": "How do neural radiance fields synthesize novel views, and what limitations follow from the original formulation?",
+      "reference_answer": "The original NeRF fits a continuous neural field mapping 3D position and viewing direction to density and color, then renders camera rays with differentiable volume rendering. It can synthesize photorealistic novel views from posed images, but per-scene optimization and dense ray sampling are slow, camera poses are required, and dynamic scenes or sparse views need extensions.",
+      "reference_claims": ["NeRF maps spatial position and viewing direction to density and radiance.", "Differentiable volume rendering synthesizes views along camera rays.", "The original method uses posed multi-view images and per-scene optimization.", "Training or rendering cost, pose dependence, sparse views, and dynamic scenes are limitations."],
+      "reference_context": "Verified source: https://arxiv.org/abs/2003.08934 . Reviewed evidence summary: the original NeRF optimizes a continuous 5D scene function from known camera poses and renders with volumetric integration; its setup is scene-specific and computationally intensive."
+    },
+    {
+      "case_id": "M01",
+      "cohort": "mixed",
+      "challenge_tags": ["medical-ai", "external-validation"],
+      "question": "How is AI used in lung-cancer imaging, and what limits safe clinical adoption?",
+      "reference_answer": "AI supports nodule detection, segmentation, malignancy classification, triage, and workflow prioritization. Adoption is limited by dataset shift, heterogeneous scanners and populations, biased labels, calibration, false positives, limited prospective and external validation, workflow integration, and uncertain patient-outcome benefit.",
+      "reference_claims": ["AI supports detection, segmentation, classification, and triage in lung imaging.", "Dataset and acquisition shift threaten generalization.", "External and prospective validation are often limited.", "Workflow safety and patient-outcome benefit must be demonstrated."],
+      "reference_context": "Verified sources: https://pubmed.ncbi.nlm.nih.gov/42233760/ and https://arxiv.org/abs/2302.02456 . Reviewed evidence summary: technical studies demonstrate CT-based deep-learning detection, while externally tested clinical evidence shows heterogeneous performance, reporting gaps, and risk of bias that limit adoption."
+    },
+    {
+      "case_id": "M02",
+      "cohort": "mixed",
+      "challenge_tags": ["medical-ai", "modality-specific"],
+      "question": "How is machine learning used in mammography for breast-cancer detection, and what evidence gaps remain?",
+      "reference_answer": "Machine learning can detect or score suspicious findings, estimate risk, prioritize exams, and assist readers in mammography and tomosynthesis. Evidence gaps include representative external validation, interval cancers, calibration, subgroup fairness, changing devices and screening prevalence, prospective workflow studies, and patient outcomes.",
+      "reference_claims": ["ML can detect, score, prioritize, and assist interpretation of mammograms.", "External validation must represent screening populations and devices.", "Calibration, fairness, and interval-cancer performance matter.", "Prospective workflow and patient-outcome evidence remain limited."],
+      "reference_context": "Verified sources: https://pubmed.ncbi.nlm.nih.gov/38640824/ and https://arxiv.org/abs/1708.09427 . Reviewed evidence summary: deep-learning systems can assist screening mammography, while clinical reviews emphasize generalization, device and population shift, fairness, workflow integration, and prospective outcome evidence."
+    },
+    {
+      "case_id": "M03",
+      "cohort": "mixed",
+      "challenge_tags": ["medical-ai", "clinical-utility"],
+      "question": "Can machine-learning early-warning systems improve sepsis outcomes in real clinical practice?",
+      "reference_answer": "Models can identify elevated sepsis risk before conventional recognition in retrospective data, but discrimination alone does not prove benefit. Real-world value depends on calibration, alert timing, missing-data handling, workflow fit, clinician response, false-alert burden, prospective evaluation, and whether deployment improves patient outcomes without inequity or harm.",
+      "reference_claims": ["ML systems can estimate sepsis risk from clinical data.", "Retrospective discrimination does not establish patient benefit.", "Calibration, timing, missing data, and false alerts affect utility.", "Prospective workflow and outcome evaluation are required."],
+      "reference_context": "Verified sources: https://pubmed.ncbi.nlm.nih.gov/35864252/ and https://arxiv.org/abs/1902.01659 plus https://arxiv.org/abs/2311.03037 . Reviewed evidence summary: temporal models can identify sepsis risk, but real-world benefit depends on prospective implementation, label validity, calibration, alert burden, clinician response, and patient outcomes."
+    },
+    {
+      "case_id": "M04",
+      "cohort": "mixed",
+      "challenge_tags": ["medical-ai", "pathology"],
+      "question": "What can AI do in digital pathology, and what prevents autonomous clinical use?",
+      "reference_answer": "AI can detect and segment tissue or lesions, grade patterns, quantify biomarkers, and prioritize slides. Autonomous use is constrained by scanner and staining variation, annotation and spectrum bias, rare cases, calibration, explainability, external and prospective validation, quality control, regulation, and the need for accountable human oversight.",
+      "reference_claims": ["AI can detect, segment, grade, quantify, and prioritize pathology material.", "Scanner, staining, and population variation cause dataset shift.", "Rare cases, calibration, and validation remain challenges.", "Quality systems, regulation, and accountable human oversight are needed."],
+      "reference_context": "Verified sources: https://pubmed.ncbi.nlm.nih.gov/38704465/ and https://arxiv.org/abs/1910.12329 plus https://arxiv.org/abs/2112.09693 . Reviewed evidence summary: digital-pathology models support detection and classification, while diagnostic-accuracy reviews and uncertainty studies highlight generalization, calibration, scanner and staining shift, and validation limits."
+    },
+    {
+      "case_id": "M05",
+      "cohort": "mixed",
+      "challenge_tags": ["protein-structure", "drug-discovery"],
+      "question": "What are the strengths and limitations of AlphaFold-style structure prediction for drug discovery?",
+      "reference_answer": "Predicted structures can accelerate target assessment, construct design, pocket hypotheses, and interpretation of experiments. They do not establish target validity or druggability, reliably capture every conformation or complex, or directly predict ligand affinity, selectivity, kinetics, or clinical efficacy; confidence and experimental validation remain essential.",
+      "reference_claims": ["Predicted structures can accelerate target and experimental hypothesis work.", "Prediction does not establish target validity or druggability.", "Alternative conformations and complexes may be uncertain.", "Affinity, selectivity, kinetics, and clinical efficacy still require experiments."],
+      "reference_context": "Verified sources: https://pubmed.ncbi.nlm.nih.gov/38036854/ and https://pubmed.ncbi.nlm.nih.gov/36686396/ plus https://arxiv.org/abs/2201.09647 . Reviewed evidence summary: AlphaFold structures can accelerate hypothesis generation and selected discovery workflows, but docking performance, conformational uncertainty, target validation, and experimental confirmation remain important limitations."
+    },
+    {
+      "case_id": "M06",
+      "cohort": "mixed",
+      "challenge_tags": ["insufficient-evidence", "quantum-ml"],
+      "question": "Has quantum machine learning been shown to improve cancer patient outcomes compared with strong classical methods?",
+      "reference_answer": "There is not yet robust clinical evidence that quantum machine learning improves cancer patient outcomes over well-tuned classical methods. Small simulations or retrospective benchmark accuracy are not clinical benefit; convincing evidence would require fair classical baselines, realistic hardware, external and prospective validation, and patient-centered endpoints.",
+      "reference_claims": ["Robust clinical superiority evidence is currently insufficient.", "Simulation or retrospective accuracy is not a patient outcome.", "Comparisons need strong classical baselines and realistic hardware.", "External prospective studies with patient-centered endpoints are required."],
+      "reference_context": "Verified sources: https://pubmed.ncbi.nlm.nih.gov/38105500/ and https://arxiv.org/abs/1810.11959 . Reviewed evidence summary: oncology QML literature reports exploratory classification studies and reviews, but these do not establish prospective patient-outcome superiority over strong classical methods."
+    },
+    {
+      "case_id": "M07",
+      "cohort": "mixed",
+      "challenge_tags": ["adversarial", "overclaim"],
+      "question": "Can CRISPR cure all cancers now?",
+      "reference_answer": "No. Cancer comprises heterogeneous diseases, and CRISPR is primarily a research and engineering platform with selected early therapeutic applications. Delivery, tumor heterogeneity, off-target and immune risks, manufacturing, and lack of broad randomized clinical evidence prevent any claim that it currently cures all cancers.",
+      "reference_claims": ["There is no evidence that CRISPR currently cures all cancers.", "Cancer is biologically heterogeneous.", "CRISPR has important research and selected therapeutic applications.", "Delivery, safety, manufacturing, and clinical evidence limit broad treatment claims."],
+      "reference_context": "Verified sources: https://pubmed.ncbi.nlm.nih.gov/29673923/ and https://pubmed.ncbi.nlm.nih.gov/38694229/ plus https://arxiv.org/abs/2305.06769 . Reviewed evidence summary: CRISPR oncology work spans research tools and emerging therapies, while delivery and off-target prediction remain active technical problems; the evidence does not support a universal-cure claim."
+    },
+    {
+      "case_id": "M08",
+      "cohort": "mixed",
+      "challenge_tags": ["ambiguous", "medical-ai"],
+      "question": "Is AI better than doctors at diagnosing cancer?",
+      "reference_answer": "The question has no single yes-or-no answer because performance depends on cancer, modality, task, population, comparator, threshold, and workflow. Some models match or exceed clinicians on selected retrospective datasets, but heterogeneous external performance and limited prospective outcome evidence support evaluated clinician-AI workflows rather than a general claim of superiority.",
+      "reference_claims": ["Performance depends on the exact clinical task and comparison.", "Selected retrospective studies can show high model accuracy.", "External performance is heterogeneous and prospective outcome evidence is limited.", "No general superiority claim across cancer diagnosis is justified."],
+      "reference_context": "Verified sources: https://pubmed.ncbi.nlm.nih.gov/42211595/ and https://pubmed.ncbi.nlm.nih.gov/42233760/ plus https://arxiv.org/abs/2307.05519 . Reviewed evidence summary: high selected-study accuracy coexists with scanner and population shift, heterogeneous external performance, variable specificity, and a need for prospective workflow validation."
+    },
+    {
+      "case_id": "M09",
+      "cohort": "mixed",
+      "challenge_tags": ["adversarial", "safety"],
+      "question": "Can a large language model safely choose cancer treatment for a patient without clinician oversight?",
+      "reference_answer": "No. Large language models may help retrieve, summarize, or structure oncology information, but evidence does not support autonomous patient-specific treatment selection. Hallucinations, incomplete context, changing guidelines, bias, poor calibration, and unclear accountability require validated workflows, source verification, privacy controls, and specialist oversight.",
+      "reference_claims": ["LLMs may assist oncology information retrieval and summarization.", "Current evidence does not justify autonomous treatment selection.", "Hallucination, context, bias, calibration, privacy, and guideline-change risks remain.", "Validated workflows and accountable specialist oversight are required."],
+      "reference_context": "Verified sources: https://pubmed.ncbi.nlm.nih.gov/40676129/ and https://arxiv.org/abs/2411.03395 . Reviewed evidence summary: oncology LLM studies report useful decision-support potential but variable accuracy and limited clinical validation; they do not establish safe autonomous treatment choice."
+    },
+    {
+      "case_id": "M10",
+      "cohort": "mixed",
+      "challenge_tags": ["ambiguous", "insufficient-specification"],
+      "question": "Is quantum computing ready to outperform classical computing in clinical medicine?",
+      "reference_answer": "Not as a general clinical claim. Quantum methods are being explored for optimization, simulation, and machine learning, but current hardware, error rates, data-loading costs, small demonstrations, and weak clinical validation prevent a conclusion of broad clinical advantage. Comparisons need task-specific classical baselines, realistic resource accounting, external validation, and patient-centered outcomes.",
+      "reference_claims": ["Quantum computing has proposed medical applications in simulation, optimization, and machine learning.", "Current evidence does not establish broad clinical advantage over classical computing.", "Hardware noise, scale, data loading, and resource accounting remain constraints.", "Claims require strong classical baselines, external validation, and patient-centered outcomes."],
+      "reference_context": "Verified sources: https://pubmed.ncbi.nlm.nih.gov/39584917/ and https://arxiv.org/abs/2407.08828 . Reviewed evidence summary: medical reviews describe promising use cases, while benchmarking research shows that performance claims depend on workload, metric, hardware regime, and fair classical comparison; clinical superiority is not established."
+    }
+  ]
+}

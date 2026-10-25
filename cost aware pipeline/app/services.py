@@ -17,13 +17,14 @@ from scientific_rag.llm_gateway import begin_trace, end_trace, primary_route_lab
 
 from .config import Settings
 from .cost_policy import ResearchBudget, budget_for
+from .cost_control import CostGuard
 from .db import session_factory
 from .models import AuditEvent, ResearchEvidence, ResearchRun, SourceDocument
 from .pgvector_retrieval import PostgresVectorService
-from .schemas import ResearchMode, ResearchResponse, SourceResponse
+from .schemas import ResearchCacheMode, ResearchMode, ResearchResponse, SourceResponse
 
 logger = logging.getLogger(__name__)
-PIPELINE_VERSION = "postgres-hybrid-rrf-mmr-parent-child-v11"
+PIPELINE_VERSION = "postgres-hybrid-rrf-mmr-parent-child-v12"
 
 
 def _timeline_phase(stage: str, role: str | None) -> str:
@@ -55,6 +56,37 @@ class ResearchService:
         self.settings = settings
         self.redis = redis
         self._lock = asyncio.Lock()
+        self.cost_guard = CostGuard(redis, settings)
+
+    async def _reserve_cost(self, record: ResearchRun, mode: ResearchMode) -> None:
+        guard = getattr(self, "cost_guard", None)
+        if guard is None:
+            return
+        reservation = await guard.reserve_research(str(record.id), mode)
+        metadata = dict(record.model_metadata)
+        metadata["cost_reservation"] = reservation.as_dict()
+        record.model_metadata = metadata
+
+    async def _reconcile_cost(self, record: ResearchRun, metadata: dict) -> None:
+        gateway_cost = metadata.get("llm_gateway", {}).get("estimated_cost_usd")
+        embedding_cost = metadata.get("embedding_usage", {}).get("estimated_cost_usd")
+        components = [value for value in (gateway_cost, embedding_cost) if value is not None]
+        total = round(sum(float(value) for value in components), 8) if components else None
+        complete = gateway_cost is not None and embedding_cost is not None
+        metadata["cost_accounting"] = {
+            "llm_estimated_cost_usd": gateway_cost,
+            "embedding_estimated_cost_usd": embedding_cost,
+            "estimated_cost_usd": total,
+            "complete": complete,
+            "reservation": dict(record.model_metadata.get("cost_reservation", {})),
+        }
+        guard = getattr(self, "cost_guard", None)
+        # Never release a conservative reservation when any provider omitted
+        # usage metadata; the known component is only a lower bound.
+        if guard is not None and total is not None and complete:
+            reconciled = await guard.reconcile_research(str(record.id), total)
+            if reconciled is not None:
+                metadata["cost_accounting"]["reservation"] = reconciled.as_dict()
 
     def _validate_request(self, mode: ResearchMode, generate_evaluation_dataset: bool) -> None:
         if generate_evaluation_dataset and not self.settings.allow_evaluation_dataset:
@@ -119,25 +151,38 @@ class ResearchService:
                 external_id=metadata.get("external_id"),
                 source_url=metadata.get("source_url"),
                 study_design=metadata.get("study_design"),
+                excerpt=item.content[:1200],
             ))
         return list(sources.values())
 
-    async def queue(self, session: AsyncSession, question: str, mode: ResearchMode, *, actor: str, bypass_cache: bool = False, force_mining: bool = False) -> ResearchResponse:
+    async def queue(self, session: AsyncSession, question: str, mode: ResearchMode, *, actor: str,
+                    cache_mode: ResearchCacheMode = ResearchCacheMode.use_cached_answer,
+                    bypass_cache: bool | None = None, force_mining: bool | None = None) -> ResearchResponse:
         """Create an immediately visible job; its work continues in a separate session."""
         self._validate_request(mode, False)
+        # Compatibility for existing internal callers while the public contract
+        # migrates to one explicit three-state policy.
+        if force_mining:
+            cache_mode = ResearchCacheMode.refresh_sources
+        elif bypass_cache:
+            cache_mode = ResearchCacheMode.regenerate_answer
         cached = await self._find_cached(session, question, actor, mode)
-        if cached is not None and not bypass_cache:
+        if cached is not None and cache_mode is ResearchCacheMode.use_cached_answer:
             logger.info("research_cache_hit run_id=%s mode=%s", cached.id, mode.value)
             return to_response(cached, await self.sources_for_run(session, cached.id), mode=mode, cached=True)
 
         budget = budget_for(mode)
         metadata = self._metadata(mode, budget, "Queued for research")
-        metadata["force_mining"] = force_mining
+        metadata["cache_mode"] = cache_mode.value
         metadata["retrieval_version"] = PIPELINE_VERSION
         record = ResearchRun(question=question, requested_by=actor, status="queued", model_metadata=metadata)
         session.add(record)
-        await session.commit()
-        await session.refresh(record)
+        await session.flush()
+        try:
+            await self._reserve_cost(record, mode)
+        except Exception:
+            await session.rollback()
+            raise
         session.add(AuditEvent(actor=actor, action="research.started", target_type="research_run", target_id=str(record.id), details={"mode": mode.value}))
         await session.commit()
         logger.info("research_queued run_id=%s mode=%s budget=%s", record.id, mode.value, budget.as_dict())
@@ -146,35 +191,47 @@ class ResearchService:
         metadata["queue_job_id"] = str(record.id)
         record.model_metadata = metadata
         await session.commit()
-        await self.redis.enqueue_job("run_research_job", str(record.id), question, mode.value, force_mining, _job_id=str(record.id))
+        await self.redis.enqueue_job("run_research_job", str(record.id), question, mode.value, cache_mode.value, _job_id=str(record.id))
         return to_response(record, mode=mode)
 
-    async def run_queued(self, run_id: UUID, question: str, mode: ResearchMode, force_mining: bool) -> None:
+    async def run_queued(self, run_id: UUID, question: str, mode: ResearchMode, cache_mode: ResearchCacheMode) -> None:
         async with session_factory() as session:
             record = (await session.execute(select(ResearchRun).where(ResearchRun.id == run_id))).scalar_one()
             record.status = "running"
             await session.commit()
             try:
-                await self._execute(session, record, question, mode, False, force_mining=force_mining)
+                await self._execute(session, record, question, mode, False, cache_mode=cache_mode)
             except Exception:
                 # _execute persists the failure. Keep this task from producing an unhandled-task warning.
                 logger.exception("queued_research_task_failed run_id=%s", run_id)
 
-    async def run(self, session: AsyncSession, question: str, mode: ResearchMode, generate_evaluation_dataset: bool, *, actor: str = "api", fresh: bool = False) -> ResearchResponse:
+    async def run(self, session: AsyncSession, question: str, mode: ResearchMode, generate_evaluation_dataset: bool, *,
+                  actor: str = "api", cache_mode: ResearchCacheMode = ResearchCacheMode.use_cached_answer,
+                  fresh: bool = False) -> ResearchResponse:
         """Synchronous API path retained for programmatic clients."""
         self._validate_request(mode, generate_evaluation_dataset)
-        cached = None if fresh else await self._find_cached(session, question, actor, mode)
+        if fresh:  # Deprecated API behavior remains a full source refresh.
+            cache_mode = ResearchCacheMode.refresh_sources
+        cached = None if cache_mode is not ResearchCacheMode.use_cached_answer else await self._find_cached(session, question, actor, mode)
         if cached is not None:
             return to_response(cached, await self.sources_for_run(session, cached.id), mode=mode, cached=True)
 
         budget = budget_for(mode)
-        record = ResearchRun(question=question, requested_by=actor, status="running", model_metadata=self._metadata(mode, budget, "Starting research"))
+        initial_metadata = self._metadata(mode, budget, "Starting research")
+        initial_metadata["cache_mode"] = cache_mode.value
+        record = ResearchRun(question=question, requested_by=actor, status="running", model_metadata=initial_metadata)
         session.add(record)
-        await session.commit()
-        await session.refresh(record)
+        if hasattr(session, "flush"):
+            await session.flush()
+        try:
+            await self._reserve_cost(record, mode)
+        except Exception:
+            if hasattr(session, "rollback"):
+                await session.rollback()
+            raise
         session.add(AuditEvent(actor=actor, action="research.started", target_type="research_run", target_id=str(record.id), details={"mode": mode.value, "entrypoint": "api"}))
         await session.commit()
-        return await self._execute(session, record, question, mode, generate_evaluation_dataset, force_mining=fresh)
+        return await self._execute(session, record, question, mode, generate_evaluation_dataset, cache_mode=cache_mode)
 
     async def _set_progress(self, session: AsyncSession, record: ResearchRun, stage: str, role: str | None = None) -> None:
         metadata = dict(record.model_metadata)
@@ -194,7 +251,8 @@ class ResearchService:
         await session.commit()
         logger.info("research_progress run_id=%s stage=%s role=%s model=%s", record.id, stage, role, self._model_for_role(role))
 
-    async def _execute(self, session: AsyncSession, record: ResearchRun, question: str, mode: ResearchMode, generate_evaluation_dataset: bool, *, force_mining: bool = False) -> ResearchResponse:
+    async def _execute(self, session: AsyncSession, record: ResearchRun, question: str, mode: ResearchMode, generate_evaluation_dataset: bool, *,
+                       cache_mode: ResearchCacheMode = ResearchCacheMode.use_cached_answer) -> ResearchResponse:
         budget = budget_for(mode)
         trace_token = begin_trace(self.redis)
         trace_closed = False
@@ -232,7 +290,7 @@ class ResearchService:
                 )
                 try:
                     pipeline_result = await asyncio.wait_for(
-                        orchestrator.execute_full_study(question, clear_db=False, generate_evaluation_dataset=generate_evaluation_dataset, skip_database_cache=force_mining),
+                        orchestrator.execute_full_study(question, clear_db=False, generate_evaluation_dataset=generate_evaluation_dataset, cache_mode=cache_mode.value),
                         timeout=timeout_seconds,
                     )
                 except TimeoutError as error:
@@ -242,7 +300,7 @@ class ResearchService:
                     ) from error
                 report = pipeline_result["report"]
 
-            record.status = "completed"
+            record.status = str(pipeline_result.get("status") or "completed")
             record.answer = report["answer"]
             record.completed_at = datetime.now(timezone.utc)
             evidence_documents = report.get("raw_docs_used", [])
@@ -264,6 +322,7 @@ class ResearchService:
             metadata = self._metadata(mode, budget, "Research complete")
             metadata["retrieval_version"] = PIPELINE_VERSION
             metadata["llm_gateway"] = summarize_trace(end_trace(trace_token))
+            metadata["embedding_usage"] = dict(vector_service.embedding_usage)
             stored_metadata = dict(record.model_metadata)
             _close_active_timeline(stored_metadata, record.completed_at)
             metadata["timeline"] = stored_metadata.get("timeline", [])
@@ -271,7 +330,9 @@ class ResearchService:
             metadata["mined_count"] = int(pipeline_result.get("metadata", {}).get("mined_count", 0))
             trace_closed = True
             cache_diagnostics = dict(pipeline_result.get("metadata", {}).get("cache", {}))
-            metadata["cache_hit"] = pipeline_result.get("status") == "retrieved_from_cache"
+            metadata["cache_hit"] = cache_diagnostics.get("decision") == "reuse_postgres_evidence"
+            metadata["cache_mode"] = cache_mode.value
+            metadata["source_sufficiency"] = dict(pipeline_result.get("metadata", {}).get("source_sufficiency", {}))
             metadata["cache"] = cache_diagnostics
             source_diagnostics = dict(pipeline_result.get("metadata", {}).get("source_diagnostics", {}))
             for document in evidence_documents:
@@ -283,11 +344,12 @@ class ResearchService:
             metadata["arxiv_inspector"] = list(pipeline_result.get("metadata", {}).get("arxiv_inspector", []))
             metadata["retrieval_inspector"] = list(vector_service.retrieval_traces)
             metadata["progress"]["model"] = None
+            await self._reconcile_cost(record, metadata)
             record.model_metadata = metadata
             session.add(AuditEvent(actor=record.requested_by or "api", action="research.completed", target_type="research_run", target_id=str(record.id), details={
                 "mode": mode.value,
                 "providers": sorted({str(item.get("provider")) for item in metadata["llm_gateway"].get("attempts", []) if item.get("provider")}),
-                "status": "completed",
+                "status": record.status,
             }))
             sources = [
                 SourceResponse(
@@ -297,13 +359,14 @@ class ResearchService:
                     external_id=str(document.metadata.get("doc_id") or "") or None,
                     source_url=str(document.metadata.get("url") or "") or None,
                     study_design=str(document.metadata.get("study_design") or "") or None,
+                    excerpt=str(document.page_content)[:1200],
                 )
                 for document in evidence_documents
             ]
             await session.commit()
             await session.refresh(record)
             logger.info("research_completed run_id=%s mode=%s source_count=%s", record.id, mode.value, len(sources))
-            return ResearchResponse(id=record.id, status=record.status, answer=record.answer, sources=sources, plan=list(pipeline_result.get("metadata", {}).get("plan_executed", [])), created_at=record.created_at, completed_at=record.completed_at, mode=mode, retrieval_version=PIPELINE_VERSION, source_diagnostics=source_diagnostics, cache_diagnostics=cache_diagnostics, llm_diagnostics=metadata["llm_gateway"])
+            return ResearchResponse(id=record.id, status=record.status, answer=record.answer, sources=sources, plan=list(pipeline_result.get("metadata", {}).get("plan_executed", [])), created_at=record.created_at, completed_at=record.completed_at, mode=mode, retrieval_version=PIPELINE_VERSION, source_diagnostics=source_diagnostics, cache_diagnostics=cache_diagnostics, llm_diagnostics=metadata["llm_gateway"], source_sufficiency=metadata["source_sufficiency"])
         except Exception as error:
             failed_run_id = record.id
             try:
@@ -333,6 +396,8 @@ class ResearchService:
                 metadata["mined_count"] = getattr(orchestrator, "last_mined_count", 0)
             if vector_service is not None:
                 metadata["retrieval_inspector"] = list(vector_service.retrieval_traces)
+                metadata["embedding_usage"] = dict(vector_service.embedding_usage)
+            await self._reconcile_cost(record, metadata)
             record.model_metadata = metadata
             session.add(AuditEvent(actor=record.requested_by or "api", action="research.failed", target_type="research_run", target_id=str(record.id), details={"mode": mode.value, "error_type": type(error).__name__}))
             await session.commit()
@@ -345,4 +410,4 @@ def to_response(record: ResearchRun, sources: list[SourceDocument | SourceRespon
         source if isinstance(source, SourceResponse) else SourceResponse(title=source.title, source=source.source, external_id=source.external_id, source_url=source.source_url, study_design=source.metadata_json.get("study_design"))
         for source in sources or []
     ]
-    return ResearchResponse(id=record.id, status=record.status, answer=record.answer, sources=response_sources, created_at=record.created_at, completed_at=record.completed_at, mode=mode or ResearchMode(record.model_metadata.get("mode", "fast")), cached=cached, retrieval_version=record.model_metadata.get("retrieval_version"), source_diagnostics=record.model_metadata.get("source_diagnostics", {}), cache_diagnostics=record.model_metadata.get("cache", {}), llm_diagnostics=record.model_metadata.get("llm_gateway", {}))
+    return ResearchResponse(id=record.id, status=record.status, answer=record.answer, sources=response_sources, created_at=record.created_at, completed_at=record.completed_at, mode=mode or ResearchMode(record.model_metadata.get("mode", "fast")), cached=cached, retrieval_version=record.model_metadata.get("retrieval_version"), source_diagnostics=record.model_metadata.get("source_diagnostics", {}), cache_diagnostics=record.model_metadata.get("cache", {}), llm_diagnostics=record.model_metadata.get("llm_gateway", {}), source_sufficiency=record.model_metadata.get("source_sufficiency", {}))

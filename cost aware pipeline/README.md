@@ -2,6 +2,8 @@
 
 A Dockerized FastAPI, PostgreSQL full-text search, and pgvector research application with a resilient multi-provider LLM gateway and a browser UI.
 
+The optional `HEALTH_COACH_API_KEY` authenticates a dedicated service identity for `POST /v1/evidence/jobs`. That endpoint accepts only a generic question and topic key; clients must not send a profile or raw chat. It queues the existing worker and reuses in-flight or completed research by question and pipeline version. The caller can poll `GET /v1/research/{run_id}`. Completed runs are reused for up to 30 days; user-specific relevance stays in the calling app, not this shared evidence database.
+
 [Watch the 55-second demo](docs/demo/scientific-rag-demo.mp4) · [Run locally with Docker](#run-with-docker) · [Recording notes](docs/demo/recording-guide.md)
 
 [![Scientific RAG animated demo](docs/demo/scientific-rag-preview.gif)](docs/demo/scientific-rag-demo.mp4)
@@ -60,9 +62,11 @@ Each LLM attempt has a provider-specific deadline, so a slow free-model route ca
 
 ### Retrieval
 
-The final answer searches only sources collected for the current run, preventing unrelated historical papers from leaking into an answer. Completed answers can be reused only for the same question, user, research mode, and pipeline version. Old runs remain visible in history after a pipeline update but are not served as current cached answers.
+The final answer searches only sources attached to the current run, preventing unrelated historical papers from leaking into an answer. PostgreSQL evidence reuse first performs hybrid retrieval and then requires every deterministic topic anchor to be present; accepted parent contexts are copied into the new run before synthesis. Completed answers can be reused only for the same question, user, research mode, and pipeline version. Old runs remain visible in history after a pipeline update but are not served as current cached answers.
 
-For a fresh API run, send `"fresh": true` in `POST /v1/research`, for example `{"question":"What are current uses of CRISPR in cancer research?","mode":"fast","fresh":true}`. The response reports `cached` and `retrieval_version`; check both when comparing runs. The browser result also has a **Run fresh research** button.
+The API exposes three explicit cache policies through `cache_mode`: `use_cached_answer` returns an exact current-version answer when available; `regenerate_answer` creates a new answer after checking PostgreSQL evidence first; and `refresh_sources` ignores both answer and source caches and mines externally. The legacy `"fresh": true` field remains compatible and maps to `refresh_sources`. The browser exposes **Regenerate from saved evidence** and **Refresh external sources** as separate actions.
+
+Before external mining, deterministic anchor extraction preserves topic-defining concepts from the original question. Provider-specific builders produce PubMed and arXiv syntax. The retry ladder is: a precise deterministic query, a broader required-anchor query, then a single structured LLM repair using Groq `openai/gpt-oss-20b` (OpenRouter and Gemini Flash-Lite fallbacks). The repair returns concepts only; deterministic code still builds and validates provider syntax. If the final source set does not cover all required anchors, the run finishes as `insufficient_evidence` and does not ask the Expert to invent an answer. Attempts, queries, anchors, cache decisions, rejection reasons, and sufficiency are visible in Retrieval inspector.
 
 Before PubMed content is indexed, the LLM gateway screens each returned paper using its title and abstract (or an available full-text excerpt when the abstract is missing). Clearly irrelevant papers are rejected with a recorded reason; uncertain papers are retained to protect recall. If all configured judge providers fail, that paper is not indexed and the screening failure is shown in Retrieval inspector. This adds one structured gatekeeper call per returned PubMed paper; at most three screenings run concurrently. The decision and confidence are visible alongside each PubMed record in Retrieval inspector.
 
@@ -80,7 +84,11 @@ For PubMed full text, the miner accepts only the direct `pubmed_pmc` link, never
 
 ## Cost controls
 
-Every request has a fixed research budget. The limits reduce the number of papers, retrieved context documents, and generation calls. The Costs tab uses provider-reported token usage when available. It estimates USD only after you configure current input/output rates in `.env`; use model-specific variables such as `LLM_GROQ_OPENAI_GPT_OSS_120B_INPUT_USD_PER_MILLION` and the matching `_OUTPUT_...` rate. Provider-wide `LLM_GROQ_INPUT_USD_PER_MILLION` rates are also supported. Optional `COST_DAILY_BUDGET_USD` and `COST_MONTHLY_BUDGET_USD` settings enable budget alerts. Runs with missing token usage or rates remain unpriced, and the dashboard shows coverage so partial totals are visible.
+Every request has a fixed research budget. The limits reduce the number of papers, retrieved context documents, and generation calls. The Costs tab combines provider-reported generation tokens with a clearly labeled character-based estimate for embedding tokens. It ships with rates verified on 2026-10-24 for the configured Groq, OpenRouter, Gemini generation, and Gemini embedding models; model-specific or provider-wide `LLM_*_INPUT/OUTPUT_USD_PER_MILLION` variables override them when pricing changes.
+
+Before a paid run is queued, Redis atomically reserves a conservative amount for its mode. Concurrent requests therefore cannot independently pass the same stale budget check. On completion, the reservation is reconciled to measured generation plus estimated embedding spend. `COST_DAILY_BUDGET_USD` and `COST_MONTHLY_BUDGET_USD` are hard limits when `COST_ENFORCE_HARD_LIMIT=true`; the dashboard warns at `COST_SOFT_ALERT_PERCENT`. A queued cancellation releases its reservation. Failed or interrupted work keeps its measured cost when available, otherwise it conservatively keeps the reservation. This controls application-accounted spend, not charges generated outside this application.
+
+Built-in price references: [Groq GPT-OSS 120B](https://console.groq.com/docs/model/openai/gpt-oss-120b), [OpenRouter pricing/free routing](https://openrouter.ai/pricing/), and [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing). Recheck provider pricing before a public deployment.
 
 | Mode | Plan steps | Papers per source | Context documents | Maximum generation calls |
 | --- | ---: | ---: | ---: | ---: |
@@ -126,6 +134,14 @@ $env:APP_API_KEY = "<the admin key from APP_API_KEYS>"
 The script assigns a timestamped dataset name so it is safe to run repeatedly, prints the API status URL, and leaves each result in PostgreSQL for comparison. It defaults to one case, so a full run requires `-CaseCount 10`. Use `fast` for a cheaper smoke test. `deep` is accepted only after `ENABLE_DEEP_RESEARCH=true` is set and Compose is rebuilt.
 
 The script waits for the API health check for up to one minute after Compose starts. If it times out, inspect startup output with `docker compose logs api`.
+
+The larger frozen Fast bank is `evaluation/benchmark-fast-v2.json`: 30 reviewed cases split evenly between PubMed-led, arXiv-led, and mixed questions. Its active frozen matrix selects 10 cases (3 PubMed, 3 arXiv, 4 mixed); three repetitions therefore run 30 research cases and up to 30 Ragas evaluations. Run it inside the API container so it can read PostgreSQL and Redis directly:
+
+```powershell
+docker compose exec -T api python scripts/run_fast_benchmark_matrix.py --repetitions 3
+```
+
+The runner performs a conservative cost preflight before creating anything. With the default reservations, the active 10-case matrix repeated three times requires up to `$4.50` in application reservations (`$0.05` research + `$0.10` judging per case). Reports are written under ignored `evaluation/results/`; review and deliberately copy an approved baseline into version control rather than committing every experiment.
 
 Benchmark jobs have their own one-hour timeout (`EVALUATION_JOB_TIMEOUT_SECONDS=3600`), independent of the per-research-request timeout. The evaluation page reports research and judging progress for the current case.
 
@@ -183,6 +199,29 @@ docker compose run --rm --no-deps -v "${PWD}\tests:/app/tests:ro" -e RUN_INTEGRA
 
 CI uses a temporary pgvector PostgreSQL service to run the same tests on pushes and pull requests. For a small real-world Fast/Standard comparison without Ragas, run `docker compose exec -T api python scripts/compare_research_modes.py`; it runs six fresh research requests sequentially and prints one JSON result per case. It uses your configured model APIs, so it may incur charges. The one-run-per-case results are diagnostic, not a statistically reliable latency or quality benchmark. A live three-question Deep-mode validation, one exact-match Ragas score, and the current production-readiness gap are documented in [`docs/deep-mode-validation-2026-10-24.md`](docs/deep-mode-validation-2026-10-24.md).
 
-## Security note
+For a repeatable reliability check that makes **no LLM calls**, run:
 
-The protected beta requires `APP_API_KEYS` and a 32-character `APP_SESSION_SECRET`. API clients provide `X-API-Key`; the browser UI has a key-based login. The built-in rate limit is in-memory, so replace it with Redis-backed limits before a multi-instance public deployment.
+```powershell
+.\scripts\run_reliability_tests.ps1 -Requests 100 -Concurrency 20
+```
+
+It rebuilds Compose, runs pricing/budget tests and the provider failure-injection suite, then loads `/healthz` and PostgreSQL concurrently and races 30 Redis cost reservations against a 10-request test budget. The command exits non-zero on a failed assertion and prints HTTP/DB p50 and p95 latency. This is a workstation smoke/load probe, not a substitute for a distributed soak test from a separate load generator.
+
+## Security and recovery checks
+
+The protected beta requires `APP_API_KEYS` and a 32-character `APP_SESSION_SECRET`. API clients provide `X-API-Key`; the browser UI has a key-based login. Request and daily-research quotas are enforced atomically in Redis, so they are shared by multiple API processes. Browser state-changing requests also require an allowed same-origin `Origin` header; configure production hosts/origins and secure cookies with `APP_ALLOWED_HOSTS`, `APP_ALLOWED_ORIGINS`, and `APP_SECURE_COOKIES=true` behind HTTPS.
+
+Run the provider-free worker scaling and service-outage recovery checks only on a local test deployment with no active research:
+
+```powershell
+.\scripts\failure_recovery_test.ps1
+```
+
+The script exercises four workers, queues work while workers are stopped, restarts PostgreSQL and Redis, verifies the health failure is visible, and restores the stack to one worker. Back up and prove that a backup restores into a temporary database with:
+
+```powershell
+.\scripts\backup_database.ps1
+.\scripts\verify_database_backup.ps1 -BackupPath .\backups\scientific-rag-YYYYMMDD-HHMMSS.dump
+```
+
+See `docs/security-privacy-review-2026-10-24.md` for the threat model, residual risks, and production gates. CI runs dependency, secret, source, configuration, and container-image scans through `.github/workflows/security.yml`.

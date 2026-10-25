@@ -28,7 +28,10 @@ def principal_for_key(raw_key: str, configured_keys: str) -> Principal | None:
 
 
 def require_api_key(request: Request) -> Principal:
-    principal = principal_for_key(request.headers.get("X-API-Key", ""), request.app.state.settings.app_api_keys)
+    raw_key = request.headers.get("X-API-Key", "")
+    service_key = getattr(request.app.state.settings, "health_coach_api_key", "")
+    principal = (Principal("health_coach", "service") if service_key and hmac.compare_digest(raw_key, service_key)
+                 else principal_for_key(raw_key, request.app.state.settings.app_api_keys))
     if principal is None:
         raise HTTPException(status_code=401, detail="Valid X-API-Key required")
     return principal
@@ -67,3 +70,55 @@ class BetaLimiter:
             self._research[key] += 1
             if mode == "deep":
                 self._deep_research[key] += 1
+
+
+_REQUEST_LIMIT_SCRIPT = """
+local current = redis.call('INCR', KEYS[1])
+if current == 1 then redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2])) end
+if current > tonumber(ARGV[1]) then return {0, current} end
+return {1, current}
+"""
+
+_RESEARCH_LIMIT_SCRIPT = """
+local total = tonumber(redis.call('GET', KEYS[1]) or '0')
+local deep = tonumber(redis.call('GET', KEYS[2]) or '0')
+if total >= tonumber(ARGV[1]) then return {0, total, 'total'} end
+if ARGV[4] == 'deep' and deep >= tonumber(ARGV[2]) then return {0, deep, 'deep'} end
+redis.call('INCR', KEYS[1]); redis.call('EXPIRE', KEYS[1], tonumber(ARGV[3]))
+if ARGV[4] == 'deep' then redis.call('INCR', KEYS[2]); redis.call('EXPIRE', KEYS[2], tonumber(ARGV[3])) end
+return {1, total + 1, 'ok'}
+"""
+
+
+class RedisBetaLimiter:
+    """Multi-instance request and daily research quotas backed by Redis Lua."""
+
+    def __init__(self, redis, requests_per_minute: int, research_runs_per_day: int, deep_research_runs_per_day: int = 1) -> None:
+        self.redis = redis
+        self.requests_per_minute = requests_per_minute
+        self.research_runs_per_day = research_runs_per_day
+        self.deep_research_runs_per_day = deep_research_runs_per_day
+
+    async def check_request(self, principal: Principal) -> None:
+        minute = datetime.now(timezone.utc).strftime("%Y%m%d%H%M")
+        key = f"scientific_rag:rate:request:{principal.name}:{minute}"
+        allowed, _ = await self.redis.eval(_REQUEST_LIMIT_SCRIPT, 1, key, self.requests_per_minute, 120)
+        if not int(allowed):
+            raise HTTPException(status_code=429, detail="Rate limit exceeded; try again in a minute")
+
+    async def consume_research_run(self, principal: Principal, mode: str = "fast") -> None:
+        if principal.role == "admin":
+            return
+        day = datetime.now(timezone.utc).strftime("%Y%m%d")
+        keys = (
+            f"scientific_rag:rate:research:{principal.name}:{day}",
+            f"scientific_rag:rate:deep:{principal.name}:{day}",
+        )
+        allowed, _, reason = await self.redis.eval(
+            _RESEARCH_LIMIT_SCRIPT, 2, *keys,
+            self.research_runs_per_day, self.deep_research_runs_per_day, 2 * 24 * 3600, mode,
+        )
+        reason = reason.decode() if isinstance(reason, bytes) else str(reason)
+        if not int(allowed):
+            detail = "Daily Deep research quota reached" if reason == "deep" else "Daily research quota reached"
+            raise HTTPException(status_code=429, detail=detail)

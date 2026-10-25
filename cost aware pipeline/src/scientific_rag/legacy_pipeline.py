@@ -43,9 +43,10 @@ from pydantic import BaseModel, Field
 
 from model_policy import ModelPolicy
 
-from .domain import ArxivRelevanceAssessment, ChunkQAResponse, GatekeeperReview, PubMedRelevanceAssessment, QAPair, QueryPlan, ResearchPlan, SubQuery
+from .domain import ArxivRelevanceAssessment, ChunkQAResponse, GatekeeperReview, PubMedRelevanceAssessment, QAPair, QueryPlan, QueryRepairProposal, ResearchPlan, SubQuery
 from .llm_gateway import ainvoke as gateway_ainvoke
 from .llm_gateway import ainvoke_structured
+from .query_quality import QueryAnchors, build_arxiv_query, build_pubmed_query, concepts_covered, extract_anchors, query_is_valid
 from .pipeline_config import PipelineConfig
 
 # --- 1. CONFIGURATION & LOGGING SETUP ---
@@ -404,7 +405,8 @@ class MinerService:
         return selected
 
     @staticmethod
-    def mine_pubmed(query: str, limit: int = 5, *, anchor_query: str | None = None, diagnostics: dict | None = None) -> List[Document]:
+    def mine_pubmed(query: str, limit: int = 5, *, anchor_query: str | None = None, diagnostics: dict | None = None,
+                    search_term_override: str | None = None) -> List[Document]:
         targeted_clinical_search = bool(
             anchor_query and MinerService._pubmed_anchor_terms(anchor_query) == ["car-t", "b-cell lymphoma"]
             and MinerService._requires_direct_clinical_evidence(anchor_query)
@@ -446,7 +448,7 @@ class MinerService:
         anchored_search_term = MinerService._format_pubmed_query(keywords[:anchor_count], anchor_count)
         # Terms like "outcomes" or "toxicities" are useful planner details but
         # are not guaranteed to occur in an otherwise relevant trial abstract.
-        search_term = (
+        search_term = search_term_override or (
             f"{anchored_search_term} AND {study_filter}" if targeted_clinical_search
             else anchored_search_term if targeted_mammography_search else broad_search_term
         )
@@ -552,13 +554,14 @@ class MinerService:
         return docs
 
     @staticmethod
-    def mine_arxiv(query: str, limit: int = 3, *, anchor_query: str | None = None, diagnostics: dict | None = None) -> List[Document]:
+    def mine_arxiv(query: str, limit: int = 3, *, anchor_query: str | None = None, diagnostics: dict | None = None,
+                   search_term_override: str | None = None) -> List[Document]:
         """Retrieve lexical arXiv candidates and record every screened search result."""
-        search_query = MinerService._format_arxiv_query(query, anchor_query)
+        search_query = search_term_override or MinerService._format_arxiv_query(query, anchor_query)
         print(f"DEBUG: Searching ArXiv for: '{search_query}'")
         docs = []
         trace = diagnostics if diagnostics is not None else {}
-        trace.update({"subquery": query, "anchor_query": anchor_query, "returned_count": 0,
+        trace.update({"subquery": query, "anchor_query": anchor_query, "search_term": search_query, "returned_count": 0,
                       "screened_count": 0, "relevance_rejected_count": 0, "indexed_count": 0,
                       "candidates": [], "errors": []})
         try:
@@ -584,8 +587,8 @@ class MinerService:
                     time.sleep(backoff * attempt)
                 finally:
                     client._session.close()
-            query_terms, specific_terms = MinerService._arxiv_query_terms(query)
-            required_phrases = MinerService._arxiv_required_phrases(query)
+            query_terms, specific_terms = MinerService._arxiv_query_terms(anchor_query or query)
+            required_phrases = MinerService._arxiv_required_phrases(anchor_query or query)
             required_overlap = min(2, len(query_terms))
             for result in results or []:
                 title = str(result.title).strip()
@@ -654,31 +657,101 @@ class MinerService:
         print("DEBUG: Unified Miner started for query:\n")
         print(f"'{query}' from source: '{source}'")
 
-        raw_results = []
-        if source == "pubmed":
-            fetch_timeout = float(os.getenv("PUBMED_FETCH_TIMEOUT_SECONDS", "90"))
-            def fetch_pubmed():
-                _entrez_request_context.deadline = time.monotonic() + fetch_timeout
-                try:
-                    return cls.mine_pubmed(query, limit, anchor_query=anchor_query, diagnostics=diagnostics)
-                finally:
-                    del _entrez_request_context.deadline
-
-            raw_results = await asyncio.to_thread(fetch_pubmed)
-            raw_results = await cls._screen_pubmed_documents(raw_results, research_question=anchor_query or query, diagnostics=diagnostics)
-        elif source == "arxiv":
-            trace = diagnostics if diagnostics is not None else {}
-            raw_results = await asyncio.to_thread(
-                cls.mine_arxiv, query, limit, anchor_query=anchor_query, diagnostics=trace,
-            )
-            if raw_results:
-                raw_results = await cls._screen_arxiv_documents(
-                    raw_results,
-                    research_question=anchor_query or query,
-                    diagnostics=trace,
-                )
-        else:
+        if source not in {"pubmed", "arxiv"}:
             print(f"WARNING: Unknown source '{source}' requested.")
+            return []
+
+        trace = diagnostics if diagnostics is not None else {}
+        research_question = anchor_query or query
+        anchors = extract_anchors(research_question, query)
+        trace.update({
+            "subquery": query,
+            "anchor_query": research_question,
+            "anchors": anchors.as_dict(),
+            "attempts": [],
+            "retry_policy": "precise -> required anchors only -> LLM repair",
+        })
+
+        async def search_once(search_term: str, attempt_number: int, strategy: str) -> list[Document]:
+            attempt_trace = {"attempt": attempt_number, "strategy": strategy, "search_term": search_term}
+            trace["attempts"].append(attempt_trace)
+            if not query_is_valid(search_term, anchors):
+                attempt_trace.update({"decision": "blocked_missing_required_anchor", "indexed_count": 0})
+                return []
+            if source == "pubmed":
+                fetch_timeout = float(os.getenv("PUBMED_FETCH_TIMEOUT_SECONDS", "90"))
+
+                def fetch_pubmed():
+                    _entrez_request_context.deadline = time.monotonic() + fetch_timeout
+                    try:
+                        return cls.mine_pubmed(query, limit, anchor_query=research_question,
+                                               diagnostics=attempt_trace, search_term_override=search_term)
+                    finally:
+                        if hasattr(_entrez_request_context, "deadline"):
+                            del _entrez_request_context.deadline
+
+                found = await asyncio.to_thread(fetch_pubmed)
+                found = await cls._screen_pubmed_documents(found, research_question=research_question, diagnostics=attempt_trace)
+            else:
+                found = await asyncio.to_thread(
+                    cls.mine_arxiv, query, limit, anchor_query=research_question,
+                    diagnostics=attempt_trace, search_term_override=search_term,
+                )
+                if found:
+                    found = await cls._screen_arxiv_documents(found, research_question=research_question, diagnostics=attempt_trace)
+            attempt_trace["decision"] = "accepted_sources" if found else "no_accepted_sources"
+            return found
+
+        builder = build_pubmed_query if source == "pubmed" else build_arxiv_query
+        raw_results: list[Document] = []
+        deterministic_queries = [builder(anchors, broad=False), builder(anchors, broad=True)]
+        if source == "pubmed" and cls._requires_direct_clinical_evidence(research_question):
+            clinical_filter = '("Clinical Trial"[pt] OR "Randomized Controlled Trial"[pt] OR "Observational Study"[pt] OR "Clinical Study"[pt] OR "Systematic Review"[pt] OR "Meta-Analysis"[pt])'
+            deterministic_queries[0] = f"{deterministic_queries[0]} AND {clinical_filter}"
+        for attempt_number, search_term in enumerate(dict.fromkeys(deterministic_queries), start=1):
+            raw_results = await search_once(search_term, attempt_number, "deterministic_precise" if attempt_number == 1 else "deterministic_broad")
+            if raw_results:
+                break
+
+        if not raw_results:
+            prompt = f"""You repair failed academic search concepts. Return concepts, not database syntax.
+Preserve the user's scientific subject. Do not invent findings or citations.
+The next layer will build provider-specific syntax deterministically.
+
+Question: {research_question[:1200]}
+Source: {source}
+Deterministic required concepts: {list(anchors.required)}
+Deterministic optional concepts: {list(anchors.optional)}
+Failed queries: {deterministic_queries}
+"""
+            try:
+                repair = await ainvoke_structured("query_repair", 0, prompt, QueryRepairProposal)
+                repaired = QueryAnchors(
+                    tuple(dict.fromkeys(item.strip().lower() for item in repair.required_concepts if item.strip()))[:4],
+                    tuple(dict.fromkeys(item.strip().lower() for item in repair.optional_concepts if item.strip()))[:4],
+                    tuple(dict.fromkeys(item.strip().lower() for item in repair.excluded_concepts if item.strip()))[:4],
+                    "llm_repair",
+                )
+                # A repair may add aliases or simplify concepts, but it may not
+                # erase every deterministic topic anchor.
+                retained_anchors = concepts_covered(" ".join(repaired.required), anchors.required)
+                if not repaired.required or len(retained_anchors) != len(anchors.required):
+                    raise ValueError("LLM repair removed one or more deterministic topic anchors")
+                repaired_query = builder(repaired, broad=True)
+                raw_results = await search_once(repaired_query, 3, "llm_repair")
+                trace["repair"] = {"used": True, "anchors": repaired.as_dict(), "rationale": repair.rationale[:500]}
+            except Exception as error:
+                trace["repair"] = {"used": True, "failed": True, "error": type(error).__name__}
+
+        attempts = trace.get("attempts", [])
+        trace["returned_count"] = sum(int(item.get("returned_count", 0)) for item in attempts)
+        trace["screened_count"] = sum(int(item.get("screened_count", 0)) for item in attempts)
+        trace["relevance_rejected_count"] = sum(int(item.get("relevance_rejected_count", 0)) for item in attempts)
+        trace["indexed_count"] = len(raw_results)
+        trace["candidates"] = [candidate for item in attempts for candidate in item.get("candidates", [])]
+        trace["errors"] = [error for item in attempts for error in item.get("errors", [])]
+        if attempts:
+            trace["search_term"] = attempts[-1].get("search_term")
 
         all_docs = []
         seen_titles = set()
@@ -1526,7 +1599,7 @@ class Orchestrator:
     @staticmethod
     def enforce_source_policy(plan: QueryPlan, anchor_query: str | None = None) -> QueryPlan:
         """Make source coverage predictable after the LLM has planned the sub-questions."""
-        technical_terms = ("ai", "algorithm", "computer vision", "deep learning", "machine learning", "model")
+        technical_terms = ("ai", "algorithm", "alphafold", "computer vision", "deep learning", "machine learning", "model", "structure prediction")
         medical_terms = ("cancer", "clinical", "therapy", "treatment", "disease", "patient", "medical", "health", "crispr", "microbiome", "red light")
         normalized_anchor = (anchor_query or "").lower().replace("-", " ")
         anchor_is_medical = bool(anchor_query and any(term in normalized_anchor for term in medical_terms))
@@ -1546,16 +1619,21 @@ class Orchestrator:
             technical_domain = bool({"technical", "physics", "education"}.intersection(step.domains))
             technical_query = any(term in query for term in technical_terms)
             medical_domain = "medical" in step.domains
-            if anchor_is_medical and anchor_is_explicitly_technical:
-                # Use both corpora only when the user's question itself asks for
-                # a technical method in a biomedical application.
+            if anchor_is_medical:
+                # The user's original question outranks an LLM-assigned domain.
+                # Use arXiv as well only when the user explicitly requested a
+                # technical method in the biomedical application.
+                step.external_sources = (
+                    ["pubmed", "arxiv"]
+                    if anchor_is_explicitly_technical
+                    else ["pubmed"]
+                )
+            elif medical_domain and (technical_domain or technical_query):
                 step.external_sources = ["pubmed", "arxiv"]
-            elif anchor_is_medical or medical_domain:
+            elif medical_domain:
                 # A planner label alone must not route ordinary health questions
                 # to arXiv.
                 step.external_sources = ["pubmed"]
-            elif medical_domain and (technical_domain or technical_query):
-                step.external_sources = ["pubmed", "arxiv"]
             elif technical_domain or technical_query:
                 step.external_sources = ["arxiv"]
             else:
@@ -1660,11 +1738,48 @@ class Orchestrator:
         return QueryPlan(plan=filtered_sub_queries), evaluations #[edit]
 
     async def ask_db(self, plan: QueryPlan, original_query: str):
-        """Compatibility method: fuzzy cross-run evidence reuse is intentionally disabled."""
-        return None, {
-            "checked": False,
-            "decision": "mine_fresh",
-            "reason": "cross_run_semantic_reuse_disabled; exact-question cache is handled by ResearchService",
+        """Reuse only hybrid-ranked evidence that still contains every topic anchor."""
+        anchors = extract_anchors(original_query, " ".join(step.query for step in plan.plan))
+        documents = await self.vs.find_reusable_evidence(
+            original_query,
+            anchors.required,
+            limit=max(self.papers_per_source * 2, 4),
+        )
+        sufficient = self._source_sufficiency(documents, anchors)
+        return documents, {
+            "checked": True,
+            "decision": "reuse_postgres_evidence" if sufficient["sufficient"] else "postgres_evidence_insufficient",
+            "reason": sufficient["reason"],
+            "candidate_documents": len(documents),
+            "anchors": anchors.as_dict(),
+        }
+
+    @staticmethod
+    def _source_sufficiency(documents: List[Document], anchors: QueryAnchors) -> dict:
+        unique_sources = {
+            str(document.metadata.get("doc_id") or document.metadata.get("url") or document.metadata.get("title"))
+            for document in documents
+        }
+        corpus = " ".join(
+            f"{document.metadata.get('title', '')} {document.page_content}"
+            for document in documents
+        )
+        covered = concepts_covered(corpus, anchors.required)
+        missing = [item for item in anchors.required if item not in covered]
+        sufficient = bool(unique_sources) and not missing
+        reason = (
+            f"{len(unique_sources)} unique source(s) cover all required concepts"
+            if sufficient else
+            "no eligible source was found" if not unique_sources else
+            f"source set does not cover required concept(s): {', '.join(missing)}"
+        )
+        return {
+            "sufficient": sufficient,
+            "unique_sources": len(unique_sources),
+            "required_concepts": list(anchors.required),
+            "covered_concepts": covered,
+            "missing_concepts": missing,
+            "reason": reason,
         }
 
     async def run_mining_operation(self, plan: QueryPlan, limit=None, anchor_query: str | None = None):
@@ -1745,7 +1860,8 @@ class Orchestrator:
         # Research Agent uses both Vector Store and Internal LLM Knowledge
         return await self.ra.run_research(original_query)
 
-    async def execute_full_study(self, original_query: str, clear_db: bool = False, generate_evaluation_dataset: bool = False, skip_database_cache: bool = False):
+    async def execute_full_study(self, original_query: str, clear_db: bool = False, generate_evaluation_dataset: bool = False,
+                                 cache_mode: str = "use_cached_answer"):
         """Main Orchestration Pipeline."""
         print(f"\n--- [ORCHESTRATOR] STARTING HYBRID STUDY ---")
 
@@ -1759,56 +1875,97 @@ class Orchestrator:
         refined_plan, evals = await self.filter_plan(original_query, raw_plan)
         refined_plan = self.enforce_source_policy(refined_plan, anchor_query=original_query)
 
-        # Exact-question answer reuse is handled by ResearchService before this
-        # orchestrator runs. Do not semantically reuse a global vector shortlist:
-        # it can mix papers from unrelated historical runs.
-        cache_diagnostics = {
-            "checked": False,
-            "decision": "mine_fresh",
-            "reason": "cross_run_semantic_reuse_disabled" if not skip_database_cache else "explicit_cache_bypass",
-        }
+        anchors = extract_anchors(original_query, " ".join(step.query for step in refined_plan.plan))
+        reused_docs: List[Document] = []
+        if cache_mode == "refresh_sources":
+            cache_diagnostics = {
+                "checked": False,
+                "decision": "refresh_sources",
+                "reason": "operator requested external source refresh",
+                "anchors": anchors.as_dict(),
+            }
+        else:
+            await self._progress("Checking PostgreSQL for reusable evidence")
+            reused_docs, cache_diagnostics = await self.ask_db(refined_plan, original_query)
 
-        # From here on this is a fresh-mining path. Never let synthesis retrieve
-        # historical documents if planning/mining fails or returns no evidence.
+        # Final synthesis is always run-scoped. Reused parents are copied into
+        # this run before retrieval rather than exposing the whole database.
         self.vs.restrict_final_retrieval_to_current_run()
 
-        # 4. Mine (Only academic parts)
-        docs, doc_count, source_diagnostics, pubmed_inspector, arxiv_inspector = await self.run_mining_operation(refined_plan, anchor_query=original_query)
+        should_mine = cache_mode == "refresh_sources" or not self._source_sufficiency(reused_docs, anchors)["sufficient"]
+        if should_mine:
+            mined_docs, _, source_diagnostics, pubmed_inspector, arxiv_inspector = await self.run_mining_operation(refined_plan, anchor_query=original_query)
+        else:
+            mined_docs, source_diagnostics, pubmed_inspector, arxiv_inspector = [], {}, [], []
+        docs = [*reused_docs, *mined_docs]
+        doc_count = len(docs)
+        source_sufficiency = self._source_sufficiency(docs, anchors)
         self.last_source_diagnostics = source_diagnostics
         self.last_pubmed_inspector = pubmed_inspector
         self.last_arxiv_inspector = arxiv_inspector
         self.last_cache_diagnostics = cache_diagnostics
         self.last_mined_count = doc_count
 
-        if doc_count == 0 and any(
+        if not source_sufficiency["sufficient"]:
+            mismatch_detected = any(
             candidate.get("decision") in {
                 "rejected_intervention_mismatch", "rejected_population_mismatch", "rejected_background_only"
             }
             for trace in pubmed_inspector for candidate in trace.get("candidates", [])
-        ):
+            )
             return {
+                "status": "insufficient_evidence",
                 "report": {
-                    "answer": "This search did not find direct evidence for the requested intervention and patient population. The retrieved candidates cannot support an efficacy or safety conclusion for this question.",
+                    "answer": (
+                        "This search did not find direct evidence for the requested intervention and patient population. "
+                        "The retrieved candidates cannot support an efficacy or safety conclusion for this question."
+                        if mismatch_detected else
+                        "The available sources do not cover all of the question's required concepts, so the system did not generate a speculative answer."
+                    ),
                     "raw_docs_used": [],
                 },
                 "metadata": {
-                    "mined_count": 0,
+                    "mined_count": len(mined_docs),
                     "plan_executed": [step.query for step in refined_plan.plan],
                     "source_diagnostics": source_diagnostics,
                     "pubmed_inspector": pubmed_inspector,
                     "arxiv_inspector": arxiv_inspector,
                     "cache": cache_diagnostics,
+                    "source_sufficiency": source_sufficiency,
                 },
             }
-        if doc_count == 0:
-            raise RuntimeError("No eligible fresh academic sources were found. No answer was generated; review source diagnostics or try a narrower query.")
 
         # 5. Index & Synthesize
         if doc_count > 0:
             await self.populate_knowledge_base(docs)
 
         # Final synthesis handles both the mined docs and internal explanations
-        final_report = await self.synthesize_final_report(original_query)
+        try:
+            final_report = await self.synthesize_final_report(original_query)
+        except RuntimeError as error:
+            if "No evidence from this research run" not in str(error):
+                raise
+            source_sufficiency = {
+                **source_sufficiency,
+                "sufficient": False,
+                "reason": "indexed sources did not produce an eligible run-scoped retrieval context",
+            }
+            return {
+                "status": "insufficient_evidence",
+                "report": {
+                    "answer": "Sources were found, but none passed the final run-scoped retrieval selection. The system did not generate a speculative answer.",
+                    "raw_docs_used": [],
+                },
+                "metadata": {
+                    "mined_count": len(mined_docs),
+                    "plan_executed": [step.query for step in refined_plan.plan],
+                    "source_diagnostics": source_diagnostics,
+                    "pubmed_inspector": pubmed_inspector,
+                    "arxiv_inspector": arxiv_inspector,
+                    "cache": cache_diagnostics,
+                    "source_sufficiency": source_sufficiency,
+                },
+            }
         if not final_report.get("raw_docs_used"):
             raise RuntimeError("Fresh sources were indexed, but retrieval selected no evidence from this research run. No answer was generated.")
 
@@ -1826,6 +1983,7 @@ class Orchestrator:
                 "pubmed_inspector": pubmed_inspector,
                 "arxiv_inspector": arxiv_inspector,
                 "cache": cache_diagnostics,
+                "source_sufficiency": source_sufficiency,
             },
             "evaluation_dataset": golden_set
         }

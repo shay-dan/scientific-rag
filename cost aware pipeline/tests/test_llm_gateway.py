@@ -473,6 +473,14 @@ class LLMGatewayRoutingTests(unittest.IsolatedAsyncioTestCase):
 
 
 class LLMGatewayConfigurationTests(unittest.TestCase):
+    def test_query_repair_defaults_to_small_gpt_oss_model(self) -> None:
+        with patch.dict(os.environ, {
+            "GROQ_MODEL": "openai/gpt-oss-120b",
+            "OPENROUTER_MODEL": "openrouter/free",
+        }, clear=True):
+            self.assertEqual(llm_gateway.model_for("groq", "query_repair"), "openai/gpt-oss-20b")
+            self.assertEqual(llm_gateway.model_for("openrouter", "query_repair"), "openai/gpt-oss-20b")
+
     def test_default_gemini_timeout_is_45_seconds(self) -> None:
         with patch.dict(os.environ, {"LLM_REQUEST_TIMEOUT_SECONDS": "90", "LLM_GEMINI_TIMEOUT_SECONDS": ""}, clear=False):
             # Unset the optional override so the documented default is exercised.

@@ -1,6 +1,7 @@
 """FastAPI application entry point."""
 
 import asyncio
+import hashlib
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 import logging
@@ -16,6 +17,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from arq import create_pool
 from arq.connections import RedisSettings
 from arq.jobs import Job
@@ -23,15 +25,17 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import get_settings
-from .auth import BetaLimiter, Principal, principal_for_key, require_api_key
+from .auth import Principal, RedisBetaLimiter, principal_for_key, require_api_key
 from .db import close_database, get_session, initialize_database
 from .logging_config import configure_logging
 from .models import AuditEvent, EvaluationCase, EvaluationDataset, EvaluationResult, EvaluationRun, ResearchEvidence, ResearchFeedback, ResearchRun, SourceDocument
-from .schemas import EvaluationDatasetInput, EvaluationRunInput, HealthResponse, ResearchMode, ResearchRequest, ResearchResponse
-from .services import ResearchService, to_response
+from .schemas import EvidenceJobRequest, EvaluationDatasetInput, EvaluationRunInput, HealthResponse, ResearchCacheMode, ResearchMode, ResearchRequest, ResearchResponse
+from .services import PIPELINE_VERSION, ResearchService, to_response
 from .cost_policy import budget_for
+from .cost_control import CostBudgetExceeded
 from .evaluation import METRIC_NAMES, summarize_context_precision_views, summarize_scores
 from scientific_rag.llm_gateway import create_chat_model, model_for
+from scientific_rag.costing import calculate_cost
 
 
 @asynccontextmanager
@@ -42,7 +46,8 @@ async def lifespan(app: FastAPI):
     app.state.redis = await create_pool(RedisSettings.from_dsn(get_settings().redis_url))
     app.state.research_service = ResearchService(get_settings(), app.state.redis)
     app.state.settings = get_settings()
-    app.state.limiter = BetaLimiter(
+    app.state.limiter = RedisBetaLimiter(
+        app.state.redis,
         get_settings().rate_limit_requests_per_minute,
         get_settings().research_runs_per_day,
         get_settings().deep_research_runs_per_day,
@@ -54,7 +59,17 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Scientific RAG API", version="0.1.0", lifespan=lifespan)
-app.add_middleware(SessionMiddleware, secret_key=get_settings().app_session_secret or "development-only-change-me")
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=get_settings().app_session_secret or "development-only-change-me",
+    https_only=get_settings().app_secure_cookies,
+    same_site="lax",
+    max_age=8 * 60 * 60,
+)
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=[item.strip() for item in get_settings().app_allowed_hosts.split(",") if item.strip()],
+)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
 logger = logging.getLogger(__name__)
@@ -301,7 +316,9 @@ async def ops_retrieval_detail(request: Request, run_id: str, session: AsyncSess
     traces = model_metadata.get("retrieval_inspector", [])
     pubmed_traces = model_metadata.get("pubmed_inspector", [])
     arxiv_traces = model_metadata.get("arxiv_inspector", [])
-    return _operations_partial(request, "retrieval", {"run": run, "traces": traces, "pubmed_traces": pubmed_traces, "arxiv_traces": arxiv_traces})
+    return _operations_partial(request, "retrieval", {"run": run, "traces": traces, "pubmed_traces": pubmed_traces, "arxiv_traces": arxiv_traces,
+                                                        "cache_diagnostics": model_metadata.get("cache", {}),
+                                                        "source_sufficiency": model_metadata.get("source_sufficiency", {})})
 
 
 @app.get("/ui/ops/evaluations", response_class=HTMLResponse, include_in_schema=False)
@@ -375,6 +392,7 @@ async def ops_cancel_queue_run(request: Request, run_id: str, session: AsyncSess
 
 async def _cancel_research_run(request: Request, session: AsyncSession, run: ResearchRun, principal: Principal) -> None:
     """Abort one ARQ job and persist an auditable terminal state."""
+    was_queued = run.status == "queued"
     job_id = run.model_metadata.get("queue_job_id")
     try:
         if job_id:
@@ -389,6 +407,8 @@ async def _cancel_research_run(request: Request, session: AsyncSession, run: Res
         raise HTTPException(status_code=503, detail=f"The queue could not confirm cancellation ({type(error).__name__})") from error
     run.status = "cancelled"
     run.completed_at = datetime.now(timezone.utc)
+    if was_queued:
+        await request.app.state.research_service.cost_guard.release_research(str(run.id))
     session.add(AuditEvent(actor=principal.name, action="research.cancel_requested", target_type="research_run", target_id=str(run.id), details={"previous_status": "queued_or_running"}))
     await session.commit()
 
@@ -414,10 +434,10 @@ async def ops_configuration(request: Request):
 @app.post("/ui/research/{run_id}/feedback", response_class=HTMLResponse, include_in_schema=False)
 async def submit_research_feedback(request: Request, run_id: str, rating: Annotated[str, Form()], categories: Annotated[list[str], Form()] = [], comment: Annotated[str, Form(max_length=2000)] = "", session: AsyncSession = Depends(get_session)):
     principal = _ui_principal(request)
-    request.app.state.limiter.check_request(principal)
+    await request.app.state.limiter.check_request(principal)
     try:
         parsed_id = UUID(run_id)
-    except ValueError as error:
+    except (ValueError, CostBudgetExceeded) as error:
         raise HTTPException(status_code=404, detail="Research run not found") from error
     run = (await session.execute(select(ResearchRun).where(ResearchRun.id == parsed_id))).scalar_one_or_none()
     if run is None or (principal.role != "admin" and run.requested_by != principal.name):
@@ -455,15 +475,42 @@ async def ops_retry_failed_run(request: Request, run_id: str, session: AsyncSess
     return templates.TemplateResponse(request, "partials/research_progress.html", _progress_context(record))
 
 
-def _cost_dashboard(runs: list[ResearchRun]) -> dict:
+def _cost_dashboard(runs: list[ResearchRun], evaluation_runs: list[EvaluationRun] | None = None) -> dict:
     now = datetime.now(ZoneInfo("Asia/Jerusalem"))
     today = now.date()
     month_start = today.replace(day=1)
-    priced = [run for run in runs if run.model_metadata.get("llm_gateway", {}).get("estimated_cost_usd") is not None]
+    def run_cost(run: ResearchRun) -> float | None:
+        accounting = run.model_metadata.get("cost_accounting", {})
+        accounted = accounting.get("estimated_cost_usd")
+        if accounted is not None:
+            if not accounting.get("complete"):
+                reserved = accounting.get("reservation", {}).get("amount_usd") or run.model_metadata.get("cost_reservation", {}).get("amount_usd")
+                return max(float(accounted), float(reserved)) if reserved is not None else float(accounted)
+            return float(accounted)
+        gateway = run.model_metadata.get("llm_gateway", {})
+        total = 0.0
+        found = False
+        for stats in gateway.get("by_model", {}).values():
+            cost, _ = calculate_cost(str(stats.get("provider", "")), str(stats.get("model", "")), int(stats.get("input_tokens", 0)), int(stats.get("output_tokens", 0)))
+            if cost is not None and int(stats.get("attempts", 0)):
+                total += cost
+                found = True
+        embedding = run.model_metadata.get("embedding_usage", {})
+        embedding_cost, _ = calculate_cost("gemini", str(embedding.get("model", "")), int(embedding.get("input_tokens_estimated", 0)))
+        if embedding_cost is not None and int(embedding.get("calls", 0)):
+            total += embedding_cost
+            found = True
+        return round(total, 8) if found else None
+
+    costs_by_id = {run.id: run_cost(run) for run in runs}
+    priced = [run for run in runs if costs_by_id[run.id] is not None]
     daily_runs = [run for run in runs if run.created_at and run.created_at.astimezone(ZoneInfo("Asia/Jerusalem")).date() == today]
     monthly_runs = [run for run in runs if run.created_at and run.created_at.astimezone(ZoneInfo("Asia/Jerusalem")).date() >= month_start]
-    daily_cost = sum(float(run.model_metadata["llm_gateway"]["estimated_cost_usd"]) for run in priced if run.created_at and run.created_at.astimezone(ZoneInfo("Asia/Jerusalem")).date() == today)
-    monthly_cost = sum(float(run.model_metadata["llm_gateway"]["estimated_cost_usd"]) for run in priced if run.created_at and run.created_at.astimezone(ZoneInfo("Asia/Jerusalem")).date() >= month_start)
+    evaluation_runs = evaluation_runs or []
+    daily_evaluation_cost = sum(float(run.metrics.get("cost_reservation", {}).get("amount_usd", 0)) for run in evaluation_runs if run.created_at and run.created_at.astimezone(ZoneInfo("Asia/Jerusalem")).date() == today)
+    monthly_evaluation_cost = sum(float(run.metrics.get("cost_reservation", {}).get("amount_usd", 0)) for run in evaluation_runs if run.created_at and run.created_at.astimezone(ZoneInfo("Asia/Jerusalem")).date() >= month_start)
+    daily_cost = sum(float(costs_by_id[run.id] or 0) for run in daily_runs) + daily_evaluation_cost
+    monthly_cost = sum(float(costs_by_id[run.id] or 0) for run in monthly_runs) + monthly_evaluation_cost
     by_provider: dict[str, dict] = {}
     cache_hits = sum(1 for run in runs if run.model_metadata.get("cache_hit"))
     for run in runs:
@@ -474,26 +521,47 @@ def _cost_dashboard(runs: list[ResearchRun]) -> dict:
             bucket["input_tokens"] += int(stats.get("input_tokens", 0))
             bucket["output_tokens"] += int(stats.get("output_tokens", 0))
             if stats.get("estimated_cost_usd") is None:
-                bucket["cost_available"] = False
+                retro_cost, _ = calculate_cost(str(stats.get("provider", "")), str(stats.get("model", "")), int(stats.get("input_tokens", 0)), int(stats.get("output_tokens", 0)))
+                if retro_cost is None:
+                    bucket["cost_available"] = False
+                else:
+                    bucket["estimated_cost_usd"] += retro_cost
             else:
                 bucket["estimated_cost_usd"] += float(stats["estimated_cost_usd"])
+        embedding = run.model_metadata.get("embedding_usage", {})
+        if int(embedding.get("calls", 0)):
+            key = f"gemini:{embedding.get('model')}"
+            bucket = by_provider.setdefault(key, {"provider": "gemini", "model": embedding.get("model"), "calls": 0, "input_tokens": 0, "output_tokens": 0, "estimated_cost_usd": 0.0, "cost_available": True})
+            bucket["calls"] += int(embedding.get("calls", 0))
+            bucket["input_tokens"] += int(embedding.get("input_tokens_estimated", 0))
+            embedding_cost, _ = calculate_cost("gemini", str(embedding.get("model", "")), int(embedding.get("input_tokens_estimated", 0)))
+            if embedding_cost is None:
+                bucket["cost_available"] = False
+            else:
+                bucket["estimated_cost_usd"] += embedding_cost
     for model in by_provider.values():
         model["estimated_cost_usd"] = round(model["estimated_cost_usd"], 6) if model["cost_available"] else None
-    daily_budget = float(os.getenv("COST_DAILY_BUDGET_USD", "0") or 0)
-    monthly_budget = float(os.getenv("COST_MONTHLY_BUDGET_USD", "0") or 0)
-    fresh_costs = [float(run.model_metadata["llm_gateway"]["estimated_cost_usd"]) for run in priced if not run.model_metadata.get("cache_hit")]
+    settings = get_settings()
+    daily_budget = settings.cost_daily_budget_usd
+    monthly_budget = settings.cost_monthly_budget_usd
+    fresh_costs = [float(costs_by_id[run.id]) for run in priced if not run.model_metadata.get("cache_hit")]
     cache_savings_estimate = (sum(fresh_costs) / len(fresh_costs) * cache_hits) if fresh_costs else None
     recent_runs = [{"id": str(run.id), "question": run.question, "status": run.status,
                     "created_at": run.created_at.astimezone(ZoneInfo("Asia/Jerusalem")).strftime("%Y-%m-%d %H:%M") if run.created_at else "—",
-                    "cost": run.model_metadata.get("llm_gateway", {}).get("estimated_cost_usd")} for run in runs[:50]]
+                    "cost": costs_by_id[run.id], "reserved": run.model_metadata.get("cost_reservation", {}).get("amount_usd")} for run in runs[:50]]
+    active_reserved = sum(float(run.model_metadata.get("cost_reservation", {}).get("amount_usd", 0)) for run in runs if run.status in {"queued", "running"})
     usage_calls = sum(int(run.model_metadata.get("llm_gateway", {}).get("usage_attempts", 0)) for run in runs)
     total_llm_calls = sum(int(run.model_metadata.get("llm_gateway", {}).get("total_attempts", 0)) for run in runs)
     return {"run_count": len(runs), "runs": recent_runs, "priced_runs": len(priced), "today": today.isoformat(), "month": today.strftime("%B %Y"),
         "daily_cost": round(daily_cost, 6), "monthly_cost": round(monthly_cost, 6), "daily_budget": daily_budget or None,
         "daily_total_runs": len(daily_runs), "daily_priced_runs": sum(1 for run in daily_runs if run in priced),
         "monthly_total_runs": len(monthly_runs), "monthly_priced_runs": sum(1 for run in monthly_runs if run in priced),
-        "monthly_budget": monthly_budget or None, "daily_alert": bool(daily_budget and daily_cost > daily_budget),
-        "monthly_alert": bool(monthly_budget and monthly_cost > monthly_budget), "cache_hits": cache_hits,
+        "monthly_budget": monthly_budget or None,
+        "daily_alert": bool(daily_budget and daily_cost >= daily_budget * settings.cost_soft_alert_percent / 100),
+        "monthly_alert": bool(monthly_budget and monthly_cost >= monthly_budget * settings.cost_soft_alert_percent / 100),
+        "hard_limit_enabled": settings.cost_enforce_hard_limit, "soft_alert_percent": settings.cost_soft_alert_percent,
+        "evaluation_reserved": round(sum(float(run.metrics.get("cost_reservation", {}).get("amount_usd", 0)) for run in evaluation_runs), 6),
+        "active_reserved": round(active_reserved, 6), "cache_hits": cache_hits,
         "cache_savings_estimate": round(cache_savings_estimate, 6) if cache_savings_estimate is not None else None,
         "models": list(by_provider.values()), "input_tokens": sum(item["input_tokens"] for item in by_provider.values()),
         "output_tokens": sum(item["output_tokens"] for item in by_provider.values()),
@@ -505,7 +573,8 @@ def _cost_dashboard(runs: list[ResearchRun]) -> dict:
 async def ops_costs(request: Request, session: AsyncSession = Depends(get_session)):
     _ui_admin(request)
     runs = list((await session.execute(select(ResearchRun).order_by(ResearchRun.created_at.desc()))).scalars())
-    return _operations_partial(request, "costs", {"costs": _cost_dashboard(runs)})
+    evaluation_runs = list((await session.execute(select(EvaluationRun).order_by(EvaluationRun.created_at.desc()))).scalars())
+    return _operations_partial(request, "costs", {"costs": _cost_dashboard(runs, evaluation_runs)})
 
 
 @app.get("/ui/ops/health", response_class=HTMLResponse, include_in_schema=False)
@@ -603,9 +672,15 @@ async def evaluation_ui_submit(
         ))
         run = EvaluationRun(dataset_id=dataset.id, status="queued", metrics={"mode": selected_mode.value})
         session.add(run)
+        await session.flush()
+        reservation = await request.app.state.research_service.cost_guard.reserve_evaluation(str(run.id), 1)
+        run.metrics = {**run.metrics, "cost_reservation": {**reservation.as_dict(), "scope": "judge_upper_bound", "case_count": 1}}
         await session.commit()
         await request.app.state.redis.enqueue_job("run_evaluation_job", str(run.id))
         return templates.TemplateResponse(request, "partials/evaluation_progress.html", _evaluation_progress_context(run))
+    except CostBudgetExceeded as error:
+        await session.rollback()
+        return templates.TemplateResponse(request, "partials/evaluation_error.html", {"message": str(error)})
     except Exception:
         logger.exception("ui_evaluation_start_failed")
         return templates.TemplateResponse(request, "partials/evaluation_error.html", {"message": "Evaluation could not start. Use a new dataset name and try again."})
@@ -718,21 +793,25 @@ async def research_ui_submit(
 ):
     try:
         principal = _ui_principal(request)
-        request.app.state.limiter.check_request(principal)
+        await request.app.state.limiter.check_request(principal)
         selected_mode = ResearchMode(mode)
         if selected_mode is ResearchMode.deep and not get_settings().enable_deep_research:
             raise ValueError("Deep research is disabled")
-        request.app.state.limiter.consume_research_run(principal, selected_mode.value)
+        await request.app.state.limiter.consume_research_run(principal, selected_mode.value)
         service: ResearchService = request.app.state.research_service
         if action not in {"cached", "fresh", "extend"}:
             raise ValueError("Unknown research action")
+        cache_mode = {
+            "cached": ResearchCacheMode.use_cached_answer,
+            "fresh": ResearchCacheMode.regenerate_answer,
+            "extend": ResearchCacheMode.refresh_sources,
+        }[action]
         response = await service.queue(
             session,
             question,
             selected_mode,
             actor=principal.name,
-            bypass_cache=action in {"fresh", "extend"},
-            force_mining=action == "extend",
+            cache_mode=cache_mode,
         )
         if response.cached:
             return templates.TemplateResponse(request, "partials/research_result.html", {"response": response, "question": question})
@@ -756,7 +835,7 @@ async def research_ui_submit(
 @app.post("/ui/research/{run_id}/cancel", response_class=HTMLResponse, include_in_schema=False)
 async def research_ui_cancel(request: Request, run_id: str, session: AsyncSession = Depends(get_session)):
     principal = _ui_principal(request)
-    request.app.state.limiter.check_request(principal)
+    await request.app.state.limiter.check_request(principal)
     try:
         parsed_id = UUID(run_id)
     except ValueError as error:
@@ -773,13 +852,13 @@ async def research_ui_cancel(request: Request, run_id: str, session: AsyncSessio
 @app.get("/ui/research/{run_id}/status", response_class=HTMLResponse, include_in_schema=False)
 async def research_ui_status(request: Request, run_id: str, session: AsyncSession = Depends(get_session)):
     principal = _ui_principal(request)
-    request.app.state.limiter.check_request(principal)
+    await request.app.state.limiter.check_request(principal)
     record = (await session.execute(select(ResearchRun).where(ResearchRun.id == run_id))).scalar_one_or_none()
     if record is not None and principal.role != "admin" and record.requested_by != principal.name:
         raise HTTPException(status_code=404, detail="Research run not found")
     if record is None:
         return templates.TemplateResponse(request, "partials/research_error.html", {"message": "This research run no longer exists."})
-    if record.status == "completed":
+    if record.status in {"completed", "insufficient_evidence"}:
         response = to_response(record, await request.app.state.research_service.sources_for_run(session, record.id))
         return templates.TemplateResponse(request, "partials/research_result.html", {"response": response, "question": record.question})
     if record.status == "failed":
@@ -791,6 +870,12 @@ async def research_ui_status(request: Request, run_id: str, session: AsyncSessio
 async def request_logging(request: Request, call_next):
     request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
     start = time.perf_counter()
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"} and not request.url.path.startswith("/v1/"):
+        allowed_origins = {item.strip().rstrip("/") for item in get_settings().app_allowed_origins.split(",") if item.strip()}
+        origin = (request.headers.get("origin") or "").rstrip("/")
+        if origin not in allowed_origins:
+            logger.warning("csrf_origin_rejected method=%s path=%s", request.method, request.url.path)
+            return JSONResponse(status_code=403, content={"detail": "Cross-site request rejected"})
     try:
         response = await call_next(request)
     except Exception:
@@ -798,6 +883,11 @@ async def request_logging(request: Request, call_next):
         raise
     elapsed_ms = (time.perf_counter() - start) * 1000
     response.headers["X-Request-ID"] = request_id
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "same-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
     logger.info(
         "request_completed request_id=%s method=%s path=%s status=%s duration_ms=%.1f",
         request_id,
@@ -818,13 +908,15 @@ async def health(session: AsyncSession = Depends(get_session)) -> HealthResponse
 @app.post("/v1/research", response_model=ResearchResponse, tags=["research"])
 async def research(request: Request, payload: ResearchRequest, session: AsyncSession = Depends(get_session)) -> ResearchResponse:
     principal = require_api_key(request)
-    request.app.state.limiter.check_request(principal)
+    await request.app.state.limiter.check_request(principal)
     if payload.mode is ResearchMode.deep and not get_settings().enable_deep_research:
         raise HTTPException(status_code=422, detail="Deep research is disabled")
-    request.app.state.limiter.consume_research_run(principal, payload.mode.value)
+    await request.app.state.limiter.consume_research_run(principal, payload.mode.value)
     service: ResearchService = request.app.state.research_service
     try:
-        return await service.run(session, payload.question, payload.mode, payload.generate_evaluation_dataset, actor=principal.name, fresh=payload.fresh)
+        selected_cache_mode = ResearchCacheMode.refresh_sources if payload.fresh else payload.cache_mode
+        return await service.run(session, payload.question, payload.mode, payload.generate_evaluation_dataset,
+                                 actor=principal.name, cache_mode=selected_cache_mode)
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     except TimeoutError as error:
@@ -833,10 +925,45 @@ async def research(request: Request, payload: ResearchRequest, session: AsyncSes
         raise HTTPException(status_code=502, detail="Research provider request failed") from error
 
 
+@app.post("/v1/evidence/jobs", response_model=ResearchResponse, tags=["research"])
+async def queue_evidence_job(request: Request, payload: EvidenceJobRequest, session: AsyncSession = Depends(get_session)) -> ResearchResponse:
+    """Queue generic research once per topic/pipeline version; never accept a user profile."""
+    principal = require_api_key(request)
+    await request.app.state.limiter.check_request(principal)
+    if principal.name != "health_coach" and principal.role != "admin":
+        raise HTTPException(status_code=403, detail="Service identity required")
+    if payload.mode is ResearchMode.deep:
+        raise HTTPException(status_code=422, detail="Deep mode is not available for background prefetch")
+    if any(marker in payload.question for marker in ("@", "\n", "\r")):
+        raise HTTPException(status_code=422, detail="Generic single-line research question required")
+    question = " ".join(payload.question.split())
+    lock_id = int.from_bytes(hashlib.sha256((payload.topic_key + PIPELINE_VERSION).encode()).digest()[:8], "big", signed=True)
+    # Transaction-scoped advisory lock prevents duplicate jobs from concurrent users.
+    await session.execute(text("SELECT pg_advisory_xact_lock(:lock_id)"), {"lock_id": lock_id})
+    record = (await session.execute(
+        select(ResearchRun).where(
+            ResearchRun.question == question,
+            ResearchRun.requested_by == principal.name,
+            ResearchRun.model_metadata["retrieval_version"].as_string() == PIPELINE_VERSION,
+            ResearchRun.status.in_(["queued", "running", "completed"]),
+        ).order_by(ResearchRun.created_at.desc()).limit(1)
+    )).scalar_one_or_none()
+    if record is not None and (record.status != "completed" or
+                               record.completed_at and datetime.now(timezone.utc) - record.completed_at < timedelta(days=30)):
+        sources = await request.app.state.research_service.sources_for_run(session, record.id) if record.status == "completed" else []
+        return to_response(record, sources, cached=True)
+    await request.app.state.limiter.consume_research_run(principal, payload.mode.value)
+    try:
+        return await request.app.state.research_service.queue(session, question, payload.mode, actor=principal.name,
+                                                              bypass_cache=True)
+    except CostBudgetExceeded as error:
+        raise HTTPException(status_code=429, detail="Research budget exceeded") from error
+
+
 @app.get("/v1/research/{run_id}", response_model=ResearchResponse, tags=["research"])
 async def get_research_run(request: Request, run_id: str, session: AsyncSession = Depends(get_session)) -> ResearchResponse:
     principal = require_api_key(request)
-    request.app.state.limiter.check_request(principal)
+    await request.app.state.limiter.check_request(principal)
     record = (await session.execute(select(ResearchRun).where(ResearchRun.id == run_id))).scalar_one_or_none()
     if record is None or (principal.role != "admin" and record.requested_by != principal.name):
         raise HTTPException(status_code=404, detail="Research run not found")
@@ -871,7 +998,15 @@ async def queue_evaluation(
     dataset = (await session.execute(select(EvaluationDataset).where(EvaluationDataset.id == dataset_id))).scalar_one_or_none()
     if dataset is None: raise HTTPException(status_code=404, detail="Dataset not found")
     run = EvaluationRun(dataset_id=dataset.id, status="queued", metrics={"mode": payload.mode.value})
-    session.add(run); await session.commit(); await session.refresh(run)
+    session.add(run); await session.flush()
+    case_count = int((await session.execute(select(func.count()).select_from(EvaluationCase).where(EvaluationCase.dataset_id == dataset.id))).scalar_one())
+    try:
+        reservation = await request.app.state.research_service.cost_guard.reserve_evaluation(str(run.id), case_count)
+    except CostBudgetExceeded as error:
+        await session.rollback()
+        raise HTTPException(status_code=429, detail=str(error)) from error
+    run.metrics = {**run.metrics, "cost_reservation": {**reservation.as_dict(), "scope": "judge_upper_bound", "case_count": case_count}}
+    await session.commit(); await session.refresh(run)
     await request.app.state.redis.enqueue_job("run_evaluation_job", str(run.id))
     return {"evaluation_run_id": str(run.id), "status": run.status}
 

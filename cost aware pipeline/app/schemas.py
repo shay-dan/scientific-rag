@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ResearchMode(str, Enum):
@@ -13,11 +13,28 @@ class ResearchMode(str, Enum):
     deep = "deep"
 
 
+class ResearchCacheMode(str, Enum):
+    use_cached_answer = "use_cached_answer"
+    regenerate_answer = "regenerate_answer"
+    refresh_sources = "refresh_sources"
+
+
 class ResearchRequest(BaseModel):
     question: str = Field(min_length=3, max_length=10_000)
     mode: ResearchMode = ResearchMode.fast
     generate_evaluation_dataset: bool = False
+    cache_mode: ResearchCacheMode = ResearchCacheMode.use_cached_answer
+    # Deprecated compatibility field. New clients should use cache_mode.
     fresh: bool = False
+
+
+class EvidenceJobRequest(BaseModel):
+    """Only a generic, non-user-specific research question may enter the shared store."""
+
+    model_config = ConfigDict(extra="forbid")
+    topic_key: str = Field(pattern=r"^[0-9a-f]{64}$")
+    question: str = Field(min_length=10, max_length=600)
+    mode: ResearchMode = ResearchMode.fast
 
 
 class SourceResponse(BaseModel):
@@ -27,6 +44,7 @@ class SourceResponse(BaseModel):
     external_id: str | None = None
     source_url: str | None = None
     study_design: str | None = None
+    excerpt: str | None = None
 
 
 class ResearchResponse(BaseModel):
@@ -43,6 +61,7 @@ class ResearchResponse(BaseModel):
     source_diagnostics: dict = Field(default_factory=dict)
     cache_diagnostics: dict = Field(default_factory=dict)
     llm_diagnostics: dict = Field(default_factory=dict)
+    source_sufficiency: dict = Field(default_factory=dict)
 
 
 class HealthResponse(BaseModel):

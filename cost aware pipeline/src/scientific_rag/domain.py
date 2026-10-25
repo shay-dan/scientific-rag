@@ -68,3 +68,10 @@ class ArxivRelevanceAssessment(BaseModel):
     )
     confidence: float = Field(ge=0, le=1, description="Confidence in the relevance decision, from 0.0 to 1.0.")
     reason: str = Field(description="Short rationale grounded only in the supplied title and abstract.")
+
+
+class QueryRepairProposal(BaseModel):
+    required_concepts: list[str] = Field(description="Two to four topic-defining concepts that must remain in the search.")
+    optional_concepts: list[str] = Field(description="Zero to four useful broadening concepts.")
+    excluded_concepts: list[str] = Field(description="Concepts that would indicate a clearly different topic.")
+    rationale: str = Field(description="A brief explanation of the repair grounded in the question and failed attempts.")

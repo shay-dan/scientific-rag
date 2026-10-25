@@ -1,6 +1,6 @@
 """Durable ARQ worker for research jobs."""
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from arq.connections import RedisSettings
 from arq import cron
@@ -11,7 +11,7 @@ from sqlalchemy import select
 from .config import get_settings
 from .db import close_database, initialize_database, session_factory
 from .models import AuditEvent, EvaluationCase, EvaluationResult, EvaluationRun, ResearchEvidence, ResearchRun
-from .schemas import ResearchMode
+from .schemas import ResearchCacheMode, ResearchMode
 from .services import ResearchService
 from .evaluation import JUDGE_PROMPT, JudgeScore, diagnose_reference_claims, diagnose_retrieved_contexts, score_with_ragas, summarize_scores
 from google import genai
@@ -29,29 +29,42 @@ async def worker_heartbeat(ctx):
     await ctx["redis"].set("scientific_rag:worker:heartbeat", datetime.now(timezone.utc).isoformat(), ex=60)
 
 
+async def reliability_probe_job(ctx, batch_id: str, item: int, delay_ms: int = 100):
+    """No-provider worker probe used only by the local recovery test script."""
+    await asyncio.sleep(max(delay_ms, 0) / 1000)
+    key = f"scientific_rag:reliability:worker:{batch_id}"
+    await ctx["redis"].sadd(key, str(item))
+    await ctx["redis"].expire(key, 600)
+    return item
+
+
 async def shutdown(ctx):
     await close_database()
 
 
 async def _mark_interrupted_evaluation_runs() -> None:
-    """A worker restart means this single-worker deployment cannot finish prior running jobs."""
+    """Fail only stale runs; starting another worker must not kill active work."""
     async with session_factory() as session:
-        runs = list((await session.execute(select(EvaluationRun).where(EvaluationRun.status == "running"))).scalars())
+        stale_before = datetime.now(timezone.utc) - timedelta(seconds=get_settings().evaluation_job_timeout_seconds + 300)
+        runs = list((await session.execute(select(EvaluationRun).where(
+            EvaluationRun.status == "running",
+            EvaluationRun.created_at < stale_before,
+        ))).scalars())
         for run in runs:
             run.status = "failed"
             run.metrics = {
                 **run.metrics,
                 "phase": "failed",
-                "failure": "Worker restarted before the evaluation completed. Queue a new run to retry.",
+                "failure": "Evaluation exceeded its worker timeout and was recovered as stale. Queue a new run to retry.",
             }
             run.completed_at = datetime.now(timezone.utc)
         if runs:
             await session.commit()
 
 
-async def run_research_job(ctx, run_id: str, question: str, mode: str, force_mining: bool):
+async def run_research_job(ctx, run_id: str, question: str, mode: str, cache_mode: str):
     try:
-        await ctx["service"].run_queued(UUID(run_id), question, ResearchMode(mode), force_mining)
+        await ctx["service"].run_queued(UUID(run_id), question, ResearchMode(mode), ResearchCacheMode(cache_mode))
     except asyncio.CancelledError:
         async with session_factory() as session:
             run = (await session.execute(select(ResearchRun).where(ResearchRun.id == UUID(run_id)))).scalar_one_or_none()
@@ -99,13 +112,27 @@ async def _run_evaluation_job(ctx, evaluation_run_id: str):
             result = EvaluationResult(evaluation_run_id=run.id, evaluation_case_id=case.id, status="running")
             session.add(result); await session.commit()
             try:
-                research = await ctx["service"].run(session, case.question, mode, False, actor=f"evaluation:{run.id}")
+                # Benchmarks must measure independent retrieval and synthesis,
+                # not repeatedly judge a cached answer from an earlier case/run.
+                research = await ctx["service"].run(
+                    session,
+                    case.question,
+                    mode,
+                    False,
+                    actor=f"evaluation:{run.id}",
+                    cache_mode=ResearchCacheMode.regenerate_answer,
+                )
                 contexts = list((await session.execute(
                     select(ResearchEvidence.content)
                     .where(ResearchEvidence.research_run_id == research.id)
                     .order_by(ResearchEvidence.ordinal)
                 )).scalars())
-                result.research_run_id, result.answer, result.retrieved_contexts, result.status = research.id, research.answer, contexts, "completed"
+                result.research_run_id, result.answer, result.retrieved_contexts = research.id, research.answer, contexts
+                if research.status == "insufficient_evidence":
+                    result.status = "insufficient_evidence"
+                    result.error = "The source sufficiency gate declined to generate a speculative answer."
+                else:
+                    result.status = "completed"
             except Exception as error:
                 result.status, result.error = "failed", str(error)
             run.metrics = {**run.metrics, "research_completed": case_index}
@@ -180,7 +207,11 @@ async def _run_evaluation_job(ctx, evaluation_run_id: str):
             run.metrics = {**run.metrics, "evaluation_completed": evaluation_index}
             await session.commit()
         judged = list((await session.execute(select(EvaluationResult).where(EvaluationResult.evaluation_run_id == run.id, EvaluationResult.status == "judged"))).scalars())
+        cost_reservation = dict(run.metrics.get("cost_reservation", {}))
         run.metrics = summarize_scores([result.judge_scores for result in judged])
+        if cost_reservation:
+            cost_reservation["status"] = "retained_upper_bound"
+            run.metrics["cost_reservation"] = cost_reservation
         run.metrics["mode"] = mode.value
         run.metrics["total_cases"] = len(cases)
         run.metrics["failed_cases"] = len(cases) - len(judged)
@@ -193,6 +224,7 @@ class WorkerSettings:
     functions = [
         func(run_research_job, timeout=max(get_settings().request_timeout_seconds, get_settings().deep_research_timeout_seconds)),
         func(run_evaluation_job, timeout=get_settings().evaluation_job_timeout_seconds, max_tries=1),
+        func(reliability_probe_job, timeout=30, keep_result=60),
     ]
     on_startup = startup
     on_shutdown = shutdown

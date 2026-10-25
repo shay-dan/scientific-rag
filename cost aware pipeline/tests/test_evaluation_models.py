@@ -255,6 +255,7 @@ class EvaluationModelTests(unittest.TestCase):
         self.assertIn("evaluation_job_timeout_seconds", worker)
         self.assertIn("max_tries=1", worker)
         self.assertIn("_mark_interrupted_evaluation_runs", worker)
+        self.assertIn("evaluation_job_timeout_seconds + 300", worker)
         self.assertIn('"research_completed"', worker)
         self.assertIn('"evaluation_completed"', worker)
 

@@ -417,6 +417,17 @@ class PgvectorRetrievalTests(unittest.TestCase):
         Orchestrator.enforce_source_policy(plan, anchor_query="How are machine-learning methods used for breast cancer diagnosis?")
         self.assertEqual(plan.plan[0].external_sources, ["pubmed", "arxiv"])
 
+    def test_medical_alphafold_question_routes_to_both_corpora(self) -> None:
+        plan = QueryPlan(plan=[SubQuery(
+            query="AlphaFold structure prediction for drug discovery",
+            source_type="academic", domains=["medical", "technical"], reasoning="test",
+        )])
+        Orchestrator.enforce_source_policy(
+            plan,
+            anchor_query="What are the strengths and limitations of AlphaFold-style structure prediction for drug discovery?",
+        )
+        self.assertEqual(plan.plan[0].external_sources, ["pubmed", "arxiv"])
+
     def test_no_fresh_sources_aborts_without_synthesis(self) -> None:
         async def verify() -> None:
             class VectorService:
@@ -436,8 +447,8 @@ class PgvectorRetrievalTests(unittest.TestCase):
             orchestrator.ask_db = AsyncMock(return_value=(None, {"decision": "reuse_existing"}))
             orchestrator.run_mining_operation = AsyncMock(return_value=([], 0, {"pubmed": {"requested": 1, "collected": 0}}, [], []))
             orchestrator.synthesize_final_report = AsyncMock()
-            with self.assertRaisesRegex(RuntimeError, "No eligible fresh academic sources"):
-                await orchestrator.execute_full_study("medical research question")
+            result = await orchestrator.execute_full_study("medical research question", cache_mode="refresh_sources")
+            self.assertEqual(result["status"], "insufficient_evidence")
             self.assertTrue(orchestrator.vs.restricted)
             orchestrator.ask_db.assert_not_awaited()
             orchestrator.synthesize_final_report.assert_not_awaited()
@@ -463,7 +474,7 @@ class PgvectorRetrievalTests(unittest.TestCase):
                 [{"candidates": [{"decision": "rejected_intervention_mismatch"}]}], [],
             ))
             orchestrator.synthesize_final_report = AsyncMock()
-            result = await orchestrator.execute_full_study("What clinical evidence supports CAR-T in B-cell lymphoma?")
+            result = await orchestrator.execute_full_study("What clinical evidence supports CAR-T in B-cell lymphoma?", cache_mode="refresh_sources")
             self.assertIn("did not find direct evidence", result["report"]["answer"])
             self.assertEqual(result["report"]["raw_docs_used"], [])
             orchestrator.synthesize_final_report.assert_not_awaited()
@@ -581,7 +592,7 @@ class PgvectorRetrievalTests(unittest.TestCase):
             SubQuery(query="surface code decoder algorithms for quantum error correction", source_type="academic", domains=["physics", "technical"], reasoning="test"),
         ])
         selected = Orchestrator.enforce_source_policy(plan)
-        self.assertEqual(selected.plan[0].external_sources, ["pubmed"])
+        self.assertEqual(selected.plan[0].external_sources, ["pubmed", "arxiv"])
         self.assertEqual(selected.plan[1].external_sources, ["pubmed"])
         self.assertEqual(selected.plan[2].external_sources, ["arxiv"])
 
@@ -729,7 +740,7 @@ class PgvectorRetrievalTests(unittest.TestCase):
         self.assertEqual(send.call_args.kwargs["timeout"], (5.0, 25.0))
         session.close()
 
-    def test_arxiv_transport_timeout_uses_two_bounded_attempts(self) -> None:
+    def test_arxiv_transport_timeout_is_bounded_per_retry_ladder_step(self) -> None:
         trace = {}
         with patch.object(_BoundedArxivSession, "delay_seconds", 0), patch.object(
             requests.Session, "request", side_effect=requests.exceptions.ReadTimeout("arXiv timed out"),
@@ -738,7 +749,9 @@ class PgvectorRetrievalTests(unittest.TestCase):
                 "surface code quantum error correction", source="arxiv", limit=1, diagnostics=trace,
             ))
         self.assertEqual(docs, [])
-        self.assertEqual(send.call_count, 2, trace["errors"])
+        # Three query-ladder steps, each with two bounded transport attempts.
+        self.assertEqual(send.call_count, 6, trace["errors"])
+        self.assertEqual(len(trace["attempts"]), 3)
         self.assertIn("ReadTimeout", trace["errors"][0])
 
     def test_arxiv_miner_requires_surface_code_phrase_when_query_requests_it(self) -> None:

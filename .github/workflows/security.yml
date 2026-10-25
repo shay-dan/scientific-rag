@@ -1,0 +1,48 @@
+name: Security
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  source-and-dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Audit Python dependencies
+        working-directory: cost aware pipeline
+        run: |
+          python -m pip install pip-audit
+          pip-audit -r requirements.txt
+      - name: Scan current source for secrets and vulnerabilities
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build production image
+        run: docker build -t scientific-rag-security:local "cost aware pipeline"
+      - name: Scan image
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: scientific-rag-security:local
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"

@@ -22,6 +22,7 @@ from pydantic import ValidationError
 
 from model_policy import ModelPolicy
 from .provider_throttle import ProviderThrottled, admit as shared_admit, cool_down as shared_cool_down, release as shared_release
+from .costing import calculate_cost
 
 
 logger = logging.getLogger("ResearchAgent.LLMGateway")
@@ -178,17 +179,14 @@ def summarize_trace(attempts: list[dict[str, Any]]) -> dict[str, Any]:
             bucket["output_tokens"] += int(output_tokens)
             model_bucket["input_tokens"] += int(input_tokens)
             model_bucket["output_tokens"] += int(output_tokens)
-            model_rate_key = re.sub(r"[^A-Z0-9]+", "_", model.upper()).strip("_")
-            input_rate = os.getenv(f"LLM_{provider.upper()}_{model_rate_key}_INPUT_USD_PER_MILLION") or os.getenv(f"LLM_{provider.upper()}_INPUT_USD_PER_MILLION")
-            output_rate = os.getenv(f"LLM_{provider.upper()}_{model_rate_key}_OUTPUT_USD_PER_MILLION") or os.getenv(f"LLM_{provider.upper()}_OUTPUT_USD_PER_MILLION")
-            if input_rate is None or output_rate is None:
+            call_cost, rate_source = calculate_cost(provider, model, int(input_tokens), int(output_tokens))
+            if call_cost is None:
                 cost_available = False
                 model_bucket["cost_available"] = False
             else:
-                call_cost = int(input_tokens) * float(input_rate) / 1_000_000
-                call_cost += int(output_tokens) * float(output_rate) / 1_000_000
                 estimated_cost_usd += call_cost
                 model_bucket["estimated_cost_usd"] += call_cost
+                model_bucket["rate_source"] = rate_source
         else:
             cost_available = False
             model_bucket["cost_available"] = False
@@ -280,9 +278,11 @@ def _key_for(provider: str) -> str:
 def model_for(provider: str, role: str) -> str:
     role_key = role.upper()
     if provider == "groq":
-        return os.getenv(f"GROQ_MODEL_{role_key}", os.getenv("GROQ_MODEL", "openai/gpt-oss-120b"))
+        role_default = "openai/gpt-oss-20b" if role == "query_repair" else os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+        return os.getenv(f"GROQ_MODEL_{role_key}", role_default)
     if provider == "openrouter":
-        return os.getenv(f"OPENROUTER_MODEL_{role_key}", os.getenv("OPENROUTER_MODEL", "openrouter/free"))
+        role_default = "openai/gpt-oss-20b" if role == "query_repair" else os.getenv("OPENROUTER_MODEL", "openrouter/free")
+        return os.getenv(f"OPENROUTER_MODEL_{role_key}", role_default)
     return ModelPolicy.from_environment().route_for(role).primary
 
 

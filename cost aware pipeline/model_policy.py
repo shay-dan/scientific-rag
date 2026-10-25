@@ -21,6 +21,7 @@ class ModelPolicy:
     gatekeeper: ModelRoute
     expert: ModelRoute
     qa_generator: ModelRoute
+    query_repair: ModelRoute
 
     @classmethod
     def from_environment(cls) -> "ModelPolicy":
@@ -38,6 +39,7 @@ class ModelPolicy:
             gatekeeper=route("GATEKEEPER", "gemini-3.5-flash-lite", "gemini-2.5-flash-lite"),
             expert=route("EXPERT", "gemini-3.6-flash", "gemini-2.5-flash"),
             qa_generator=route("QA_GENERATOR", "gemini-3.5-flash-lite", "gemini-2.5-flash"),
+            query_repair=route("QUERY_REPAIR", "gemini-2.5-flash-lite", "gemini-2.5-flash-lite"),
         )
 
     def route_for(self, role: str) -> ModelRoute:

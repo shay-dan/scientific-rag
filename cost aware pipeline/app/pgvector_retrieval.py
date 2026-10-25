@@ -16,6 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import Settings
 from .models import DocumentChunk, ParentDocument, SourceDocument
+from scientific_rag.costing import calculate_cost, estimate_text_tokens
+from scientific_rag.query_quality import concepts_covered
 
 
 PARENT_CHUNK_SIZE = 2_500
@@ -114,9 +116,40 @@ class PostgresVectorService:
         self.child_splitter = RecursiveCharacterTextSplitter(chunk_size=CHILD_CHUNK_SIZE, chunk_overlap=CHILD_CHUNK_OVERLAP)
         self.client = genai.Client(api_key=settings.google_api_key)
         self.retrieval_traces: list[dict] = []
+        self.embedding_usage = {"model": settings.embedding_model, "calls": 0, "input_tokens_estimated": 0, "estimated_cost_usd": 0.0, "rate_source": None}
 
     def restrict_final_retrieval_to_current_run(self) -> None:
         self.restrict_to_current_run = True
+
+    async def find_reusable_evidence(self, question: str, required_concepts: tuple[str, ...], *, limit: int) -> list[Document]:
+        """Find prior PostgreSQL evidence before making external mining calls.
+
+        Hybrid retrieval supplies candidates; deterministic anchor coverage then
+        prevents semantic similarity alone from importing an unrelated paper.
+        Returned parent contexts are copied into the new run by add_documents,
+        keeping final synthesis strictly run-scoped.
+        """
+        previous_scope = self.restrict_to_current_run
+        self.restrict_to_current_run = False
+        try:
+            candidates = await self.retrieve_context(question, top_n=max(limit * 3, 8))
+        finally:
+            self.restrict_to_current_run = previous_scope
+        retained: list[Document] = []
+        seen: set[str] = set()
+        for document in candidates:
+            identity = str(document.metadata.get("doc_id") or document.metadata.get("url") or document.metadata.get("title"))
+            haystack = f"{document.metadata.get('title', '')} {document.page_content}"
+            if required_concepts and len(concepts_covered(haystack, required_concepts)) < len(required_concepts):
+                continue
+            if identity in seen:
+                continue
+            seen.add(identity)
+            document.metadata = {**document.metadata, "reused_from_postgres": True}
+            retained.append(document)
+            if len(retained) >= limit:
+                break
+        return retained
 
     async def _embed(self, texts: list[str], task_type: str) -> list[list[float]]:
         if not texts:
@@ -140,6 +173,15 @@ class PostgresVectorService:
             return [list(item.values) for item in result.embeddings]
 
         vectors = await asyncio.to_thread(embed)
+        estimated_tokens = estimate_text_tokens(texts)
+        estimated_cost, rate_source = calculate_cost("gemini", self.settings.embedding_model, estimated_tokens)
+        self.embedding_usage["calls"] += 1
+        self.embedding_usage["input_tokens_estimated"] += estimated_tokens
+        if estimated_cost is None:
+            self.embedding_usage["estimated_cost_usd"] = None
+        elif self.embedding_usage["estimated_cost_usd"] is not None:
+            self.embedding_usage["estimated_cost_usd"] = round(float(self.embedding_usage["estimated_cost_usd"]) + estimated_cost, 8)
+            self.embedding_usage["rate_source"] = rate_source
         if len(vectors) != len(texts):
             raise ValueError(
                 f"Embedding provider returned {len(vectors)} vectors for {len(texts)} inputs"
