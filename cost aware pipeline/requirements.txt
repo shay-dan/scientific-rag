@@ -1,5 +1,6 @@
 -c constraints.txt
 
+alembic>=1.14,<2
 arxiv>=4.0.1,<5
 arq>=0.26,<1
 asyncpg>=0.30,<1

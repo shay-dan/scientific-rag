@@ -9,7 +9,7 @@ from uuid import UUID
 from sqlalchemy import select
 
 from .config import get_settings
-from .db import close_database, initialize_database, session_factory
+from .db import close_database, session_factory, verify_database_schema
 from .models import AuditEvent, EvaluationCase, EvaluationResult, EvaluationRun, ResearchEvidence, ResearchRun
 from .schemas import ResearchCacheMode, ResearchMode
 from .services import ResearchService
@@ -19,7 +19,7 @@ from google.genai import types
 
 
 async def startup(ctx):
-    await initialize_database()
+    await verify_database_schema()
     await _mark_interrupted_evaluation_runs()
     ctx["service"] = ResearchService(get_settings(), ctx["redis"])
     await ctx["redis"].set("scientific_rag:worker:heartbeat", datetime.now(timezone.utc).isoformat(), ex=60)

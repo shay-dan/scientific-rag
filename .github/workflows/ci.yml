@@ -73,12 +73,16 @@ jobs:
           scientific-rag-ci:local
           python -m unittest discover -s tests -v
 
-      - name: Enable pgvector in the integration database
-        run: >-
-          docker exec -e PGPASSWORD=ci_test_only
-          "${{ job.services.postgres.id }}"
-          psql -U scientific_rag -d scientific_rag
-          -c 'CREATE EXTENSION IF NOT EXISTS vector'
+      - name: Apply and verify database migrations
+        run: |
+          docker run --rm --network host \
+            --env DATABASE_URL=postgresql+asyncpg://scientific_rag:ci_test_only@127.0.0.1:5432/scientific_rag \
+            scientific-rag-ci:local \
+            alembic upgrade head
+          docker run --rm --network host \
+            --env DATABASE_URL=postgresql+asyncpg://scientific_rag:ci_test_only@127.0.0.1:5432/scientific_rag \
+            scientific-rag-ci:local \
+            alembic current --check-heads
 
       - name: Run PostgreSQL/pgvector and Redis integration tests
         run: >-

@@ -1,8 +1,11 @@
-"""Database engine, sessions, and startup schema initialization."""
+"""Database engine, sessions, and migration-state verification."""
 
 from collections.abc import AsyncIterator
+from pathlib import Path
 
-from sqlalchemy import text
+from alembic.config import Config
+from alembic.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from .config import get_settings
@@ -16,15 +19,27 @@ async def get_session() -> AsyncIterator[AsyncSession]:
         yield session
 
 
-async def initialize_database() -> None:
-    from .models import Base
+def _migration_head() -> str:
+    project_root = Path(__file__).resolve().parents[1]
+    config = Config(str(project_root / "alembic.ini"))
+    return ScriptDirectory.from_config(config).get_current_head()
 
-    async with engine.begin() as connection:
-        await connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-        await connection.run_sync(Base.metadata.create_all)
-        await connection.execute(text("ALTER TABLE research_runs ADD COLUMN IF NOT EXISTS requested_by VARCHAR(128)"))
-        await connection.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS parent_document_id UUID REFERENCES parent_documents(id) ON DELETE CASCADE"))
-        await connection.execute(text("ALTER TABLE evaluation_cases ADD COLUMN IF NOT EXISTS reference_claims JSON NOT NULL DEFAULT '[]'::json"))
+
+async def verify_database_schema() -> None:
+    """Refuse startup when Alembic has not upgraded the database to head."""
+
+    expected = _migration_head()
+    async with engine.connect() as connection:
+        current = await connection.run_sync(
+            lambda sync_connection: MigrationContext.configure(sync_connection).get_current_revision()
+        )
+    if current != expected:
+        current_label = current or "unversioned"
+        raise RuntimeError(
+            "Database schema is not current "
+            f"(database={current_label}, expected={expected}). "
+            "Run 'alembic upgrade head' before starting the API or worker."
+        )
 
 
 async def close_database() -> None:

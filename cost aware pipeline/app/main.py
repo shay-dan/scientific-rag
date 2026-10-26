@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import get_settings
 from .auth import Principal, RedisBetaLimiter, principal_for_key, require_api_key
-from .db import close_database, get_session, initialize_database
+from .db import close_database, get_session, verify_database_schema
 from .logging_config import configure_logging
 from .models import AuditEvent, EvaluationCase, EvaluationDataset, EvaluationResult, EvaluationRun, ResearchEvidence, ResearchFeedback, ResearchRun, SourceDocument
 from .schemas import EvidenceJobRequest, EvaluationDatasetInput, EvaluationRunInput, HealthResponse, ResearchCacheMode, ResearchMode, ResearchRequest, ResearchResponse
@@ -42,7 +42,7 @@ from scientific_rag.costing import calculate_cost
 async def lifespan(app: FastAPI):
     configure_logging()
     get_settings().validate_security_configuration()
-    await initialize_database()
+    await verify_database_schema()
     app.state.redis = await create_pool(RedisSettings.from_dsn(get_settings().redis_url))
     app.state.research_service = ResearchService(get_settings(), app.state.redis)
     app.state.settings = get_settings()

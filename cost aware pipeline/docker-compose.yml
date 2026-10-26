@@ -1,19 +1,31 @@
+x-app-service: &app-service
+  image: scientific-rag-app:local
+  env_file:
+    - .env
+  environment:
+    DATABASE_URL: postgresql+asyncpg://scientific_rag:${POSTGRES_PASSWORD}@db:5432/scientific_rag
+    REDIS_URL: redis://redis:6379/0
+
 services:
-  api:
+  migrate:
+    <<: *app-service
     build: .
-    ports:
-      - "8000:8000"
-    env_file:
-      - .env
-    environment:
-      DATABASE_URL: postgresql+asyncpg://scientific_rag:${POSTGRES_PASSWORD}@db:5432/scientific_rag
-      REDIS_URL: redis://redis:6379/0
+    command: alembic upgrade head
+    restart: "no"
     depends_on:
       db:
         condition: service_healthy
 
+  api:
+    <<: *app-service
+    ports:
+      - "8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
   worker:
-    build: .
+    <<: *app-service
     command: arq app.worker.WorkerSettings
     healthcheck:
       # Check the heartbeat written by the running worker instead of importing
@@ -23,14 +35,9 @@ services:
       timeout: 5s
       start_period: 30s
       retries: 3
-    env_file:
-      - .env
-    environment:
-      DATABASE_URL: postgresql+asyncpg://scientific_rag:${POSTGRES_PASSWORD}@db:5432/scientific_rag
-      REDIS_URL: redis://redis:6379/0
     depends_on:
-      db:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_started
 

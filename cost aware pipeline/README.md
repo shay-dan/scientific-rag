@@ -145,12 +145,40 @@ The runner performs a conservative cost preflight before creating anything. With
 
 Benchmark jobs have their own one-hour timeout (`EVALUATION_JOB_TIMEOUT_SECONDS=3600`), independent of the per-research-request timeout. The evaluation page reports research and judging progress for the current case.
 
+## Database migrations
+
+The PostgreSQL schema is versioned with Alembic. The API and worker no longer create or alter tables during startup. They verify that the database is at the current migration head and fail with an actionable error when it is not.
+
+Docker Compose runs a one-shot `migrate` service before starting the API and worker:
+
+```powershell
+docker compose up --build
+```
+
+For a manual deployment, apply migrations as a separate release step before starting application processes:
+
+```powershell
+alembic upgrade head
+alembic current --check-heads
+```
+
+The initial migration can create a fresh schema or adopt a schema created by earlier application versions without deleting existing rows. It also creates indexes that older startup-time column additions could not create. Always back up production before applying a migration. Downgrading the initial migration to `base` removes the application tables and is destructive.
+
+After changing `app/models.py`, generate a candidate migration, review it carefully, and test both upgrade and downgrade against a disposable database:
+
+```powershell
+alembic revision --autogenerate -m "describe the schema change"
+alembic upgrade head
+```
+
+Do not use `alembic stamp` as a shortcut on an unknown database: it records a version without applying or validating the schema.
+
 ## Run with Docker
 
 Install and start Docker Desktop (or use a working Docker Engine with Compose). For a fresh checkout of the application branch:
 
 ```powershell
-git clone --branch codex/production-rag-evaluation --single-branch https://github.com/shay-dan/scientific-rag.git
+git clone https://github.com/shay-dan/scientific-rag.git
 cd "scientific-rag/cost aware pipeline"
 ```
 

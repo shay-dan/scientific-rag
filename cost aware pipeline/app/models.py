@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import TSVECTOR, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -106,7 +106,12 @@ class EvaluationCase(Base):
     question: Mapped[str] = mapped_column(Text, nullable=False)
     reference_answer: Mapped[str] = mapped_column(Text, nullable=False)
     reference_context: Mapped[str | None] = mapped_column(Text)
-    reference_claims: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    reference_claims: Mapped[list] = mapped_column(
+        JSON,
+        nullable=False,
+        default=list,
+        server_default=text("'[]'::json"),
+    )
     provenance: Mapped[str] = mapped_column(String(32), nullable=False, default="human")
 
 

@@ -1,0 +1,9 @@
+Alembic migration scripts for the Scientific RAG PostgreSQL schema.
+
+Create a migration after changing app/models.py:
+
+    alembic revision --autogenerate -m "describe the schema change"
+
+Review the generated SQL, then apply it with:
+
+    alembic upgrade head
