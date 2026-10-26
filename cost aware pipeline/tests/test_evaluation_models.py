@@ -71,7 +71,7 @@ class EvaluationModelTests(unittest.TestCase):
 
     def test_ragas_is_a_declared_runtime_dependency(self) -> None:
         requirements = (project_root / "requirements.txt").read_text(encoding="utf-8")
-        self.assertIn("ragas>=0.2,<0.3", requirements)
+        self.assertIn("ragas>=0.4.3,<0.5", requirements)
         self.assertIn("rapidfuzz>=3,<4", requirements)
 
     def test_reference_context_is_used_by_the_ragas_evaluation_path(self) -> None:

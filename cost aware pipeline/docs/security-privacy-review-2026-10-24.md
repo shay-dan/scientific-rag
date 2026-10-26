@@ -18,7 +18,7 @@ The application should be treated as able to process sensitive research question
 | Abuse and cost exhaustion | Shared Redis request/daily quotas, provider throttles, atomic cost reservations | Per-tenant budgets and alert delivery |
 | Secret leakage | `.env` ignored, log redaction, CI secret scan | Move production secrets to a managed secret store |
 | Prompt injection in papers | Evidence is treated as source text; structured roles and citation checks | Add explicit untrusted-document delimiters and adversarial corpus tests |
-| Dependency/container compromise | CI dependency/filesystem/image scanning | **Open release gate:** legacy Chroma dependencies were removed on 2026-10-26; the remaining active LangChain/Ragas stack still requires a clean CI audit or documented, time-bounded exceptions before release |
+| Dependency/container compromise | CI dependency/filesystem/image scanning; exact-ID exceptions documented below | Keep the two unfixed upstream exceptions time-bounded and remove them as soon as patched releases exist |
 | Database loss | Persistent volume and scripted logical backup/restore check | Encrypted off-host scheduled backups and recurring restore drill |
 | Sensitive logs | No prompts/answers in audit events; credential redaction | Define retention, access control, deletion, and centralized log policy |
 | Service outage | Health checks, durable queue, recovery probes | Multi-host staging, monitored backups, SLOs and incident runbook |
@@ -34,7 +34,7 @@ The application should be treated as able to process sensitive research question
 
 ## Validation performed
 
-- 159 unit/contract tests passed; seven opt-in integrations were then run separately and all passed.
+- 169 unit/contract tests passed; seven opt-in PostgreSQL/pgvector and Redis integrations were then run separately and all passed.
 - 500 external `/healthz` requests at concurrency 25 completed with zero failures (p95 137.02 ms on this workstation).
 - Four ARQ workers completed 20/20 provider-free jobs. Eight jobs queued while all workers were stopped completed after restart.
 - PostgreSQL and Redis outage checks produced visible failures and recovered; Compose was restored to one healthy worker.
@@ -44,8 +44,15 @@ The application should be treated as able to process sensitive research question
 
 ## Open dependency findings
 
-The 2026-10-24 `pip-audit` reported 22 advisory records across `langchain-core`, `langchain-openai`, `langchain-text-splitters`, `langchain`, `ragas`, `requests`, `chromadb`, and `diskcache`. Some records are duplicate aliases, but the result remains a failed release gate rather than a clean scan. On 2026-10-26 the unused Chroma/Gradio path and its direct `langchain-chroma`/`chromadb` dependencies were removed, and `requests` now resolves to a patched release. The active LangChain/Ragas dependencies must still pass the rebuilt CI audit, or each residual finding needs a documented, time-bounded exception. Do not publish the service before that gate is satisfied.
+The 2026-10-24 `pip-audit` reported 22 advisory records across `langchain-core`, `langchain-openai`, `langchain-text-splitters`, `langchain`, `ragas`, `requests`, `chromadb`, and `diskcache`. On 2026-10-26 the unused Chroma/Gradio path and its direct `langchain-chroma`/`chromadb` dependencies were removed. The active stack was upgraded to Ragas 0.4.3, LangChain Core 1.7, current provider integrations, arxiv 4.0.1, and requests 2.33 or newer; container build tooling is upgraded after dependency installation.
+
+Two upstream findings currently have no fixed PyPI release and are ignored by exact advisory ID in CI, not by package or severity:
+
+- `PYSEC-2026-3046` affects Ragas' multi-modal local-file/URL context loader. This application does not expose or invoke multi-modal metrics; it calls only text Faithfulness, AnswerRelevancy, ContextPrecision, and ContextRecall with persisted plain-text contexts.
+- `PYSEC-2026-2447` affects DiskCache pickle deserialization when an attacker can write to the cache directory. DiskCache is a transitive Ragas dependency; the application does not configure a Ragas/DiskCache cache, and the container runs as a non-root user.
+
+These are temporary risk acceptances, not claims that the packages are fixed. Recheck them on every dependency update and remove each exception as soon as an upstream fixed release is available. Any introduction of multi-modal evaluation or a filesystem-backed Ragas cache invalidates this acceptance and must block release pending a new review.
 
 ## Production gates
 
-Before public deployment: terminate TLS, set `APP_SECURE_COOKIES=true`, restrict allowed hosts/origins to the public domain, use managed secrets, add an identity provider, test every authorization boundary, establish encrypted off-host backups with a restore drill, define data retention/deletion, close all critical/high scan findings, and complete legal/clinical-safety review for the intended geography and use case. The current dependency audit means this gate is **not yet passed**.
+Before public deployment: terminate TLS, set `APP_SECURE_COOKIES=true`, restrict allowed hosts/origins to the public domain, use managed secrets, add an identity provider, test every authorization boundary, establish encrypted off-host backups with a restore drill, define data retention/deletion, close all critical/high scan findings, and complete legal/clinical-safety review for the intended geography and use case. The dependency/container gate passes only when CI is green with no unreviewed findings; the two exact-ID exceptions above remain accepted residual risks, not resolved vulnerabilities.

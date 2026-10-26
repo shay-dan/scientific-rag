@@ -23,7 +23,17 @@ jobs:
         working-directory: cost aware pipeline
         run: |
           python -m pip install pip-audit
-          pip-audit -r requirements.txt
+          # Ragas 0.4.3 is the latest release. PYSEC-2026-3046 affects only its
+          # unused multi-modal URL/file loader. This application calls only the
+          # text Faithfulness, AnswerRelevancy, ContextPrecision and
+          # ContextRecall metrics with persisted plain-text contexts.
+          # PYSEC-2026-2447 is an unfixed pickle risk in Ragas' transitive
+          # diskcache dependency. No Ragas/diskcache cache is configured, and
+          # the container runs as a non-root user. Review both exceptions when
+          # a fixed upstream release becomes available.
+          pip-audit -r requirements.txt \
+            --ignore-vuln PYSEC-2026-3046 \
+            --ignore-vuln PYSEC-2026-2447
       - name: Scan current source for secrets and vulnerabilities
         uses: aquasecurity/trivy-action@v0.36.0
         with:

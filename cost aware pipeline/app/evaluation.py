@@ -340,21 +340,19 @@ async def score_ragas_context_precision(
     *, question: str, reference_answer: str, retrieved_contexts: list[str], api_key: str, judge_model: str,
 ) -> float:
     """Run only Ragas reference-based context precision for calibration."""
-    from langchain_google_genai import ChatGoogleGenerativeAI
-    from ragas.dataset_schema import SingleTurnSample
-    from ragas.llms import LangchainLLMWrapper
-    from ragas.metrics import LLMContextPrecisionWithReference
+    from ragas.llms import llm_factory
+    from ragas.metrics.collections import ContextPrecisionWithReference
 
-    sample = SingleTurnSample(
+    client = genai.Client(api_key=api_key)
+    llm = llm_factory(judge_model, provider="google", client=client)
+    metric = ContextPrecisionWithReference(llm=llm)
+    result = await metric.ascore(
         user_input=question,
         response=reference_answer,
         retrieved_contexts=retrieved_contexts,
         reference=reference_answer,
     )
-    metric = LLMContextPrecisionWithReference(
-        llm=LangchainLLMWrapper(ChatGoogleGenerativeAI(model=judge_model, google_api_key=api_key, temperature=0))
-    )
-    score = float(await metric.single_turn_ascore(sample))
+    score = float(result.value)
     if not math.isfinite(score) or not 0 <= score <= 1:
         raise ValueError("Ragas returned an invalid context-precision score")
     return score
@@ -373,38 +371,45 @@ async def score_with_ragas(
     embedding_dimensions: int,
 ) -> dict[str, float]:
     """Score one result with Ragas, without adding its import cost to API startup."""
-    from langchain_google_genai import ChatGoogleGenerativeAI
-    from ragas.dataset_schema import SingleTurnSample
-    from ragas.embeddings import LangchainEmbeddingsWrapper
-    from ragas.llms import LangchainLLMWrapper
-    from ragas.metrics import (
+    from ragas.embeddings import GoogleEmbeddings
+    from ragas.llms import llm_factory
+    from ragas.metrics.collections import (
         AnswerRelevancy,
+        ContextPrecisionWithReference,
+        ContextRecall,
         Faithfulness,
-        LLMContextPrecisionWithReference,
-        LLMContextRecall,
     )
 
-    llm = LangchainLLMWrapper(
-        ChatGoogleGenerativeAI(model=judge_model, google_api_key=api_key, temperature=0)
-    )
-    embeddings = LangchainEmbeddingsWrapper(NativeGeminiEmbeddings(api_key, embedding_model, embedding_dimensions))
-    sample_args = {
-        "user_input": question,
-        "response": answer,
-        "retrieved_contexts": retrieved_contexts,
-        "reference": reference_answer,
-    }
-    sample = SingleTurnSample(
-        **sample_args,
+    client = genai.Client(api_key=api_key)
+    llm = llm_factory(judge_model, provider="google", client=client)
+    embeddings = GoogleEmbeddings(
+        client=client,
+        model=embedding_model.removeprefix("models/"),
+        output_dimensionality=embedding_dimensions,
     )
     uses_reference_context = bool(reference_context and reference_context.strip())
-    metrics = {
-        "faithfulness": Faithfulness(llm=llm),
-        "answer_relevancy": AnswerRelevancy(llm=llm, embeddings=embeddings),
-        "context_precision": LLMContextPrecisionWithReference(llm=llm),
-        "context_recall": LLMContextRecall(llm=llm),
+    metrics_and_inputs = {
+        "faithfulness": (
+            Faithfulness(llm=llm),
+            {"user_input": question, "response": answer, "retrieved_contexts": retrieved_contexts},
+        ),
+        "answer_relevancy": (
+            AnswerRelevancy(llm=llm, embeddings=embeddings),
+            {"user_input": question, "response": answer},
+        ),
+        "context_precision": (
+            ContextPrecisionWithReference(llm=llm),
+            {"user_input": question, "reference": reference_answer, "retrieved_contexts": retrieved_contexts},
+        ),
+        "context_recall": (
+            ContextRecall(llm=llm),
+            {"user_input": question, "reference": reference_answer, "retrieved_contexts": retrieved_contexts},
+        ),
     }
-    scores = {name: float(await metric.single_turn_ascore(sample)) for name, metric in metrics.items()}
+    scores = {}
+    for name, (metric, metric_inputs) in metrics_and_inputs.items():
+        result = await metric.ascore(**metric_inputs)
+        scores[name] = float(result.value)
     scores["ragas_context_precision"] = scores["context_precision"]
     scores["ragas_context_recall"] = scores["context_recall"]
     if uses_reference_context:

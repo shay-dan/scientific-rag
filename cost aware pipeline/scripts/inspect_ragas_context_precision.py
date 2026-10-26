@@ -5,12 +5,9 @@ import asyncio
 import json
 from uuid import UUID
 
-from langchain_google_genai import ChatGoogleGenerativeAI
-from ragas.llms import LangchainLLMWrapper
-from ragas.metrics._context_precision import ContextPrecisionPrompt, QAC
-
 from app.config import get_settings
 from app.db import close_database, session_factory
+from app.evaluation import score_ragas_context_precision
 from app.models import EvaluationCase, EvaluationResult
 
 
@@ -26,39 +23,29 @@ async def main() -> None:
             if result is None:
                 raise ValueError("Evaluation result not found")
             case = await session.get(EvaluationCase, result.evaluation_case_id)
-            prompt = ContextPrecisionPrompt()
-            if args.claim_aware:
-                prompt.instruction = (
-                    "Given the question, reference answer, and one retrieved context, decide whether the context "
-                    "materially supports any factual claim in the reference answer or directly helps answer the "
-                    "question. Give verdict 1 when it supports at least one material claim; it does not need to "
-                    "support the complete reference answer. Give verdict 0 only when it is irrelevant or provides "
-                    "no usable evidence. Return JSON."
-                )
-            llm = LangchainLLMWrapper(ChatGoogleGenerativeAI(
-                model=settings.ragas_judge_model,
-                google_api_key=settings.google_api_key,
-                temperature=0,
-            ))
             output = {
-                "metric": "LLMContextPrecisionWithReference-claim-aware" if args.claim_aware else "LLMContextPrecisionWithReference",
-                "instruction": prompt.instruction,
+                "metric": "ContextPrecisionWithReference",
+                "note": (
+                    "Ragas 0.4 public API returns a score rather than exposing private prompt verdict objects. "
+                    "Each score below evaluates one persisted excerpt independently."
+                ),
+                "claim_aware_requested": args.claim_aware,
                 "question": case.question,
                 "reference_answer": case.reference_answer,
-                "verdicts": [],
+                "context_scores": [],
             }
             for rank, context in enumerate(result.retrieved_contexts, start=1):
-                verdicts = await prompt.generate_multiple(
-                    data=QAC(question=case.question, context=context, answer=case.reference_answer),
-                    llm=llm,
-                    callbacks=[],
+                score = await score_ragas_context_precision(
+                    question=case.question,
+                    reference_answer=case.reference_answer,
+                    retrieved_contexts=[context],
+                    api_key=settings.google_api_key,
+                    judge_model=settings.ragas_judge_model,
                 )
-                verdict = verdicts[0]
-                output["verdicts"].append({
+                output["context_scores"].append({
                     "rank": rank,
                     "context_preview": context[:500],
-                    "verdict": verdict.verdict,
-                    "reason": verdict.reason,
+                    "score": score,
                 })
             print(json.dumps(output, indent=2), flush=True)
     finally:

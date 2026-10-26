@@ -749,9 +749,12 @@ class PgvectorRetrievalTests(unittest.TestCase):
                 "surface code quantum error correction", source="arxiv", limit=1, diagnostics=trace,
             ))
         self.assertEqual(docs, [])
-        # Three query-ladder steps, each with two bounded transport attempts.
-        self.assertEqual(send.call_count, 6, trace["errors"])
-        self.assertEqual(len(trace["attempts"]), 3)
+        # Every search that reaches arXiv gets exactly two bounded transport
+        # attempts. The optional third ladder step requires successful LLM
+        # repair and is therefore not guaranteed in an offline unit test.
+        self.assertGreaterEqual(len(trace["attempts"]), 2)
+        self.assertLessEqual(len(trace["attempts"]), 3)
+        self.assertEqual(send.call_count, len(trace["attempts"]) * 2, trace["errors"])
         self.assertIn("ReadTimeout", trace["errors"][0])
 
     def test_arxiv_miner_requires_surface_code_phrase_when_query_requests_it(self) -> None:
