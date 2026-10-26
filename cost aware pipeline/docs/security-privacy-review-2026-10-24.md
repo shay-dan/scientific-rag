@@ -44,7 +44,7 @@ The application should be treated as able to process sensitive research question
 
 ## Open dependency findings
 
-The 2026-10-24 `pip-audit` reported 22 advisory records across `langchain-core`, `langchain-openai`, `langchain-text-splitters`, `langchain`, `ragas`, `requests`, `chromadb`, and `diskcache`. On 2026-10-26 the unused Chroma/Gradio path and its direct `langchain-chroma`/`chromadb` dependencies were removed. The active stack was upgraded to Ragas 0.4.3, LangChain Core 1.7, current provider integrations, arxiv 4.0.1, and requests 2.33 or newer; container build tooling is upgraded after dependency installation.
+The 2026-10-24 `pip-audit` reported 22 advisory records across `langchain-core`, `langchain-openai`, `langchain-text-splitters`, `langchain`, `ragas`, `requests`, `chromadb`, and `diskcache`. On 2026-10-26 the unused Chroma/Gradio path and its direct `langchain-chroma`/`chromadb` dependencies were removed. The active stack was upgraded to Ragas 0.4.3, LangChain Core 1.7, current provider integrations, arxiv 4.0.1, and requests 2.33 or newer. The production image removes `pip`, `setuptools`, and `wheel` after installing dependencies because build tooling is not needed at runtime; this also removes their bundled third-party packages from the runtime attack surface.
 
 Two upstream findings currently have no fixed PyPI release and are ignored by exact advisory ID in CI, not by package or severity:
 

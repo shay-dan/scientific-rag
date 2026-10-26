@@ -7,11 +7,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 COPY requirements.txt constraints.txt ./
 RUN pip install --no-cache-dir -r requirements.txt \
-    && pip install --no-cache-dir --upgrade \
-        "pip>=26.2" \
-        "setuptools>=84.1.0" \
-        "wheel>=0.46.2" \
-        "jaraco.context>=6.1.0"
+    && python -m pip uninstall --yes pip setuptools wheel
 COPY . .
 RUN useradd --create-home --uid 1000 appuser && chown -R appuser:appuser /app
 USER appuser
