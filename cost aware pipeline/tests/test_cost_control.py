@@ -55,10 +55,35 @@ class AtomicFakeRedis:
 
 
 class PricingTests(unittest.TestCase):
+    def test_gemini_25_flash_judge_has_dated_official_rate(self):
+        cost, source = calculate_cost("gemini", "gemini-2.5-flash", 1_000_000, 1_000_000)
+        self.assertEqual(cost, 2.8)
+        self.assertEqual(source, "google-pricing-2026-10-27")
+
     def test_builtin_groq_rate_prices_usage(self):
         cost, source = calculate_cost("groq", "openai/gpt-oss-120b", 1_000_000, 1_000_000)
         self.assertEqual(cost, 0.75)
         self.assertEqual(source, "builtin-2026-10-24")
+
+    def test_paid_openrouter_gpt_oss_rate_is_known(self):
+        cost, source = calculate_cost("openrouter", "openai/gpt-oss-120b", 1_000_000, 1_000_000)
+        self.assertEqual(cost, 0.18)
+        self.assertEqual(source, "openrouter-model-page-2026-10-28")
+
+    def test_gemini_38_flash_rate_is_known(self):
+        cost, source = calculate_cost("gemini", "gemini-3.8-flash", 1_000_000, 1_000_000)
+        self.assertEqual(cost, 4.5)
+        self.assertEqual(source, "google-pricing-2026-10-28")
+
+    def test_paid_openrouter_haiku_rate_is_known(self):
+        cost, source = calculate_cost("openrouter", "anthropic/claude-haiku-5.5", 1_000_000, 1_000_000)
+        self.assertEqual(cost, 0.6)
+        self.assertEqual(source, "openrouter-model-page-2026-10-28")
+
+    def test_paid_openrouter_qwen_rate_is_known(self):
+        cost, source = calculate_cost("openrouter", "qwen/qwen3.6-35b-a3b", 1_000_000, 1_000_000)
+        self.assertEqual(cost, 0.75)
+        self.assertEqual(source, "openrouter-model-page-2026-10-29")
 
     def test_environment_rate_overrides_builtin(self):
         with patch.dict(os.environ, {

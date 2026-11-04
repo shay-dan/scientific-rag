@@ -1,0 +1,1890 @@
+{
+  "dataset_name": "pilot-silver-v3",
+  "dataset_version": 3,
+  "generated_at": "2026-10-28T04:42:53.725535+00:00",
+  "provenance": "silver_auto_generated_independently_audited",
+  "human_review": false,
+  "source_dataset": "pilot-silver-v1-repair-candidates.json",
+  "cases": [
+    {
+      "id": "pm-01",
+      "source_group": "pubmed",
+      "question": "What is the current evidence for GLP-1 receptor agonists in obesity treatment?",
+      "reference_answer": "GLP-1-based medications and multiagonists can achieve up to 24% weight loss in the management of obesity. GLP-1 agonists affect diverse obesity etiopathogenic processes including food intake regulation, insulin resistance, and inflammation. GLP-1RAs significantly reduce total body weight, fat mass, and lean mass in adults with diabetes, overweight, or obesity. Tirzepatide and semaglutide are among the most effective for weight and fat mass reduction but are associated with significant lean mass reduction. Activation of the GLP-1 receptor helps reduce body weight by promoting satiety and delaying gastric emptying.",
+      "reference_claims": [
+        "GLP-1-based medications and multiagonists can achieve up to 24% weight loss in the management of obesity.",
+        "GLP-1 agonists affect diverse obesity etiopathogenic processes including food intake regulation, insulin resistance, and inflammation.",
+        "GLP-1RAs significantly reduce total body weight, fat mass, and lean mass in adults with diabetes, overweight, or obesity.",
+        "Tirzepatide and semaglutide are among the most effective for weight and fat mass reduction but are associated with significant lean mass reduction.",
+        "Activation of the GLP-1 receptor helps reduce body weight by promoting satiety and delaying gastric emptying."
+      ],
+      "reference_context": [
+        {
+          "context_id": "pm-01-v2-ctx-01",
+          "source_id": "PMID:40466247",
+          "title": "GLP-1-based medications: Mechanisms involved in obesity treatment.",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/40466247/",
+          "excerpt": "Thanks to biochemical engineering, the glucagon-like peptide-1 (GLP-1) molecule has emerged as an essential element in the development of diverse agonists and multiagonists, based in the GLP-1 structure for obesity treatment. These new antiobesity medications can reach up to 24% weight loss, which makes possible an effective management of obesity and its complications.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "6e8667a8d629ca8547917489bf2d70452966167b628fba52f1648ed16878a819"
+        },
+        {
+          "context_id": "pm-01-v2-ctx-02",
+          "source_id": "PMID:40466247",
+          "title": "GLP-1-based medications: Mechanisms involved in obesity treatment.",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/40466247/",
+          "excerpt": "Thanks to biochemical engineering, the glucagon-like peptide-1 (GLP-1) molecule has emerged as an essential element in the development of diverse agonists and multiagonists, based in the GLP-1 structure for obesity treatment. GLP-1 agonists affect diverse obesity etiopathogenic processes such as abnormal food intake regulation, adipocyte dysfunction, insulin resistance, adipokine production, inflammation, endothelial dysfunction, lipid metabolism, and oxidative stress.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "6e8667a8d629ca8547917489bf2d70452966167b628fba52f1648ed16878a819"
+        },
+        {
+          "context_id": "pm-01-v2-ctx-03",
+          "source_id": "PMID:39719170",
+          "title": "Effect of glucagon-like peptide-1 receptor agonists and co-agonists on body composition: Systematic review and network meta-analysis.",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/39719170/",
+          "excerpt": "This meta-analysis evaluated the effects of GLP-1RAs and GLP-1/GIP receptor dual agonists (GLP-1/GIP-RAs) on body composition, focusing on total weight, fat mass, and lean mass in adults with diabetes and/or overweight/obesity. GLP-1RAs significantly reduced total body weight (MD -3.55 kg, 95 %-CI [-4.81, -2.29]), fat mass (MD -2.95 kg, 95 %-CI [-4.11, -1.79]), and lean mass (MD -0.86 kg, 95 %-CI [-1.30, -0.42]), with lean mass loss comprising approximately 25 % of the total weight loss.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "72f32fdfa3130a2d4b228f1cc76ad7abdac68238eb4bcb80c25123ae55d97338"
+        },
+        {
+          "context_id": "pm-01-v2-ctx-04",
+          "source_id": "PMID:39719170",
+          "title": "Effect of glucagon-like peptide-1 receptor agonists and co-agonists on body composition: Systematic review and network meta-analysis.",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/39719170/",
+          "excerpt": "Tirzepatide (15 mg weekly) and semaglutide (2.4 mg weekly) were the most effective for weight and fat mass reduction but were among the least effective in preserving lean mass. CONCLUSIONS: Potent GLP-1 RAs, such as tirzepatide and semaglutide, demonstrate greater overall weight loss but are associated with a significant reduction in lean mass.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "72f32fdfa3130a2d4b228f1cc76ad7abdac68238eb4bcb80c25123ae55d97338"
+        },
+        {
+          "context_id": "pm-01-v2-ctx-05",
+          "source_id": "PMID:33213122",
+          "title": "Obesity and GLP-1.",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/33213122/",
+          "excerpt": "Through activation of the GLP-1 receptor they not only have an important role stimulating insulin secretion after meals, but with their extrapancreatic actions, both peripheral and central, they also help reduce body weight by promoting satiety and delaying gastric emptying. Liraglutide in a dose of 3 mg is currently the only drug of this group that is approved by the FDA to treat obesity, with weight losses up to 8.5 kg in relatively short periods of time.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "62af8da3c9380338e9f71c5790c72f7b53ee50a84a346a18f1f593572af90983"
+        }
+      ],
+      "provenance": "silver_auto_generated_independently_audited",
+      "human_review": false,
+      "generator": "groq:openai/gpt-oss-120b",
+      "validator": "gemini:gemini-2.5-flash-lite",
+      "validation_score": 0.9,
+      "claim_support": [
+        {
+          "claim_index": 1,
+          "original_claim_index": 1,
+          "claim": "GLP-1-based medications and multiagonists can achieve up to 24% weight loss in the management of obesity.",
+          "context_id": "pm-01-v2-ctx-01",
+          "source_id": "PMID:40466247",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "Source PMID:40466247 states that GLP-1-based medications and multiagonists can achieve up to 24% weight loss.",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 2,
+          "original_claim_index": 2,
+          "claim": "GLP-1 agonists affect diverse obesity etiopathogenic processes including food intake regulation, insulin resistance, and inflammation.",
+          "context_id": "pm-01-v2-ctx-02",
+          "source_id": "PMID:40466247",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "Source PMID:40466247 explicitly lists food intake regulation, insulin resistance, and inflammation as obesity etiopathogenic processes affected by GLP-1 agonists.",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 3,
+          "original_claim_index": 3,
+          "claim": "GLP-1RAs significantly reduce total body weight, fat mass, and lean mass in adults with diabetes, overweight, or obesity.",
+          "context_id": "pm-01-v2-ctx-03",
+          "source_id": "PMID:39719170",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "Source PMID:39719170 states that GLP-1RAs significantly reduced total body weight, fat mass, and lean mass in adults with diabetes and/or overweight/obesity.",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 4,
+          "original_claim_index": 4,
+          "claim": "Tirzepatide and semaglutide are among the most effective for weight and fat mass reduction but are associated with significant lean mass reduction.",
+          "context_id": "pm-01-v2-ctx-04",
+          "source_id": "PMID:39719170",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "Source PMID:39719170 states that Tirzepatide and semaglutide were the most effective for weight and fat mass reduction but were among the least effective in preserving lean mass, and are associated with a significant reduction in lean mass.",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 5,
+          "original_claim_index": 5,
+          "claim": "Activation of the GLP-1 receptor helps reduce body weight by promoting satiety and delaying gastric emptying.",
+          "context_id": "pm-01-v2-ctx-05",
+          "source_id": "PMID:33213122",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "Source PMID:33213122 states that activation of the GLP-1 receptor helps reduce body weight by promoting satiety and delaying gastric emptying.",
+          "mapping_method": "independent_semantic_source_audit"
+        }
+      ],
+      "claim_support_status": "independently_semantically_validated",
+      "reference_answer_original": "Glucagon-like peptide-1 (GLP-1) receptor agonists and related multiagonists have emerged as essential therapeutic options for obesity, achieving significant weight loss up to 24% and affecting multiple etiopathogenic processes such as food intake regulation, insulin resistance, and inflammation. Systematic reviews show that GLP-1RAs significantly reduce total body weight and fat mass, although potent agents like tirzepatide and semaglutide also lead to a notable reduction in lean mass. Additionally, GLP-1 receptor activation helps reduce body weight by promoting satiety, stimulating insulin secretion, and delaying gastric emptying.",
+      "reference_claims_original": [
+        "GLP-1-based medications and multiagonists can achieve up to 24% weight loss in the management of obesity.",
+        "GLP-1 agonists affect diverse obesity etiopathogenic processes including food intake regulation, insulin resistance, and inflammation.",
+        "GLP-1RAs significantly reduce total body weight, fat mass, and lean mass in adults with diabetes, overweight, or obesity.",
+        "Tirzepatide and semaglutide are among the most effective for weight and fat mass reduction but are associated with significant lean mass reduction.",
+        "Activation of the GLP-1 receptor helps reduce body weight by promoting satiety and delaying gastric emptying."
+      ],
+      "claim_audit": [
+        {
+          "claim_index": 1,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "40466247"
+          ],
+          "rationale": "Source PMID:40466247 states that GLP-1-based medications and multiagonists can achieve up to 24% weight loss."
+        },
+        {
+          "claim_index": 2,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "40466247"
+          ],
+          "rationale": "Source PMID:40466247 explicitly lists food intake regulation, insulin resistance, and inflammation as obesity etiopathogenic processes affected by GLP-1 agonists."
+        },
+        {
+          "claim_index": 3,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "39719170"
+          ],
+          "rationale": "Source PMID:39719170 states that GLP-1RAs significantly reduced total body weight, fat mass, and lean mass in adults with diabetes and/or overweight/obesity."
+        },
+        {
+          "claim_index": 4,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "39719170"
+          ],
+          "rationale": "Source PMID:39719170 states that Tirzepatide and semaglutide were the most effective for weight and fat mass reduction but were among the least effective in preserving lean mass, and are associated with a significant reduction in lean mass."
+        },
+        {
+          "claim_index": 5,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "33213122"
+          ],
+          "rationale": "Source PMID:33213122 states that activation of the GLP-1 receptor helps reduce body weight by promoting satiety and delaying gastric emptying."
+        }
+      ],
+      "benchmark_status": "accepted_repaired",
+      "eligible_for_benchmark": true
+    },
+    {
+      "id": "pm-02",
+      "source_group": "pubmed",
+      "question": "What roles does the gut microbiome play in colorectal cancer development, detection, and therapy?",
+      "reference_answer": "The gut microbiome is involved in colorectal cancer carcinogenesis, tumor formation and disease progression. Variations in microbiome composition associated with geography, race, sex, and diet can inform CRC screening, early detection, and prediction of treatment outcomes. Modulating the gut microbiome is being investigated as a strategy to improve the efficacy of systemic therapies for CRC and to increase survival.",
+      "reference_claims": [
+        "The gut microbiome is involved in colorectal cancer carcinogenesis, tumor formation and disease progression.",
+        "Variations in microbiome composition associated with geography, race, sex, and diet can inform CRC screening, early detection, and prediction of treatment outcomes.",
+        "Modulating the gut microbiome is being investigated as a strategy to improve the efficacy of systemic therapies for CRC and to increase survival."
+      ],
+      "reference_context": [
+        {
+          "context_id": "pm-02-v2-ctx-01",
+          "source_id": "PMID:34895176",
+          "title": "Gut microbiome and its role in colorectal cancer.",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/34895176/",
+          "excerpt": "Colorectal cancer (CRC) is still one of the most common types of cancer in the world, and the gut microbiome plays an important role in its development. The microbiome is involved in the carcinogenesis, formation and progression of CRC as well as its response to different systemic therapies.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "71fa92d387d92a189916487dca8d00775fb43f60716654de3fa2207e78a322ef"
+        },
+        {
+          "context_id": "pm-02-v2-ctx-02",
+          "source_id": "PMID:34895176",
+          "title": "Gut microbiome and its role in colorectal cancer.",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/34895176/",
+          "excerpt": "The microbiome is involved in the carcinogenesis, formation and progression of CRC as well as its response to different systemic therapies. The composition of bacterial strains and the influence of geography, race, sex, and diet on the composition of the microbiome serve as important information for screening, early detection and prediction of the treatment outcome of CRC.Microbiome modulation is one of the most prospective new strategies in medicine to improve the health of individuals.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "71fa92d387d92a189916487dca8d00775fb43f60716654de3fa2207e78a322ef"
+        },
+        {
+          "context_id": "pm-02-v2-ctx-03",
+          "source_id": "PMID:34895176",
+          "title": "Gut microbiome and its role in colorectal cancer.",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/34895176/",
+          "excerpt": "The composition of bacterial strains and the influence of geography, race, sex, and diet on the composition of the microbiome serve as important information for screening, early detection and prediction of the treatment outcome of CRC.Microbiome modulation is one of the most prospective new strategies in medicine to improve the health of individuals. Therefore, future research and clinical trials on the gut microbiome in oncology as well as in the treatment of CRC patients are warranted to determine the efficacy of systemic treatments for CRC, minimize adverse effects and increase survival rates.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "71fa92d387d92a189916487dca8d00775fb43f60716654de3fa2207e78a322ef"
+        }
+      ],
+      "provenance": "silver_auto_generated_independently_audited",
+      "human_review": false,
+      "generator": "groq:openai/gpt-oss-120b",
+      "validator": "pending_stage3_independent_audit",
+      "validation_score": null,
+      "claim_support": [
+        {
+          "claim_index": 1,
+          "original_claim_index": 1,
+          "claim": "The gut microbiome is involved in colorectal cancer carcinogenesis, tumor formation and disease progression.",
+          "context_id": "pm-02-v2-ctx-01",
+          "source_id": "PMID:34895176",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "The abstract explicitly states the gut microbiome is involved in CRC carcinogenesis, formation, and progression.",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 2,
+          "original_claim_index": 2,
+          "claim": "Variations in microbiome composition associated with geography, race, sex, and diet can inform CRC screening, early detection, and prediction of treatment outcomes.",
+          "context_id": "pm-02-v2-ctx-02",
+          "source_id": "PMID:34895176",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "The abstract indicates that variations in microbiome composition influenced by geography, race, sex, and diet provide important information for CRC screening, early detection, and treatment outcome prediction.",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 3,
+          "original_claim_index": 3,
+          "claim": "Modulating the gut microbiome is being investigated as a strategy to improve the efficacy of systemic therapies for CRC and to increase survival.",
+          "context_id": "pm-02-v2-ctx-03",
+          "source_id": "PMID:34895176",
+          "decision": "supported",
+          "confidence": 0.9,
+          "rationale": "The abstract states that future research and clinical trials on microbiome modulation are warranted to determine the efficacy of systemic CRC treatments and increase survival rates.",
+          "mapping_method": "independent_semantic_source_audit"
+        }
+      ],
+      "claim_support_status": "independently_semantically_validated",
+      "reference_answer_original": "Evidence shows that the gut microbiome is involved in colorectal cancer (CRC) carcinogenesis, tumor formation and disease progression. Differences in bacterial composition linked to geography, race, sex and diet provide useful information for CRC screening, early detection and prediction of treatment response. Consequently, strategies that modulate the microbiome are being explored to enhance the efficacy of systemic therapies, reduce adverse effects and improve patient survival.",
+      "reference_claims_original": [
+        "The gut microbiome is involved in colorectal cancer carcinogenesis, tumor formation and disease progression.",
+        "Variations in microbiome composition associated with geography, race, sex, and diet can inform CRC screening, early detection, and prediction of treatment outcomes.",
+        "Modulating the gut microbiome is being investigated as a strategy to improve the efficacy of systemic therapies for CRC and to increase survival."
+      ],
+      "claim_audit": [
+        {
+          "claim_index": 1,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "PMID:34895176"
+          ],
+          "rationale": "The abstract explicitly states the gut microbiome is involved in CRC carcinogenesis, formation, and progression.",
+          "judge_returned": true
+        },
+        {
+          "claim_index": 2,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "PMID:34895176"
+          ],
+          "rationale": "The abstract indicates that variations in microbiome composition influenced by geography, race, sex, and diet provide important information for CRC screening, early detection, and treatment outcome prediction.",
+          "judge_returned": true
+        },
+        {
+          "claim_index": 3,
+          "decision": "supported",
+          "confidence": 0.9,
+          "source_ids": [
+            "PMID:34895176"
+          ],
+          "rationale": "The abstract states that future research and clinical trials on microbiome modulation are warranted to determine the efficacy of systemic CRC treatments and increase survival rates.",
+          "judge_returned": true
+        }
+      ],
+      "benchmark_status": "accepted_repaired",
+      "eligible_for_benchmark": true
+    },
+    {
+      "id": "pm-03",
+      "source_group": "pubmed",
+      "question": "What are the demonstrated clinical successes and current challenges of CAR-T cell therapy in hematologic versus solid tumors?",
+      "reference_answer": "CAR-T cell therapy has demonstrated clinical success in hematologic malignancies. The efficacy of CAR-T cell therapy in solid tumors is limited by antigenic heterogeneity and the immunosuppressive tumor microenvironment. Research efforts aim to improve solid-tumor CAR-T therapy by enhancing T-cell persistence, targeting multiple antigens, and employing allogeneic manufacturing approaches. Key challenges for CAR-T therapy in solid tumors include antigen selection, tolerability, and safety concerns. CAR-T therapy is expected to become an important component of individualized cancer immunotherapy in the future.",
+      "reference_claims": [
+        "CAR-T cell therapy has demonstrated clinical success in hematologic malignancies.",
+        "The efficacy of CAR-T cell therapy in solid tumors is limited by antigenic heterogeneity and the immunosuppressive tumor microenvironment.",
+        "Research efforts aim to improve solid-tumor CAR-T therapy by enhancing T-cell persistence, targeting multiple antigens, and employing allogeneic manufacturing approaches.",
+        "Key challenges for CAR-T therapy in solid tumors include antigen selection, tolerability, and safety concerns.",
+        "CAR-T therapy is expected to become an important component of individualized cancer immunotherapy in the future."
+      ],
+      "reference_context": [
+        {
+          "context_id": "pm-03-v2-ctx-01",
+          "source_id": "PMID:38275119",
+          "title": "CAR‑T cell therapy: A breakthrough in traditional cancer treatment strategies (Review).",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/38275119/",
+          "excerpt": "Chimeric antigen receptor (CAR)‑T cell therapy is an innovative approach to immune cell therapy that works by modifying the T cells of a patient to express the CAR protein on their surface, and thus induce their recognition and destruction of cancer cells. CAR‑T cell therapy has shown some success in treating hematological tumors, but it still faces a number of challenges in the treatment of solid tumors, such as antigen selection, tolerability and safety.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "cb6855074ad6ed15e0f6788428c8448bf8abeb00557c609b1acc6cab21b9a290"
+        },
+        {
+          "context_id": "pm-03-v2-ctx-02",
+          "source_id": "PMID:40233718",
+          "title": "CAR-T therapy in solid tumors.",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/40233718/",
+          "excerpt": "While chimeric antigen receptor (CAR) T cell therapy has shown great success in hematologic malignancies, the effectiveness in solid tumors has been limited by several factors, including antigenic heterogeneity and the immunosuppressive nature of the tumor microenvironment (TME). In this review, we discuss the advancements made in clinical studies and challenges faced by CAR-T therapy for solid tumors.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "407bb70688c9a712891fc5adbe6fccaa741af83a76f297b86aa79e5a83c2c6b6"
+        },
+        {
+          "context_id": "pm-03-v2-ctx-03",
+          "source_id": "PMID:40233718",
+          "title": "CAR-T therapy in solid tumors.",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/40233718/",
+          "excerpt": "In this review, we discuss the advancements made in clinical studies and challenges faced by CAR-T therapy for solid tumors. To enhance CAR-T cell efficacy in solid tumors, we explore strategies such as enhancing T cell persistence and cytotoxicity, targeting multiple antigens, and utilizing innovative allogeneic CAR-T cell manufacturing.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "407bb70688c9a712891fc5adbe6fccaa741af83a76f297b86aa79e5a83c2c6b6"
+        },
+        {
+          "context_id": "pm-03-v2-ctx-04",
+          "source_id": "PMID:38275119",
+          "title": "CAR‑T cell therapy: A breakthrough in traditional cancer treatment strategies (Review).",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/38275119/",
+          "excerpt": "Chimeric antigen receptor (CAR)‑T cell therapy is an innovative approach to immune cell therapy that works by modifying the T cells of a patient to express the CAR protein on their surface, and thus induce their recognition and destruction of cancer cells. CAR‑T cell therapy has shown some success in treating hematological tumors, but it still faces a number of challenges in the treatment of solid tumors, such as antigen selection, tolerability and safety.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "cb6855074ad6ed15e0f6788428c8448bf8abeb00557c609b1acc6cab21b9a290"
+        },
+        {
+          "context_id": "pm-03-v2-ctx-05",
+          "source_id": "PMID:38275119",
+          "title": "CAR‑T cell therapy: A breakthrough in traditional cancer treatment strategies (Review).",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/38275119/",
+          "excerpt": "In response to these issues, studies continue to improve the design of CAR‑T cells in pursuit of improved therapeutic efficacy and safety. In the future, CAR‑T cell therapy is expected to become an important cancer treatment, and may provide new ideas and strategies for individualized immunotherapy.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "cb6855074ad6ed15e0f6788428c8448bf8abeb00557c609b1acc6cab21b9a290"
+        }
+      ],
+      "provenance": "silver_auto_generated_independently_audited",
+      "human_review": false,
+      "generator": "groq:openai/gpt-oss-120b",
+      "validator": "pending_stage3_independent_audit",
+      "validation_score": null,
+      "claim_support": [
+        {
+          "claim_index": 1,
+          "original_claim_index": 1,
+          "claim": "CAR-T cell therapy has demonstrated clinical success in hematologic malignancies.",
+          "context_id": "pm-03-v2-ctx-01",
+          "source_id": "PMID:38275119",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "Both sources state that CAR-T cell therapy has shown success in treating hematological tumors or malignancies.",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 2,
+          "original_claim_index": 2,
+          "claim": "The efficacy of CAR-T cell therapy in solid tumors is limited by antigenic heterogeneity and the immunosuppressive tumor microenvironment.",
+          "context_id": "pm-03-v2-ctx-02",
+          "source_id": "PMID:40233718",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "Source PMID:40233718 explicitly states that CAR-T efficacy in solid tumors is limited by antigenic heterogeneity and the immunosuppressive tumor microenvironment.",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 3,
+          "original_claim_index": 3,
+          "claim": "Research efforts aim to improve solid-tumor CAR-T therapy by enhancing T-cell persistence, targeting multiple antigens, and employing allogeneic manufacturing approaches.",
+          "context_id": "pm-03-v2-ctx-03",
+          "source_id": "PMID:40233718",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "Source PMID:40233718 discusses strategies to enhance CAR-T cell efficacy in solid tumors, including enhancing T cell persistence, targeting multiple antigens, and utilizing allogeneic manufacturing.",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 4,
+          "original_claim_index": 4,
+          "claim": "Key challenges for CAR-T therapy in solid tumors include antigen selection, tolerability, and safety concerns.",
+          "context_id": "pm-03-v2-ctx-04",
+          "source_id": "PMID:38275119",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "Source PMID:38275119 lists antigen selection, tolerability, and safety as challenges for CAR-T cell therapy in solid tumors.",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 5,
+          "original_claim_index": 5,
+          "claim": "CAR-T therapy is expected to become an important component of individualized cancer immunotherapy in the future.",
+          "context_id": "pm-03-v2-ctx-05",
+          "source_id": "PMID:38275119",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "Source PMID:38275119 states that CAR-T cell therapy is expected to become an important cancer treatment and provide strategies for individualized immunotherapy in the future.",
+          "mapping_method": "independent_semantic_source_audit"
+        }
+      ],
+      "claim_support_status": "independently_semantically_validated",
+      "reference_answer_original": "CAR‑T cell therapy has achieved notable clinical success in treating hematologic malignancies, as reported in recent reviews. In contrast, its effectiveness in solid tumors remains limited, primarily because of antigenic heterogeneity and an immunosuppressive tumor microenvironment. Ongoing research seeks to overcome these barriers by improving T‑cell persistence, targeting multiple antigens simultaneously, and developing allogeneic manufacturing methods. Additional obstacles specific to solid‑tumor applications include selecting appropriate antigens and managing tolerability and safety issues. Despite these challenges, experts anticipate that CAR‑T therapy will become a key element of personalized cancer immunotherapy in the future.",
+      "reference_claims_original": [
+        "CAR‑T cell therapy has demonstrated clinical success in hematologic malignancies.",
+        "The efficacy of CAR‑T cell therapy in solid tumors is limited by antigenic heterogeneity and the immunosuppressive tumor microenvironment.",
+        "Research efforts aim to improve solid‑tumor CAR‑T therapy by enhancing T‑cell persistence, targeting multiple antigens, and employing allogeneic manufacturing approaches.",
+        "Key challenges for CAR‑T therapy in solid tumors include antigen selection, tolerability, and safety concerns.",
+        "CAR‑T therapy is expected to become an important component of individualized cancer immunotherapy in the future."
+      ],
+      "claim_audit": [
+        {
+          "claim_index": 1,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "PMID:38275119",
+            "PMID:40233718"
+          ],
+          "rationale": "Both sources state that CAR-T cell therapy has shown success in treating hematological tumors or malignancies.",
+          "judge_returned": true
+        },
+        {
+          "claim_index": 2,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "PMID:40233718"
+          ],
+          "rationale": "Source PMID:40233718 explicitly states that CAR-T efficacy in solid tumors is limited by antigenic heterogeneity and the immunosuppressive tumor microenvironment.",
+          "judge_returned": true
+        },
+        {
+          "claim_index": 3,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "PMID:40233718"
+          ],
+          "rationale": "Source PMID:40233718 discusses strategies to enhance CAR-T cell efficacy in solid tumors, including enhancing T cell persistence, targeting multiple antigens, and utilizing allogeneic manufacturing.",
+          "judge_returned": true
+        },
+        {
+          "claim_index": 4,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "PMID:38275119"
+          ],
+          "rationale": "Source PMID:38275119 lists antigen selection, tolerability, and safety as challenges for CAR-T cell therapy in solid tumors.",
+          "judge_returned": true
+        },
+        {
+          "claim_index": 5,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "PMID:38275119"
+          ],
+          "rationale": "Source PMID:38275119 states that CAR-T cell therapy is expected to become an important cancer treatment and provide strategies for individualized immunotherapy in the future.",
+          "judge_returned": true
+        }
+      ],
+      "benchmark_status": "accepted_repaired",
+      "eligible_for_benchmark": true
+    },
+    {
+      "id": "pm-04",
+      "source_group": "pubmed",
+      "question": "What are the main causes and prevention strategies for antimicrobial resistance in hospitals and healthcare settings?",
+      "reference_answer": "The rise in hospital-acquired pneumonia due to antibiotic-resistant bacteria increases the incidence of inappropriate empirical antibiotic therapy. Knowing the most common organisms responsible for infections and their susceptibility patterns helps reduce inappropriate antibiotic therapy. Clinical strategies aimed at the prevention of hospital-acquired and ventilator-associated pneumonias should be employed in hospital settings.",
+      "reference_claims": [
+        "The rise in hospital-acquired pneumonia due to antibiotic-resistant bacteria increases the incidence of inappropriate empirical antibiotic therapy.",
+        "Knowing the most common organisms responsible for infections and their susceptibility patterns helps reduce inappropriate antibiotic therapy.",
+        "Clinical strategies aimed at the prevention of hospital-acquired and ventilator-associated pneumonias should be employed in hospital settings."
+      ],
+      "reference_context": [
+        {
+          "context_id": "pm-04-v2-ctx-01",
+          "source_id": "PMID:23827827",
+          "title": "[Nosocomial pneumonia].",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/23827827/",
+          "excerpt": "The rise in HAP due to antibiotic-resistant bacteria also causes an increase in the incidence of inappropriate empirical antibiotic therapy, with an associated increased risk of hospital mortality. It is very important to know the most common organisms responsible for these infections in each hospital and each Intensive Care Unit, as well as their antimicrobial susceptibility patterns, in order to reduce the incidence of inappropriate antibiotic therapy and improve the prognosis of patients.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "f16dc6c7a46ccb8746c3e112ea93aa5ab10d76ce6dcab80eaccae0185e9cb2e6"
+        },
+        {
+          "context_id": "pm-04-v2-ctx-02",
+          "source_id": "PMID:23827827",
+          "title": "[Nosocomial pneumonia].",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/23827827/",
+          "excerpt": "The hospital acquired pneumonia (HAP) is one of the most common infections acquired among hospitalised patients. It is very important to know the most common organisms responsible for these infections in each hospital and each Intensive Care Unit, as well as their antimicrobial susceptibility patterns, in order to reduce the incidence of inappropriate antibiotic therapy and improve the prognosis of patients.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "f16dc6c7a46ccb8746c3e112ea93aa5ab10d76ce6dcab80eaccae0185e9cb2e6"
+        },
+        {
+          "context_id": "pm-04-v2-ctx-03",
+          "source_id": "PMID:23827827",
+          "title": "[Nosocomial pneumonia].",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/23827827/",
+          "excerpt": "It is very important to know the most common organisms responsible for these infections in each hospital and each Intensive Care Unit, as well as their antimicrobial susceptibility patterns, in order to reduce the incidence of inappropriate antibiotic therapy and improve the prognosis of patients. Additionally, clinical strategies aimed at the prevention of HAP and VAP should be employed in hospital settings caring for patients at risk for these infections.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "f16dc6c7a46ccb8746c3e112ea93aa5ab10d76ce6dcab80eaccae0185e9cb2e6"
+        }
+      ],
+      "provenance": "silver_auto_generated_independently_audited",
+      "human_review": false,
+      "generator": "groq:openai/gpt-oss-120b",
+      "validator": "gemini:gemini-2.5-flash-lite",
+      "validation_score": 1.0,
+      "claim_support": [
+        {
+          "claim_index": 1,
+          "original_claim_index": 1,
+          "claim": "The rise in hospital-acquired pneumonia due to antibiotic-resistant bacteria increases the incidence of inappropriate empirical antibiotic therapy.",
+          "context_id": "pm-04-v2-ctx-01",
+          "source_id": "PMID:23827827",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "The source directly states that 'The rise in HAP due to antibiotic-resistant bacteria also causes an increase in the incidence of inappropriate empirical antibiotic therapy'.",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 2,
+          "original_claim_index": 2,
+          "claim": "Knowing the most common organisms responsible for infections and their susceptibility patterns helps reduce inappropriate antibiotic therapy.",
+          "context_id": "pm-04-v2-ctx-02",
+          "source_id": "PMID:23827827",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "The source states that 'It is very important to know the most common organisms responsible for these infections in each hospital and each Intensive Care Unit, as well as their antimicrobial susceptibility patterns, in order to reduce the incidence of inappropriate antibiotic therapy and improve the prognosis of patients'.",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 3,
+          "original_claim_index": 3,
+          "claim": "Clinical strategies aimed at the prevention of hospital-acquired and ventilator-associated pneumonias should be employed in hospital settings.",
+          "context_id": "pm-04-v2-ctx-03",
+          "source_id": "PMID:23827827",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "The source explicitly mentions that 'clinical strategies aimed at the prevention of HAP and VAP should be employed in hospital settings caring for patients at risk for these infections'.",
+          "mapping_method": "independent_semantic_source_audit"
+        }
+      ],
+      "claim_support_status": "independently_semantically_validated",
+      "reference_answer_original": "Antimicrobial resistance is driven by factors such as inappropriate prescription practices, administration of broad-spectrum antibiotics without a definitive diagnosis, and the rise in hospital-acquired infections like ventilator-associated pneumonia which lead to inappropriate empirical therapy. Prevention strategies include knowing the most common local organisms and their antimicrobial susceptibility patterns to reduce inappropriate antibiotic therapy, and employing clinical strategies aimed at preventing hospital-acquired and ventilator-associated pneumonias in patients at risk.",
+      "reference_claims_original": [
+        "The rise in hospital-acquired pneumonia due to antibiotic-resistant bacteria increases the incidence of inappropriate empirical antibiotic therapy.",
+        "Knowing the most common organisms responsible for infections and their susceptibility patterns helps reduce inappropriate antibiotic therapy.",
+        "Clinical strategies aimed at the prevention of hospital-acquired and ventilator-associated pneumonias should be employed in hospital settings.",
+        "Inappropriate prescription practices by physicians include administering broad-spectrum antibiotics without a definitive diagnosis and indication."
+      ],
+      "claim_audit": [
+        {
+          "claim_index": 1,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "PMID:23827827"
+          ],
+          "rationale": "The source directly states that 'The rise in HAP due to antibiotic-resistant bacteria also causes an increase in the incidence of inappropriate empirical antibiotic therapy'."
+        },
+        {
+          "claim_index": 2,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "PMID:23827827"
+          ],
+          "rationale": "The source states that 'It is very important to know the most common organisms responsible for these infections in each hospital and each Intensive Care Unit, as well as their antimicrobial susceptibility patterns, in order to reduce the incidence of inappropriate antibiotic therapy and improve the prognosis of patients'."
+        },
+        {
+          "claim_index": 3,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "PMID:23827827"
+          ],
+          "rationale": "The source explicitly mentions that 'clinical strategies aimed at the prevention of HAP and VAP should be employed in hospital settings caring for patients at risk for these infections'."
+        },
+        {
+          "claim_index": 4,
+          "decision": "insufficient",
+          "confidence": 1.0,
+          "source_ids": [],
+          "rationale": "While SOURCE PMID:28515903 mentions 'inappropriate prescription practices' as a cause of antimicrobial resistance, it does not provide the specific detail that these practices include 'administering broad-spectrum antibiotics without a definitive diagnosis and indication'. SOURCE PMID:23827827 discusses inappropriate empirical antibiotic therapy but does not elaborate on the specific physician practices as described in the claim."
+        }
+      ],
+      "benchmark_status": "accepted_repaired",
+      "eligible_for_benchmark": true
+    },
+    {
+      "id": "ax-01",
+      "source_group": "arxiv",
+      "question": "What are current approaches and computational strategies being explored for quantum error correction using rotated surface codes?",
+      "reference_answer": "Hierarchical QEC schemes concatenate hypergraph product codes with rotated surface codes of distance 5 to enable hardware compatibility through lattice surgery. Adaptive confidence-gated neural decoding frameworks for the rotated surface code route low-confidence predictions to a minimum-weight perfect matching refinement stage. The Sparse Mamba Decoder processes only active detection events with O(k) complexity using a Mamba state-space backbone for efficient surface code syndrome processing. Simulations of rotated surface codes with code distance 5 evaluate logical error probabilities under realistic noise models incorporating both stochastic Pauli and coherent errors.",
+      "reference_claims": [
+        "Hierarchical QEC schemes concatenate hypergraph product codes with rotated surface codes of distance 5 to enable hardware compatibility through lattice surgery.",
+        "Adaptive confidence-gated neural decoding frameworks for the rotated surface code route low-confidence predictions to a minimum-weight perfect matching refinement stage.",
+        "The Sparse Mamba Decoder processes only active detection events with O(k) complexity using a Mamba state-space backbone for efficient surface code syndrome processing.",
+        "Simulations of rotated surface codes with code distance 5 evaluate logical error probabilities under realistic noise models incorporating both stochastic Pauli and coherent errors."
+      ],
+      "reference_context": [
+        {
+          "context_id": "ax-01-v2-ctx-01",
+          "source_id": "arxiv:2505.18592v3",
+          "title": "Hierarchical Quantum Error Correction with Hypergraph Product Code and Rotated Surface Code",
+          "url": "http://arxiv.org/abs/2505.18592v3",
+          "excerpt": "We propose and analyze a hierarchical quantum error correction (QEC) scheme that concatenates hypergraph product (HGP) codes with rotated surface codes and that is compatible with quantum computers with only nearest-neighbor interactions. The outer code employs (3,4)-random HGP codes, known for their constant encoding rate and favorable distance scaling, while the inner code consists of a rotated surface code with distance 5, allowing hardware compatibility through lattice surgery.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "2978de4a078d172c4a94c6741d77f09ff3f9887ab8858f7bcb673b3da9a38777"
+        },
+        {
+          "context_id": "ax-01-v2-ctx-02",
+          "source_id": "arxiv:2607.05814v2",
+          "title": "Latency-Constrained Hardware-Aware Quantum Error Correction Co-Design with Adaptive Confidence-Gated Neural Decoding for the Rotated Surface Code",
+          "url": "http://arxiv.org/abs/2607.05814v2",
+          "excerpt": "We present an adaptive confidence-gated decoding framework for the rotated surface code that treats decoding as a two-stage inference problem. A lightweight feed-forward neural network performs fast-path decoding for the majority of syndrome measurements, while only low-confidence predictions are escalated to a minimum-weight perfect matching (MWPM) refinement stage.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "076d8ad792ba242a2ebac47488e8de3392291bff49f70d346704ffc977b74e98"
+        },
+        {
+          "context_id": "ax-01-v2-ctx-03",
+          "source_id": "arxiv:2605.17156v2",
+          "title": "Sparse Mamba Decoder for Quantum Error Correction: Efficient Defect-Centric Processing of Surface Code Syndromes",
+          "url": "http://arxiv.org/abs/2605.17156v2",
+          "excerpt": "At physically relevant error rates (p ~ 0.1%), fewer than 5% of syndrome entries contain active detection events -- yet existing decoders process the entire syndrome volume. We introduce the Sparse Mamba Decoder (SMD), a defect-centric neural decoder that processes only the k active detection events using a 13-dimensional feature representation per defect and a Mamba state-space backbone, achieving $O(k)$ complexity.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "d81eb77a6eeb255bc01ca5841b597bec92dea69e6cb1bc5b4e6c09bd7797f70d"
+        },
+        {
+          "context_id": "ax-01-v2-ctx-04",
+          "source_id": "arxiv:2204.11404v4",
+          "title": "Simulation and performance analysis of quantum error correction with a rotated surface code under a realistic noise model",
+          "url": "http://arxiv.org/abs/2204.11404v4",
+          "excerpt": "In this work, we performed a full simulation of QEC for the rotated surface codes with a code distance 5, which employs 49 qubits and is within reach of the current state-of-the-art quantum computers. In particular, we evaluate the logical error probability in a realistic noise model that incorporates not only stochastic Pauli errors but also coherent errors due to a systematic control error or unintended interactions.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "295311a97dc5924f8dc008227a46e59b2e9f01ab3756b555972ca87660c5eee3"
+        }
+      ],
+      "provenance": "silver_auto_generated_independently_audited",
+      "human_review": false,
+      "generator": "groq:openai/gpt-oss-120b",
+      "validator": "gemini:gemini-2.5-flash-lite",
+      "validation_score": 0.95,
+      "claim_support": [
+        {
+          "claim_index": 1,
+          "original_claim_index": 1,
+          "claim": "Hierarchical QEC schemes concatenate hypergraph product codes with rotated surface codes of distance 5 to enable hardware compatibility through lattice surgery.",
+          "context_id": "ax-01-v2-ctx-01",
+          "source_id": "arxiv:2505.18592v3",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "The source proposes a hierarchical QEC scheme concatenating hypergraph product codes with rotated surface codes of distance 5, compatible with hardware through lattice surgery.",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 2,
+          "original_claim_index": 2,
+          "claim": "Adaptive confidence-gated neural decoding frameworks for the rotated surface code route low-confidence predictions to a minimum-weight perfect matching refinement stage.",
+          "context_id": "ax-01-v2-ctx-02",
+          "source_id": "arxiv:2607.05814v2",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "The source presents an adaptive confidence-gated decoding framework for the rotated surface code that routes low-confidence predictions to a minimum-weight perfect matching refinement stage.",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 3,
+          "original_claim_index": 3,
+          "claim": "The Sparse Mamba Decoder processes only active detection events with O(k) complexity using a Mamba state-space backbone for efficient surface code syndrome processing.",
+          "context_id": "ax-01-v2-ctx-03",
+          "source_id": "arxiv:2605.17156v2",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "The source introduces the Sparse Mamba Decoder, a defect-centric neural decoder that processes only active detection events with O(k) complexity using a Mamba state-space backbone for surface code syndrome processing.",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 4,
+          "original_claim_index": 4,
+          "claim": "Simulations of rotated surface codes with code distance 5 evaluate logical error probabilities under realistic noise models incorporating both stochastic Pauli and coherent errors.",
+          "context_id": "ax-01-v2-ctx-04",
+          "source_id": "arxiv:2204.11404v4",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "The source describes a full simulation of QEC for rotated surface codes with code distance 5, evaluating logical error probability under a realistic noise model incorporating stochastic Pauli and coherent errors.",
+          "mapping_method": "independent_semantic_source_audit"
+        }
+      ],
+      "claim_support_status": "independently_semantically_validated",
+      "reference_answer_original": "Recent approaches to quantum error correction with rotated surface codes explore hierarchical concatenation and advanced real-time decoding strategies to address computational bottlenecks. One approach concatenates hypergraph product codes with rotated surface codes using lattice surgery, employing soft-decision decoding with belief propagation and ordered statistics decoding. Another direction introduces latency-constrained hardware-aware co-designs, such as adaptive confidence-gated neural decoders that use lightweight feed-forward networks for fast-path syndrome measurements with minimum-weight perfect matching refinements. Additionally, defect-centric approaches like the Sparse Mamba Decoder process only active detection events to achieve O(k) complexity, while full GPU simulations incorporate realistic noise models including both stochastic and coherent errors.",
+      "reference_claims_original": [
+        "Hierarchical QEC schemes concatenate hypergraph product codes with rotated surface codes of distance 5 to enable hardware compatibility through lattice surgery.",
+        "Adaptive confidence-gated neural decoding frameworks for the rotated surface code route low-confidence predictions to a minimum-weight perfect matching refinement stage.",
+        "The Sparse Mamba Decoder processes only active detection events with O(k) complexity using a Mamba state-space backbone for efficient surface code syndrome processing.",
+        "Simulations of rotated surface codes with code distance 5 evaluate logical error probabilities under realistic noise models incorporating both stochastic Pauli and coherent errors."
+      ],
+      "claim_audit": [
+        {
+          "claim_index": 1,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "arxiv:2505.18592v3"
+          ],
+          "rationale": "The source proposes a hierarchical QEC scheme concatenating hypergraph product codes with rotated surface codes of distance 5, compatible with hardware through lattice surgery.",
+          "judge_returned": true
+        },
+        {
+          "claim_index": 2,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "arxiv:2607.05814v2"
+          ],
+          "rationale": "The source presents an adaptive confidence-gated decoding framework for the rotated surface code that routes low-confidence predictions to a minimum-weight perfect matching refinement stage.",
+          "judge_returned": true
+        },
+        {
+          "claim_index": 3,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "arxiv:2605.17156v2"
+          ],
+          "rationale": "The source introduces the Sparse Mamba Decoder, a defect-centric neural decoder that processes only active detection events with O(k) complexity using a Mamba state-space backbone for surface code syndrome processing.",
+          "judge_returned": true
+        },
+        {
+          "claim_index": 4,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "arxiv:2204.11404v4"
+          ],
+          "rationale": "The source describes a full simulation of QEC for rotated surface codes with code distance 5, evaluating logical error probability under a realistic noise model incorporating stochastic Pauli and coherent errors.",
+          "judge_returned": true
+        }
+      ],
+      "benchmark_status": "accepted_repaired",
+      "eligible_for_benchmark": true
+    },
+    {
+      "id": "ax-02",
+      "source_group": "arxiv",
+      "question": "How are diffusion models used for image generation, and what are their limitations?",
+      "reference_answer": "Diffusion models have revolutionized the visual generation landscape with impressive text-guided generative functions. Diffusion models are utilized for text-to-image generation, text-guided image editing, and conditional generation with specific or multiple conditions. Relying solely on text conditioning does not fully cater to the varied and complex requirements of different applications. Transformer-based diffusion models face a trade-off between visual fidelity and computational complexity due to the quadratic nature of self-attention operations. Larger patch sizes in Transformer-based diffusion models struggle to capture fine-grained visual details, leading to image distortions.",
+      "reference_claims": [
+        "Diffusion models have revolutionized the visual generation landscape with impressive text-guided generative functions.",
+        "Diffusion models are utilized for text-to-image generation, text-guided image editing, and conditional generation with specific or multiple conditions.",
+        "Relying solely on text conditioning does not fully cater to the varied and complex requirements of different applications.",
+        "Transformer-based diffusion models face a trade-off between visual fidelity and computational complexity due to the quadratic nature of self-attention operations.",
+        "Larger patch sizes in Transformer-based diffusion models struggle to capture fine-grained visual details, leading to image distortions."
+      ],
+      "reference_context": [
+        {
+          "context_id": "ax-02-v2-ctx-01",
+          "source_id": "arxiv:2403.04279v2",
+          "title": "Controllable Generation with Text-to-Image Diffusion Models: A Survey",
+          "url": "http://arxiv.org/abs/2403.04279v2",
+          "excerpt": "In the rapidly advancing realm of visual generation, diffusion models have revolutionized the landscape, marking a significant shift in capabilities with their impressive text-guided generative functions. In this survey, we undertake a thorough review of the literature on controllable generation with T2I diffusion models, covering both the theoretical foundations and practical advancements in this domain.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "49faea43bae99bbb462de5c2b4fd40d6572b1b2e6a22febba8a97bc4c4b4e62a"
+        },
+        {
+          "context_id": "ax-02-v2-ctx-02",
+          "source_id": "arxiv:2303.07909v3",
+          "title": "Text-to-image Diffusion Models in Generative AI: A Survey",
+          "url": "http://arxiv.org/abs/2303.07909v3",
+          "excerpt": "As a self-contained work, this survey starts with a brief introduction of how diffusion models work for image synthesis, followed by the background for text-conditioned image synthesis. We further summarize applications beyond image generation, such as text-guided generation for various modalities like videos, and text-guided image editing.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "e0a00967b67c218ae54370a6e5405d65ca5455dc1db589b7c258708c1d939f46"
+        },
+        {
+          "context_id": "ax-02-v2-ctx-03",
+          "source_id": "arxiv:2403.04279v2",
+          "title": "Controllable Generation with Text-to-Image Diffusion Models: A Survey",
+          "url": "http://arxiv.org/abs/2403.04279v2",
+          "excerpt": "However, relying solely on text for conditioning these models does not fully cater to the varied and complex requirements of different applications and scenarios. In this survey, we undertake a thorough review of the literature on controllable generation with T2I diffusion models, covering both the theoretical foundations and practical advancements in this domain.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "49faea43bae99bbb462de5c2b4fd40d6572b1b2e6a22febba8a97bc4c4b4e62a"
+        },
+        {
+          "context_id": "ax-02-v2-ctx-04",
+          "source_id": "arxiv:2406.09416v2",
+          "title": "Alleviating Distortion in Image Generation via Multi-Resolution Diffusion Models and Time-Dependent Layer Normalization",
+          "url": "http://arxiv.org/abs/2406.09416v2",
+          "excerpt": "This paper presents innovative enhancements to diffusion models by integrating a novel multi-resolution network and time-dependent layer normalization. However, Transformer architectures, which tokenize input data (via \"patchification\"), face a trade-off between visual fidelity and computational complexity due to the quadratic nature of self-attention operations concerning token length.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "ef81f64f5fddf28bef5711b3caad18881ca1b7afd1fd1ffacdb33a6373b6f552"
+        },
+        {
+          "context_id": "ax-02-v2-ctx-05",
+          "source_id": "arxiv:2406.09416v2",
+          "title": "Alleviating Distortion in Image Generation via Multi-Resolution Diffusion Models and Time-Dependent Layer Normalization",
+          "url": "http://arxiv.org/abs/2406.09416v2",
+          "excerpt": "Diffusion models have gained prominence for their effectiveness in high-fidelity image generation. While larger patch sizes enable attention computation efficiency, they struggle to capture fine-grained visual details, leading to image distortions.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "ef81f64f5fddf28bef5711b3caad18881ca1b7afd1fd1ffacdb33a6373b6f552"
+        }
+      ],
+      "provenance": "silver_auto_generated_independently_audited",
+      "human_review": false,
+      "generator": "groq:openai/gpt-oss-120b",
+      "validator": "gemini:gemini-2.5-flash-lite",
+      "validation_score": 0.9,
+      "claim_support": [
+        {
+          "claim_index": 1,
+          "original_claim_index": 1,
+          "claim": "Diffusion models have revolutionized the visual generation landscape with impressive text-guided generative functions.",
+          "context_id": "ax-02-v2-ctx-01",
+          "source_id": "arxiv:2403.04279v2",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "The abstract directly states that diffusion models have revolutionized the visual generation landscape with impressive text-guided generative functions.",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 2,
+          "original_claim_index": 2,
+          "claim": "Diffusion models are utilized for text-to-image generation, text-guided image editing, and conditional generation with specific or multiple conditions.",
+          "context_id": "ax-02-v2-ctx-02",
+          "source_id": "arxiv:2303.07909v3",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "The abstracts mention text-to-image generation, text-guided image editing, and conditional generation with specific or multiple conditions.",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 3,
+          "original_claim_index": 3,
+          "claim": "Relying solely on text conditioning does not fully cater to the varied and complex requirements of different applications.",
+          "context_id": "ax-02-v2-ctx-03",
+          "source_id": "arxiv:2403.04279v2",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "The abstract explicitly states that relying solely on text for conditioning does not fully cater to varied and complex requirements.",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 4,
+          "original_claim_index": 4,
+          "claim": "Transformer-based diffusion models face a trade-off between visual fidelity and computational complexity due to the quadratic nature of self-attention operations.",
+          "context_id": "ax-02-v2-ctx-04",
+          "source_id": "arxiv:2406.09416v2",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "The abstract directly states that Transformer architectures face a trade-off between visual fidelity and computational complexity due to the quadratic nature of self-attention operations.",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 5,
+          "original_claim_index": 5,
+          "claim": "Larger patch sizes in Transformer-based diffusion models struggle to capture fine-grained visual details, leading to image distortions.",
+          "context_id": "ax-02-v2-ctx-05",
+          "source_id": "arxiv:2406.09416v2",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "The abstract directly states that larger patch sizes struggle to capture fine-grained visual details, leading to image distortions.",
+          "mapping_method": "independent_semantic_source_audit"
+        }
+      ],
+      "claim_support_status": "independently_semantically_validated",
+      "reference_answer_original": "Diffusion models have revolutionized visual generation by providing impressive text-guided generative functions and high-fidelity image synthesis. They are utilized for tasks such as text-to-image generation, text-guided image editing, and conditional generation incorporating novel or multiple conditions. However, they face notable limitations; relying solely on text conditioning does not fully cater to varied and complex application requirements. Additionally, Transformer-based diffusion models encounter a trade-off between visual fidelity and computational complexity due to the quadratic nature of self-attention operations over token lengths, where larger patch sizes struggle to capture fine-grained visual details and lead to image distortions.",
+      "reference_claims_original": [
+        "Diffusion models have revolutionized the visual generation landscape with impressive text-guided generative functions.",
+        "Diffusion models are utilized for text-to-image generation, text-guided image editing, and conditional generation with specific or multiple conditions.",
+        "Relying solely on text conditioning does not fully cater to the varied and complex requirements of different applications.",
+        "Transformer-based diffusion models face a trade-off between visual fidelity and computational complexity due to the quadratic nature of self-attention operations.",
+        "Larger patch sizes in Transformer-based diffusion models struggle to capture fine-grained visual details, leading to image distortions."
+      ],
+      "claim_audit": [
+        {
+          "claim_index": 1,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "arxiv:2403.04279v2"
+          ],
+          "rationale": "The abstract directly states that diffusion models have revolutionized the visual generation landscape with impressive text-guided generative functions."
+        },
+        {
+          "claim_index": 2,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "arxiv:2303.07909v3",
+            "arxiv:2403.04279v2"
+          ],
+          "rationale": "The abstracts mention text-to-image generation, text-guided image editing, and conditional generation with specific or multiple conditions."
+        },
+        {
+          "claim_index": 3,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "arxiv:2403.04279v2"
+          ],
+          "rationale": "The abstract explicitly states that relying solely on text for conditioning does not fully cater to varied and complex requirements."
+        },
+        {
+          "claim_index": 4,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "arxiv:2406.09416v2"
+          ],
+          "rationale": "The abstract directly states that Transformer architectures face a trade-off between visual fidelity and computational complexity due to the quadratic nature of self-attention operations."
+        },
+        {
+          "claim_index": 5,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "arxiv:2406.09416v2"
+          ],
+          "rationale": "The abstract directly states that larger patch sizes struggle to capture fine-grained visual details, leading to image distortions."
+        }
+      ],
+      "benchmark_status": "accepted_repaired",
+      "eligible_for_benchmark": true
+    },
+    {
+      "id": "ax-04",
+      "source_group": "arxiv",
+      "question": "How are offline and online reinforcement learning approaches utilized and enhanced for robotic manipulation tasks?",
+      "reference_answer": "Offline reinforcement learning allows agents to pre-train on large datasets, avoiding the recurrence of expensive data collection for robotic manipulation. Compositional reinforcement learning methods outperform non-compositional methods in learning training tasks. Reinforcement learning enables high-frequency, closed-loop control for robotic manipulation, but scaling to long-horizon tasks with sparse or imperfect rewards remains difficult. Vision-Language-Action Jump-Starting bridges sparse Vision-Language-Action guidance with on-policy reinforcement learning to improve exploration and learning efficiency.",
+      "reference_claims": [
+        "Offline reinforcement learning allows agents to pre-train on large datasets, avoiding the recurrence of expensive data collection for robotic manipulation.",
+        "Compositional reinforcement learning methods outperform non-compositional methods in learning training tasks.",
+        "Reinforcement learning enables high-frequency, closed-loop control for robotic manipulation, but scaling to long-horizon tasks with sparse or imperfect rewards remains difficult.",
+        "Vision-Language-Action Jump-Starting bridges sparse Vision-Language-Action guidance with on-policy reinforcement learning to improve exploration and learning efficiency."
+      ],
+      "reference_context": [
+        {
+          "context_id": "ax-04-v2-ctx-01",
+          "source_id": "arxiv:2307.07091v2",
+          "title": "Robotic Manipulation Datasets for Offline Compositional Reinforcement Learning",
+          "url": "http://arxiv.org/abs/2307.07091v2",
+          "excerpt": "Offline reinforcement learning (RL) is a promising direction that allows RL agents to pre-train on large datasets, avoiding the recurrence of expensive data collection. Compositional RL is particularly appealing for generating such large datasets, since 1)~it permits creating many tasks from few components, 2)~the task structure may enable trained agents to solve new tasks by combining relevant learned components, and 3)~the compositional dimensions provide a notion of task relatedness.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "54cb571196139a9c7b3de48abf154529cd38b734874cedf100445f7c816fbc4b"
+        },
+        {
+          "context_id": "ax-04-v2-ctx-02",
+          "source_id": "arxiv:2307.07091v2",
+          "title": "Robotic Manipulation Datasets for Offline Compositional Reinforcement Learning",
+          "url": "http://arxiv.org/abs/2307.07091v2",
+          "excerpt": "Our benchmarking experiments show that current offline RL methods can learn the training tasks to some extent and that compositional methods outperform non-compositional methods. Yet current methods are unable to extract the compositional structure to generalize to unseen tasks, highlighting a need for future research in offline compositional RL.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "54cb571196139a9c7b3de48abf154529cd38b734874cedf100445f7c816fbc4b"
+        },
+        {
+          "context_id": "ax-04-v2-ctx-03",
+          "source_id": "arxiv:2604.13733v2",
+          "title": "Vision-Language-Action Jump-Starting for Reinforcement Learning Robotic Agents",
+          "url": "http://arxiv.org/abs/2604.13733v2",
+          "excerpt": "Reinforcement learning (RL) enables high-frequency, closed-loop control for robotic manipulation, but scaling to long-horizon tasks with sparse or imperfect rewards remains difficult due to inefficient exploration and poor credit assignment. In this paper, we propose Vision-Language-Action Jump-Starting (VLAJS), a method that bridges sparse VLA guidance with on-policy RL to improve exploration and learning efficiency.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "b9c5524efafdd57b611092b058c71c11fe762cc21cdb5c63f6439296e9899fa6"
+        },
+        {
+          "context_id": "ax-04-v2-ctx-04",
+          "source_id": "arxiv:2604.13733v2",
+          "title": "Vision-Language-Action Jump-Starting for Reinforcement Learning Robotic Agents",
+          "url": "http://arxiv.org/abs/2604.13733v2",
+          "excerpt": "Reinforcement learning (RL) enables high-frequency, closed-loop control for robotic manipulation, but scaling to long-horizon tasks with sparse or imperfect rewards remains difficult due to inefficient exploration and poor credit assignment. In this paper, we propose Vision-Language-Action Jump-Starting (VLAJS), a method that bridges sparse VLA guidance with on-policy RL to improve exploration and learning efficiency.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "b9c5524efafdd57b611092b058c71c11fe762cc21cdb5c63f6439296e9899fa6"
+        }
+      ],
+      "provenance": "silver_auto_generated_independently_audited",
+      "human_review": false,
+      "generator": "groq:openai/gpt-oss-120b",
+      "validator": "gemini:gemini-2.5-flash-lite",
+      "validation_score": 0.9,
+      "claim_support": [
+        {
+          "claim_index": 1,
+          "original_claim_index": 1,
+          "claim": "Offline reinforcement learning allows agents to pre-train on large datasets, avoiding the recurrence of expensive data collection for robotic manipulation.",
+          "context_id": "ax-04-v2-ctx-01",
+          "source_id": "arxiv:2307.07091v2",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "The abstract states: \"Offline reinforcement learning (RL) is a promising direction that allows RL agents to pre-train on large datasets, avoiding the recurrence of expensive data collection.\"",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 2,
+          "original_claim_index": 2,
+          "claim": "Compositional reinforcement learning methods outperform non-compositional methods in learning training tasks.",
+          "context_id": "ax-04-v2-ctx-02",
+          "source_id": "arxiv:2307.07091v2",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "The abstract states: \"Our benchmarking experiments show that current offline RL methods can learn the training tasks to some extent and that compositional methods outperform non-compositional methods.\"",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 3,
+          "original_claim_index": 3,
+          "claim": "Reinforcement learning enables high-frequency, closed-loop control for robotic manipulation, but scaling to long-horizon tasks with sparse or imperfect rewards remains difficult.",
+          "context_id": "ax-04-v2-ctx-03",
+          "source_id": "arxiv:2604.13733v2",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "The abstract states: \"Reinforcement learning (RL) enables high-frequency, closed-loop control for robotic manipulation, but scaling to long-horizon tasks with sparse or imperfect rewards remains difficult due to inefficient exploration and poor credit assignment.\"",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 4,
+          "original_claim_index": 4,
+          "claim": "Vision-Language-Action Jump-Starting bridges sparse Vision-Language-Action guidance with on-policy reinforcement learning to improve exploration and learning efficiency.",
+          "context_id": "ax-04-v2-ctx-04",
+          "source_id": "arxiv:2604.13733v2",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "The abstract states: \"In this paper, we propose Vision-Language-Action Jump-Starting (VLAJS), a method that bridges sparse VLA guidance with on-policy RL to improve exploration and learning efficiency.\"",
+          "mapping_method": "independent_semantic_source_audit"
+        }
+      ],
+      "claim_support_status": "independently_semantically_validated",
+      "reference_answer_original": "Reinforcement learning is widely used for robotic manipulation to enable high-frequency, closed-loop control and policy learning. Offline reinforcement learning allows agents to pre-train on large datasets to avoid expensive data collection, with compositional methods outperforming non-compositional methods. However, scaling reinforcement learning to long-horizon tasks with sparse or imperfect rewards remains difficult due to inefficient exploration and poor credit assignment. To overcome this, methods like Vision-Language-Action Jump-Starting bridge sparse Vision-Language-Action guidance with on-policy reinforcement learning by softly aligning actions during early training, which improves sample efficiency and reduces environment interactions.",
+      "reference_claims_original": [
+        "Offline reinforcement learning allows agents to pre-train on large datasets, avoiding the recurrence of expensive data collection for robotic manipulation.",
+        "Compositional reinforcement learning methods outperform non-compositional methods in learning training tasks.",
+        "Reinforcement learning enables high-frequency, closed-loop control for robotic manipulation, but scaling to long-horizon tasks with sparse or imperfect rewards remains difficult.",
+        "Vision-Language-Action Jump-Starting bridges sparse Vision-Language-Action guidance with on-policy reinforcement learning to improve exploration and learning efficiency."
+      ],
+      "claim_audit": [
+        {
+          "claim_index": 1,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "arxiv:2307.07091v2"
+          ],
+          "rationale": "The abstract states: \"Offline reinforcement learning (RL) is a promising direction that allows RL agents to pre-train on large datasets, avoiding the recurrence of expensive data collection.\""
+        },
+        {
+          "claim_index": 2,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "arxiv:2307.07091v2"
+          ],
+          "rationale": "The abstract states: \"Our benchmarking experiments show that current offline RL methods can learn the training tasks to some extent and that compositional methods outperform non-compositional methods.\""
+        },
+        {
+          "claim_index": 3,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "arxiv:2604.13733v2"
+          ],
+          "rationale": "The abstract states: \"Reinforcement learning (RL) enables high-frequency, closed-loop control for robotic manipulation, but scaling to long-horizon tasks with sparse or imperfect rewards remains difficult due to inefficient exploration and poor credit assignment.\""
+        },
+        {
+          "claim_index": 4,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "arxiv:2604.13733v2"
+          ],
+          "rationale": "The abstract states: \"In this paper, we propose Vision-Language-Action Jump-Starting (VLAJS), a method that bridges sparse VLA guidance with on-policy RL to improve exploration and learning efficiency.\""
+        }
+      ],
+      "benchmark_status": "accepted_repaired",
+      "eligible_for_benchmark": true
+    },
+    {
+      "id": "mx-01",
+      "source_group": "mixed",
+      "question": "How is machine learning being used for early cancer detection, and what limits clinical adoption?",
+      "reference_answer": "Machine learning and AI-driven imaging analysis are used in cancer detection to aid in early diagnosis and precise treatment decisions. AI algorithms exhibit remarkable precision in detecting abnormalities in medical pictures for cancer diagnosis, facilitating timely intervention and enhancing patient outcomes. Despite these diagnostic advancements, AI integration and clinical adoption face challenges related to data privacy, algorithm bias, and regulatory or legal concerns.",
+      "reference_claims": [
+        "Machine learning and AI-driven imaging analysis are used in cancer detection to aid in early diagnosis and precise treatment decisions.",
+        "AI algorithms exhibit remarkable precision in detecting abnormalities in medical pictures for cancer diagnosis, facilitating timely intervention and enhancing patient outcomes.",
+        "Despite these diagnostic advancements, AI integration and clinical adoption face challenges related to data privacy, algorithm bias, and regulatory or legal concerns."
+      ],
+      "reference_context": [
+        {
+          "context_id": "mx-01-v2-ctx-01",
+          "source_id": "PMID:40616302",
+          "title": "Integrating artificial intelligence in healthcare: applications, challenges, and future directions.",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/40616302/",
+          "excerpt": "This paper explores AI applications in cancer detection, dental medicine, brain tumor database management, and personalized treatment planning. In cancer detection, AI-driven imaging analysis aids in early diagnosis and precise treatment decisions.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "8b6e9f196efaa764bec11a3f76c219cf62786e7cc33aaea87a0b48851035cacc"
+        },
+        {
+          "context_id": "mx-01-v2-ctx-02",
+          "source_id": "PMID:40616302",
+          "title": "Integrating artificial intelligence in healthcare: applications, challenges, and future directions.",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/40616302/",
+          "excerpt": "AI-powered brain tumor databases streamline medical data management, enhancing diagnostic precision and research outcomes. Through comprehensive validation, educational initiatives, and standardized protocols, AI adoption in healthcare can enhance patient outcomes and optimize clinical decision-making, advancing the future of precision medicine and personalized care.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "8b6e9f196efaa764bec11a3f76c219cf62786e7cc33aaea87a0b48851035cacc"
+        },
+        {
+          "context_id": "mx-01-v2-ctx-03",
+          "source_id": "PMID:40616302",
+          "title": "Integrating artificial intelligence in healthcare: applications, challenges, and future directions.",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/40616302/",
+          "excerpt": "Personalized treatment planning benefits from AI algorithms that analyze genetic, clinical, and lifestyle data to recommend tailored interventions. Despite these advancements, AI integration faces challenges related to data privacy, algorithm bias, and regulatory concerns.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "8b6e9f196efaa764bec11a3f76c219cf62786e7cc33aaea87a0b48851035cacc"
+        }
+      ],
+      "provenance": "silver_auto_generated_independently_audited",
+      "human_review": false,
+      "generator": "groq:openai/gpt-oss-120b",
+      "validator": "gemini:gemini-2.5-flash-lite",
+      "validation_score": 0.9,
+      "claim_support": [
+        {
+          "claim_index": 1,
+          "original_claim_index": 1,
+          "claim": "Machine learning and AI-driven imaging analysis are used in cancer detection to aid in early diagnosis and precise treatment decisions.",
+          "context_id": "mx-01-v2-ctx-01",
+          "source_id": "PMID:40616302",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "The abstract explicitly states that 'In cancer detection, AI-driven imaging analysis aids in early diagnosis and precise treatment decisions.'",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 2,
+          "original_claim_index": 2,
+          "claim": "AI algorithms exhibit remarkable precision in detecting abnormalities in medical pictures for cancer diagnosis, facilitating timely intervention and enhancing patient outcomes.",
+          "context_id": "mx-01-v2-ctx-02",
+          "source_id": "PMID:40616302",
+          "decision": "supported",
+          "confidence": 0.9,
+          "rationale": "The abstract mentions that 'AI technologies such as machine learning and deep learning have enhanced diagnostic accuracy' and 'AI-driven imaging analysis aids in early diagnosis and precise treatment decisions' in cancer detection, which facilitates timely intervention and enhances patient outcomes.",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 3,
+          "original_claim_index": 3,
+          "claim": "Despite these diagnostic advancements, AI integration and clinical adoption face challenges related to data privacy, algorithm bias, and regulatory or legal concerns.",
+          "context_id": "mx-01-v2-ctx-03",
+          "source_id": "PMID:40616302",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "The abstract explicitly states: 'Despite these advancements, AI integration faces challenges related to data privacy, algorithm bias, and regulatory concerns.'",
+          "mapping_method": "independent_semantic_source_audit"
+        }
+      ],
+      "claim_support_status": "independently_semantically_validated",
+      "reference_answer_original": "Machine learning and artificial intelligence are applied in cancer detection through advanced imaging analysis to aid in early diagnosis and precise treatment decisions. Algorithms exhibit remarkable precision in detecting abnormalities in medical pictures, facilitating timely intervention and enhancing patient outcomes. However, despite these advancements, the integration and clinical adoption of these technologies face significant challenges related to data privacy, algorithm bias, and regulatory or legal concerns.",
+      "reference_claims_original": [
+        "Machine learning and AI-driven imaging analysis are used in cancer detection to aid in early diagnosis and precise treatment decisions.",
+        "AI algorithms exhibit remarkable precision in detecting abnormalities in medical pictures for cancer diagnosis, facilitating timely intervention and enhancing patient outcomes.",
+        "Despite these diagnostic advancements, AI integration and clinical adoption face challenges related to data privacy, algorithm bias, and regulatory or legal concerns."
+      ],
+      "claim_audit": [
+        {
+          "claim_index": 1,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "PMID:40616302"
+          ],
+          "rationale": "The abstract explicitly states that 'In cancer detection, AI-driven imaging analysis aids in early diagnosis and precise treatment decisions.'"
+        },
+        {
+          "claim_index": 2,
+          "decision": "supported",
+          "confidence": 0.9,
+          "source_ids": [
+            "PMID:40616302"
+          ],
+          "rationale": "The abstract mentions that 'AI technologies such as machine learning and deep learning have enhanced diagnostic accuracy' and 'AI-driven imaging analysis aids in early diagnosis and precise treatment decisions' in cancer detection, which facilitates timely intervention and enhances patient outcomes."
+        },
+        {
+          "claim_index": 3,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "PMID:40616302"
+          ],
+          "rationale": "The abstract explicitly states: 'Despite these advancements, AI integration faces challenges related to data privacy, algorithm bias, and regulatory concerns.'"
+        }
+      ],
+      "benchmark_status": "accepted_repaired",
+      "eligible_for_benchmark": true
+    },
+    {
+      "id": "mx-02",
+      "source_group": "mixed",
+      "question": "What are the opportunities and risks associated with artificial intelligence in drug discovery and antibody development?",
+      "reference_answer": "AI methods can revolutionize drug discovery by reducing the time and cost required for drug development and generating de novo binders for target antigens. Artificial intelligence shifts development processes from empirical trial-and-error to data-driven engineering by integrating sequence, structural, and molecular dynamics features. Despite advancements, limitations of AI-based methods must still be addressed for effective incorporation into therapeutic and diagnostic applications. Progress in targeted treatments like antibody-drug conjugates is constrained by the combinatorial complexity of design, toxicity and side effects, and variable clinical benefit. Deep learning models often remain elusive to interpretation by the human mind, creating a demand for explainable artificial intelligence.",
+      "reference_claims": [
+        "AI methods can revolutionize drug discovery by reducing the time and cost required for drug development and generating de novo binders for target antigens.",
+        "Artificial intelligence shifts development processes from empirical trial-and-error to data-driven engineering by integrating sequence, structural, and molecular dynamics features.",
+        "Despite advancements, limitations of AI-based methods must still be addressed for effective incorporation into therapeutic and diagnostic applications.",
+        "Progress in targeted treatments like antibody-drug conjugates is constrained by the combinatorial complexity of design, toxicity and side effects, and variable clinical benefit.",
+        "Deep learning models often remain elusive to interpretation by the human mind, creating a demand for explainable artificial intelligence."
+      ],
+      "reference_context": [
+        {
+          "context_id": "mx-02-v2-ctx-01",
+          "source_id": "PMID:40677216",
+          "title": "Artificial intelligence-driven computational methods for antibody design and optimization.",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/40677216/",
+          "excerpt": "Computational methods capable of designing antibodies for a target antigen can revolutionize drug discovery, reducing the time and cost required for drug development. The results obtained by AI-based methodologies in antibody and protein research suggest a promising direction for generating de novo binders for various target antigens.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "607ebe64b426e599fb82a1de6e3f54ebef476b98c6e91413670176cb0d5b48c3"
+        },
+        {
+          "context_id": "mx-02-v2-ctx-02",
+          "source_id": "PMID:41219042",
+          "title": "Artificial intelligence in antibody-drug conjugate development.",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/41219042/",
+          "excerpt": "Artificial intelligence (AI) is shifting ADC development from empirical trial-and-error to data-driven, closed-loop engineering. By integrating sequence (for antibodies), structural, and molecular dynamics (MD) features of ADC components, AI models can accelerate target selection, conjugate optimization, and patient-response prediction.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "3bd1842ddfe2be197882d8482f631f6bf46402cc0f3c90a49001b2b6b318e0cb"
+        },
+        {
+          "context_id": "mx-02-v2-ctx-03",
+          "source_id": "arxiv:2007.00523v2",
+          "title": "Drug discovery with explainable artificial intelligence",
+          "url": "http://arxiv.org/abs/2007.00523v2",
+          "excerpt": "Deep learning bears promise for drug discovery, including advanced image analysis, prediction of molecular structure and function, and automated generation of innovative chemical entities with bespoke properties. Despite the growing number of successful prospective applications, the underlying mathematical models often remain elusive to interpretation by the human mind.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "e4e2843bafadc3f21715fe151d08c3cace8af3ad2c9eb3c4485dea32d9942ac5"
+        },
+        {
+          "context_id": "mx-02-v2-ctx-04",
+          "source_id": "PMID:41219042",
+          "title": "Artificial intelligence in antibody-drug conjugate development.",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/41219042/",
+          "excerpt": "Progress, however, is constrained by the combinatorial complexity of design, toxicity and side effects, and variable clinical benefit across indications. Effective ADCs require rational matching of the antibody, linker, and payload to achieve stability in circulation and tumor-specific release, which makes development time- and cost-intensive.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "3bd1842ddfe2be197882d8482f631f6bf46402cc0f3c90a49001b2b6b318e0cb"
+        },
+        {
+          "context_id": "mx-02-v2-ctx-05",
+          "source_id": "arxiv:2007.00523v2",
+          "title": "Drug discovery with explainable artificial intelligence",
+          "url": "http://arxiv.org/abs/2007.00523v2",
+          "excerpt": "Despite the growing number of successful prospective applications, the underlying mathematical models often remain elusive to interpretation by the human mind. There is a demand for 'explainable' deep learning methods to address the need for a new narrative of the machine language of the molecular sciences.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "e4e2843bafadc3f21715fe151d08c3cace8af3ad2c9eb3c4485dea32d9942ac5"
+        }
+      ],
+      "provenance": "silver_auto_generated_independently_audited",
+      "human_review": false,
+      "generator": "groq:openai/gpt-oss-120b",
+      "validator": "gemini:gemini-2.5-flash-lite",
+      "validation_score": 0.9,
+      "claim_support": [
+        {
+          "claim_index": 1,
+          "original_claim_index": 1,
+          "claim": "AI methods can revolutionize drug discovery by reducing the time and cost required for drug development and generating de novo binders for target antigens.",
+          "context_id": "mx-02-v2-ctx-01",
+          "source_id": "PMID:40677216",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "Source PMID:40677216 explicitly states that computational methods (including AI) can revolutionize drug discovery by reducing time and cost, and that AI-based methodologies show promise for generating de novo binders for target antigens.",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 2,
+          "original_claim_index": 2,
+          "claim": "Artificial intelligence shifts development processes from empirical trial-and-error to data-driven engineering by integrating sequence, structural, and molecular dynamics features.",
+          "context_id": "mx-02-v2-ctx-02",
+          "source_id": "PMID:41219042",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "Source PMID:41219042 directly states that AI is shifting ADC development from empirical trial-and-error to data-driven engineering by integrating sequence, structural, and molecular dynamics features.",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 3,
+          "original_claim_index": 3,
+          "claim": "Despite advancements, limitations of AI-based methods must still be addressed for effective incorporation into therapeutic and diagnostic applications.",
+          "context_id": "mx-02-v2-ctx-03",
+          "source_id": "arxiv:2007.00523v2",
+          "decision": "supported",
+          "confidence": 0.9,
+          "rationale": "Source arxiv:2007.00523v2 mentions 'remaining challenges' for deep learning methods in drug discovery, which implies limitations that need to be addressed. The context of drug discovery suggests therapeutic applications.",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 4,
+          "original_claim_index": 4,
+          "claim": "Progress in targeted treatments like antibody-drug conjugates is constrained by the combinatorial complexity of design, toxicity and side effects, and variable clinical benefit.",
+          "context_id": "mx-02-v2-ctx-04",
+          "source_id": "PMID:41219042",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "Source PMID:41219042 directly states that progress in Antibody-Drug Conjugates (ADCs) is constrained by the combinatorial complexity of design, toxicity and side effects, and variable clinical benefit.",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 5,
+          "original_claim_index": 5,
+          "claim": "Deep learning models often remain elusive to interpretation by the human mind, creating a demand for explainable artificial intelligence.",
+          "context_id": "mx-02-v2-ctx-05",
+          "source_id": "arxiv:2007.00523v2",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "Source arxiv:2007.00523v2 explicitly states that deep learning models often remain elusive to interpretation by the human mind, creating a demand for 'explainable' deep learning methods.",
+          "mapping_method": "independent_semantic_source_audit"
+        }
+      ],
+      "claim_support_status": "independently_semantically_validated",
+      "reference_answer_original": "Artificial intelligence offers significant opportunities in drug discovery by revolutionizing antibody design, accelerating target selection, and predicting molecular structures, which can reduce development time and costs. However, AI-driven development also faces risks and limitations, such as the combinatorial complexity of design, inherent toxicity and side effects, variable clinical benefits, and underlying mathematical models that remain elusive to interpretation.",
+      "reference_claims_original": [
+        "AI methods can revolutionize drug discovery by reducing the time and cost required for drug development and generating de novo binders for target antigens.",
+        "Artificial intelligence shifts development processes from empirical trial-and-error to data-driven engineering by integrating sequence, structural, and molecular dynamics features.",
+        "Despite advancements, limitations of AI-based methods must still be addressed for effective incorporation into therapeutic and diagnostic applications.",
+        "Progress in targeted treatments like antibody-drug conjugates is constrained by the combinatorial complexity of design, toxicity and side effects, and variable clinical benefit.",
+        "Deep learning models often remain elusive to interpretation by the human mind, creating a demand for explainable artificial intelligence."
+      ],
+      "claim_audit": [
+        {
+          "claim_index": 1,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "PMID:40677216"
+          ],
+          "rationale": "Source PMID:40677216 explicitly states that computational methods (including AI) can revolutionize drug discovery by reducing time and cost, and that AI-based methodologies show promise for generating de novo binders for target antigens."
+        },
+        {
+          "claim_index": 2,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "PMID:41219042"
+          ],
+          "rationale": "Source PMID:41219042 directly states that AI is shifting ADC development from empirical trial-and-error to data-driven engineering by integrating sequence, structural, and molecular dynamics features."
+        },
+        {
+          "claim_index": 3,
+          "decision": "supported",
+          "confidence": 0.9,
+          "source_ids": [
+            "arxiv:2007.00523v2"
+          ],
+          "rationale": "Source arxiv:2007.00523v2 mentions 'remaining challenges' for deep learning methods in drug discovery, which implies limitations that need to be addressed. The context of drug discovery suggests therapeutic applications."
+        },
+        {
+          "claim_index": 4,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "PMID:41219042"
+          ],
+          "rationale": "Source PMID:41219042 directly states that progress in Antibody-Drug Conjugates (ADCs) is constrained by the combinatorial complexity of design, toxicity and side effects, and variable clinical benefit."
+        },
+        {
+          "claim_index": 5,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "arxiv:2007.00523v2"
+          ],
+          "rationale": "Source arxiv:2007.00523v2 explicitly states that deep learning models often remain elusive to interpretation by the human mind, creating a demand for 'explainable' deep learning methods."
+        }
+      ],
+      "benchmark_status": "accepted_repaired",
+      "eligible_for_benchmark": true
+    },
+    {
+      "id": "mx-03",
+      "source_group": "mixed",
+      "question": "How can foundation models support scientific discovery while ensuring reliability and robust evaluation of their internal mechanics and acceptance criteria?",
+      "reference_answer": "Foundation models are catalyzing a transition toward a new scientific paradigm encompassing meta-scientific integration, hybrid human-AI co-creation, and autonomous scientific discovery. Multimodal foundation models pretrained on diverse omics datasets can characterize cellular molecular states and support experimental design in molecular cell biology. Reliable automated discovery requires evaluating both what a test accepts and the scientific consequences it establishes, as descriptive tests can accept scientifically empty candidates. Mechanistic interpretability using sparse autoencoders and physically grounded metrics helps examine whether internal foundation model behaviors are consistent with known physics.",
+      "reference_claims": [
+        "Foundation models are catalyzing a transition toward a new scientific paradigm encompassing meta-scientific integration, hybrid human-AI co-creation, and autonomous scientific discovery.",
+        "Multimodal foundation models pretrained on diverse omics datasets can characterize cellular molecular states and support experimental design in molecular cell biology.",
+        "Reliable automated discovery requires evaluating both what a test accepts and the scientific consequences it establishes, as descriptive tests can accept scientifically empty candidates.",
+        "Mechanistic interpretability using sparse autoencoders and physically grounded metrics helps examine whether internal foundation model behaviors are consistent with known physics."
+      ],
+      "reference_context": [
+        {
+          "context_id": "mx-03-v2-ctx-01",
+          "source_id": "arxiv:2510.15280v1",
+          "title": "Foundation Models for Scientific Discovery: From Paradigm Enhancement to Paradigm Transition",
+          "url": "http://arxiv.org/abs/2510.15280v1",
+          "excerpt": "In this paper, we argue that FMs are catalyzing a transition toward a new scientific paradigm. We introduce a three-stage framework to describe this evolution: (1) Meta-Scientific Integration, where FMs enhance workflows within traditional paradigms; (2) Hybrid Human-AI Co-Creation, where FMs become active collaborators in problem formulation, reasoning, and discovery; and (3) Autonomous Scientific Discovery, where FMs operate as independent agents capable of generating new scientific knowledge with minimal human intervention.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "faddf57efd9db06c1551a29b951e1dd2f87484d3d09ffa892d406ade8a037c50"
+        },
+        {
+          "context_id": "mx-03-v2-ctx-02",
+          "source_id": "PMID:40240854",
+          "title": "Towards multimodal foundation models in molecular cell biology.",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/40240854/",
+          "excerpt": "Here we envision developing multimodal foundation models, pretrained on diverse omics datasets, including genomics, transcriptomics, epigenomics, proteomics, metabolomics and spatial profiling. This new paradigm could launch an era of artificial intelligence-empowered analyses, one that promises to unravel the intricate complexities of molecular cell biology, to support experimental design and, more broadly, to profoundly extend our understanding of life sciences.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "61a2c8554681bed9972bf918d169ac14931f97b5aa86b2b9e670c382ff842249"
+        },
+        {
+          "context_id": "mx-03-v2-ctx-03",
+          "source_id": "arxiv:2610.22445v1",
+          "title": "Null Controls Are Necessary but Not Sufficient: Evaluating Acceptance Guards for Scientific Discovery and Interpretability",
+          "url": "http://arxiv.org/abs/2610.22445v1",
+          "excerpt": "These results reveal two acceptance gaps: descriptive tests can accept scientifically empty candidates, and accepted candidates can lack independently verified consequences. Reliable automated discovery requires evaluating both what a test accepts and the scientific consequences it establishes.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "ef09750342db4a39ed9bc1d55d140e2ab632834e9d650325d180cbfcd0c25c10"
+        },
+        {
+          "context_id": "mx-03-v2-ctx-04",
+          "source_id": "arxiv:2606.11657v1",
+          "title": "Sparse probes and murky physics: a case study of interpretability challenges in a foundation model for continuum dynamics",
+          "url": "http://arxiv.org/abs/2606.11657v1",
+          "excerpt": "This raises a central evaluation and interpretability question: when a foundation-style model can reproduce known continuum dynamics, what internal mechanism supports that behavior, is the internal behaviour consistent with known physics, and how does it relate to where the emulator succeeds or fails? We investigate a cross-domain foundation model for continuum dynamics, Walrus by Polymathic, using mechanistic interpretability guided by physical principles.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "34a2e597fcf9315ff96732a49200c6286a834e281219acb566f1570b898d4bf7"
+        }
+      ],
+      "provenance": "silver_auto_generated_independently_audited",
+      "human_review": false,
+      "generator": "groq:openai/gpt-oss-120b",
+      "validator": "gemini:gemini-2.5-flash-lite",
+      "validation_score": 0.9,
+      "claim_support": [
+        {
+          "claim_index": 1,
+          "original_claim_index": 1,
+          "claim": "Foundation models are catalyzing a transition toward a new scientific paradigm encompassing meta-scientific integration, hybrid human-AI co-creation, and autonomous scientific discovery.",
+          "context_id": "mx-03-v2-ctx-01",
+          "source_id": "arxiv:2510.15280v1",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "The abstract of arxiv:2510.15280v1 explicitly states that foundation models are 'catalyzing a transition toward a new scientific paradigm' and introduces a three-stage framework including 'Meta-Scientific Integration', 'Hybrid Human-AI Co-Creation', and 'Autonomous Scientific Discovery'.",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 2,
+          "original_claim_index": 2,
+          "claim": "Multimodal foundation models pretrained on diverse omics datasets can characterize cellular molecular states and support experimental design in molecular cell biology.",
+          "context_id": "mx-03-v2-ctx-02",
+          "source_id": "PMID:40240854",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "The abstract of PMID:40240854 envisions 'multimodal foundation models, pretrained on diverse omics datasets' that are 'expected to exhibit unprecedented potential for characterizing the molecular states of cells' and 'to support experimental design' in 'molecular cell biology'.",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 3,
+          "original_claim_index": 3,
+          "claim": "Reliable automated discovery requires evaluating both what a test accepts and the scientific consequences it establishes, as descriptive tests can accept scientifically empty candidates.",
+          "context_id": "mx-03-v2-ctx-03",
+          "source_id": "arxiv:2610.22445v1",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "The abstract of arxiv:2610.22445v1 directly states: 'descriptive tests can accept scientifically empty candidates, and accepted candidates can lack independently verified consequences. Reliable automated discovery requires evaluating both what a test accepts and the scientific consequences it establishes.'",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 4,
+          "original_claim_index": 4,
+          "claim": "Mechanistic interpretability using sparse autoencoders and physically grounded metrics helps examine whether internal foundation model behaviors are consistent with known physics.",
+          "context_id": "mx-03-v2-ctx-04",
+          "source_id": "arxiv:2606.11657v1",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "The abstract of arxiv:2606.11657v1 describes investigating a foundation model 'using mechanistic interpretability guided by physical principles', applying 'a sparse autoencoder (SAE) to probe a selected layer', and using 'enstrophy as a physically grounded metric' to examine 'is the internal behaviour consistent with known physics'.",
+          "mapping_method": "independent_semantic_source_audit"
+        }
+      ],
+      "claim_support_status": "independently_semantically_validated",
+      "reference_answer_original": "Foundation models support scientific discovery by transitioning through stages of meta-scientific integration, hybrid human-AI co-creation, and autonomous discovery across diverse fields such as molecular cell biology, continuum dynamics, and Earth science. However, ensuring reliability requires addressing significant evaluation and interpretability challenges. Automated discovery systems and scientific foundation models must go beyond simple null controls to prevent descriptive tests from accepting scientifically empty candidates. Rigorous validation needs independent verification of consequences, mechanistic interpretability guided by physical principles, and robust prioritization of meaningful internal features to separate stable structures from analysis artifacts.",
+      "reference_claims_original": [
+        "Foundation models are catalyzing a transition toward a new scientific paradigm encompassing meta-scientific integration, hybrid human-AI co-creation, and autonomous scientific discovery.",
+        "Multimodal foundation models pretrained on diverse omics datasets can characterize cellular molecular states and support experimental design in molecular cell biology.",
+        "Reliable automated discovery requires evaluating both what a test accepts and the scientific consequences it establishes, as descriptive tests can accept scientifically empty candidates.",
+        "Mechanistic interpretability using sparse autoencoders and physically grounded metrics helps examine whether internal foundation model behaviors are consistent with known physics."
+      ],
+      "claim_audit": [
+        {
+          "claim_index": 1,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "arxiv:2510.15280v1"
+          ],
+          "rationale": "The abstract of arxiv:2510.15280v1 explicitly states that foundation models are 'catalyzing a transition toward a new scientific paradigm' and introduces a three-stage framework including 'Meta-Scientific Integration', 'Hybrid Human-AI Co-Creation', and 'Autonomous Scientific Discovery'."
+        },
+        {
+          "claim_index": 2,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "PMID:40240854"
+          ],
+          "rationale": "The abstract of PMID:40240854 envisions 'multimodal foundation models, pretrained on diverse omics datasets' that are 'expected to exhibit unprecedented potential for characterizing the molecular states of cells' and 'to support experimental design' in 'molecular cell biology'."
+        },
+        {
+          "claim_index": 3,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "arxiv:2610.22445v1"
+          ],
+          "rationale": "The abstract of arxiv:2610.22445v1 directly states: 'descriptive tests can accept scientifically empty candidates, and accepted candidates can lack independently verified consequences. Reliable automated discovery requires evaluating both what a test accepts and the scientific consequences it establishes.'"
+        },
+        {
+          "claim_index": 4,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "arxiv:2606.11657v1"
+          ],
+          "rationale": "The abstract of arxiv:2606.11657v1 describes investigating a foundation model 'using mechanistic interpretability guided by physical principles', applying 'a sparse autoencoder (SAE) to probe a selected layer', and using 'enstrophy as a physically grounded metric' to examine 'is the internal behaviour consistent with known physics'."
+        }
+      ],
+      "benchmark_status": "accepted_repaired",
+      "eligible_for_benchmark": true
+    },
+    {
+      "id": "mx-04",
+      "source_group": "mixed",
+      "question": "According to recent genome-wide CRISPR-Cas9 screens, which genetic factors have been identified as regulators of T-cell exhaustion or fitness, and how does their perturbation affect T-cell persistence or antitumor activity?",
+      "reference_answer": "Epigenetic factors, including INO80 and BAF chromatin-remodeling complexes, were identified as regulators of T-cell exhaustion by genome-wide CRISPR-Cas9 screens. Depletion of the BAF complex subunit Arid1a maintains an effector program, down-regulates exhaustion-related genes, limits exhaustion-associated chromatin accessibility, and improves antitumor immunity. Inactivation of Ctbp1 enhances functional T-cell persistence specifically under chronic stimulation conditions. Ablation of Dap5 increases translation and enhances tumor-killing across intense, acute, and chronic stimulation modes. Loss of Icam1-mediated homotypic T-cell clustering amplifies expansion and effector functions after acute and intense stimulation.",
+      "reference_claims": [
+        "Epigenetic factors, including INO80 and BAF chromatin-remodeling complexes, were identified as regulators of T-cell exhaustion by genome-wide CRISPR-Cas9 screens.",
+        "Depletion of the BAF complex subunit Arid1a maintains an effector program, down-regulates exhaustion-related genes, limits exhaustion-associated chromatin accessibility, and improves antitumor immunity.",
+        "Inactivation of Ctbp1 enhances functional T-cell persistence specifically under chronic stimulation conditions.",
+        "Ablation of Dap5 increases translation and enhances tumor-killing across intense, acute, and chronic stimulation modes.",
+        "Loss of Icam1-mediated homotypic T-cell clustering amplifies expansion and effector functions after acute and intense stimulation."
+      ],
+      "reference_context": [
+        {
+          "context_id": "mx-04-v2-ctx-01",
+          "source_id": "PMID:35750052",
+          "title": "Genome-wide CRISPR screens of T cell exhaustion identify chromatin remodeling factors that limit T cell persistence.",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/35750052/",
+          "excerpt": "Using a chronic stimulation assay, we performed genome-wide CRISPR-Cas9 screens to systematically discover regulators of T cell exhaustion, which identified an enrichment of epigenetic factors. In vivo CRISPR screens in murine and human tumor models demonstrated that perturbation of the INO80 and BAF chromatin remodeling complexes improved T cell persistence in tumors.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "acc94d8890975b04a027a96f5240d3449031bf7ac422f4d121dfc96bb076a5a8"
+        },
+        {
+          "context_id": "mx-04-v2-ctx-02",
+          "source_id": "PMID:35750052",
+          "title": "Genome-wide CRISPR screens of T cell exhaustion identify chromatin remodeling factors that limit T cell persistence.",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/35750052/",
+          "excerpt": "In vivo Perturb-seq revealed distinct transcriptional roles of each complex and that depletion of canonical BAF complex members, including Arid1a, resulted in the maintenance of an effector program and downregulation of exhaustion-related genes in tumor-infiltrating T cells. Finally, Arid1a depletion limited the acquisition of exhaustion-associated chromatin accessibility and led to improved antitumor immunity.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "acc94d8890975b04a027a96f5240d3449031bf7ac422f4d121dfc96bb076a5a8"
+        },
+        {
+          "context_id": "mx-04-v2-ctx-03",
+          "source_id": "PMID:38490212",
+          "title": "Multimodal stimulation screens reveal unique and shared genes limiting T cell fitness.",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/38490212/",
+          "excerpt": "Loss of Icam1-mediated homotypic T cell clustering amplifies cell expansion and effector functions after both acute and intense stimulation. Lastly, Ctbp1 inactivation induces functional T cell persistence exclusively upon chronic stimulation.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "8faf6ec3e95691c049c3c265d8cd72e5f608561f83d47b0d4a45e08f07e4324a"
+        },
+        {
+          "context_id": "mx-04-v2-ctx-04",
+          "source_id": "PMID:38490212",
+          "title": "Multimodal stimulation screens reveal unique and shared genes limiting T cell fitness.",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/38490212/",
+          "excerpt": "Dap5 ablation, ranking highly in all three screens, increases translation while enhancing tumor killing. Loss of Icam1-mediated homotypic T cell clustering amplifies cell expansion and effector functions after both acute and intense stimulation.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "8faf6ec3e95691c049c3c265d8cd72e5f608561f83d47b0d4a45e08f07e4324a"
+        },
+        {
+          "context_id": "mx-04-v2-ctx-05",
+          "source_id": "PMID:38490212",
+          "title": "Multimodal stimulation screens reveal unique and shared genes limiting T cell fitness.",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/38490212/",
+          "excerpt": "Dap5 ablation, ranking highly in all three screens, increases translation while enhancing tumor killing. Loss of Icam1-mediated homotypic T cell clustering amplifies cell expansion and effector functions after both acute and intense stimulation.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "8faf6ec3e95691c049c3c265d8cd72e5f608561f83d47b0d4a45e08f07e4324a"
+        }
+      ],
+      "provenance": "silver_auto_generated_independently_audited",
+      "human_review": false,
+      "generator": "groq:openai/gpt-oss-120b",
+      "validator": "pending_stage3_independent_audit",
+      "validation_score": null,
+      "claim_support": [
+        {
+          "claim_index": 1,
+          "original_claim_index": 1,
+          "claim": "Epigenetic factors, including INO80 and BAF chromatin-remodeling complexes, were identified as regulators of T-cell exhaustion by genome-wide CRISPR-Cas9 screens.",
+          "context_id": "mx-04-v2-ctx-01",
+          "source_id": "PMID:35750052",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "Genome-wide CRISPR-Cas9 screens identified epigenetic factors, including INO80 and BAF chromatin remodeling complexes, as regulators of T-cell exhaustion.",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 2,
+          "original_claim_index": 2,
+          "claim": "Depletion of the BAF complex subunit Arid1a maintains an effector program, down-regulates exhaustion-related genes, limits exhaustion-associated chromatin accessibility, and improves antitumor immunity.",
+          "context_id": "mx-04-v2-ctx-02",
+          "source_id": "PMID:35750052",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "Arid1a depletion maintains an effector program, downregulates exhaustion genes, limits exhaustion-associated chromatin accessibility, and improves antitumor immunity.",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 3,
+          "original_claim_index": 3,
+          "claim": "Inactivation of Ctbp1 enhances functional T-cell persistence specifically under chronic stimulation conditions.",
+          "context_id": "mx-04-v2-ctx-03",
+          "source_id": "PMID:38490212",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "Ctbp1 inactivation induces functional T-cell persistence exclusively upon chronic stimulation.",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 4,
+          "original_claim_index": 4,
+          "claim": "Ablation of Dap5 increases translation and enhances tumor-killing across intense, acute, and chronic stimulation modes.",
+          "context_id": "mx-04-v2-ctx-04",
+          "source_id": "PMID:38490212",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "Dap5 ablation increases translation and enhances tumor killing, ranking highly across intense, acute, and chronic stimulation screens.",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 5,
+          "original_claim_index": 5,
+          "claim": "Loss of Icam1-mediated homotypic T-cell clustering amplifies expansion and effector functions after acute and intense stimulation.",
+          "context_id": "mx-04-v2-ctx-05",
+          "source_id": "PMID:38490212",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "Loss of Icam1-mediated homotypic T-cell clustering amplifies expansion and effector functions after acute and intense stimulation.",
+          "mapping_method": "independent_semantic_source_audit"
+        }
+      ],
+      "claim_support_status": "independently_semantically_validated",
+      "reference_answer_original": "Genome‑wide CRISPR‑Cas9 screens have pinpointed epigenetic regulators of T‑cell exhaustion, notably members of the INO80 and BAF chromatin‑remodeling complexes. Disruption of the BAF complex, especially loss of the canonical subunit Arid1a, preserves an effector transcriptional program, reduces expression of exhaustion‑associated genes, limits exhaustion‑linked chromatin accessibility, and improves antitumor immunity. Separate CRISPR knockout screens in primary CD8 T cells under chronic stimulation identified Ctbp1 as a chronic‑specific fitness regulator; its inactivation promotes functional T‑cell persistence. Additional screens revealed that Dap5 deletion enhances translation and tumor‑killing capacity across intense, acute, and chronic stimulation conditions, while loss of Icam1‑mediated homotypic clustering boosts expansion and effector functions after acute and intense stimulation.",
+      "reference_claims_original": [
+        "Epigenetic factors, including INO80 and BAF chromatin‑remodeling complexes, were identified as regulators of T‑cell exhaustion by genome‑wide CRISPR‑Cas9 screens.",
+        "Depletion of the BAF complex subunit Arid1a maintains an effector program, down‑regulates exhaustion‑related genes, limits exhaustion‑associated chromatin accessibility, and improves antitumor immunity.",
+        "Inactivation of Ctbp1 enhances functional T‑cell persistence specifically under chronic stimulation conditions.",
+        "Ablation of Dap5 increases translation and enhances tumor‑killing across intense, acute, and chronic stimulation modes.",
+        "Loss of Icam1‑mediated homotypic T‑cell clustering amplifies expansion and effector functions after acute and intense stimulation."
+      ],
+      "claim_audit": [
+        {
+          "claim_index": 1,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "PMID:35750052"
+          ],
+          "rationale": "Genome-wide CRISPR-Cas9 screens identified epigenetic factors, including INO80 and BAF chromatin remodeling complexes, as regulators of T-cell exhaustion.",
+          "judge_returned": true
+        },
+        {
+          "claim_index": 2,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "PMID:35750052"
+          ],
+          "rationale": "Arid1a depletion maintains an effector program, downregulates exhaustion genes, limits exhaustion-associated chromatin accessibility, and improves antitumor immunity.",
+          "judge_returned": true
+        },
+        {
+          "claim_index": 3,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "PMID:38490212"
+          ],
+          "rationale": "Ctbp1 inactivation induces functional T-cell persistence exclusively upon chronic stimulation.",
+          "judge_returned": true
+        },
+        {
+          "claim_index": 4,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "PMID:38490212"
+          ],
+          "rationale": "Dap5 ablation increases translation and enhances tumor killing, ranking highly across intense, acute, and chronic stimulation screens.",
+          "judge_returned": true
+        },
+        {
+          "claim_index": 5,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "PMID:38490212"
+          ],
+          "rationale": "Loss of Icam1-mediated homotypic T-cell clustering amplifies expansion and effector functions after acute and intense stimulation.",
+          "judge_returned": true
+        }
+      ],
+      "benchmark_status": "accepted_repaired",
+      "eligible_for_benchmark": true
+    },
+    {
+      "id": "ax-03",
+      "source_group": "arxiv",
+      "question": "How do linear attention and state-space models improve efficiency on long-context sequence modeling compared to traditional architectures?",
+      "reference_answer": "Transformer architectures have time complexity that scales quadratically with sequence length. State-space models offer alternative sub-quadratic solutions and linear-time recurrence with linear O(N) computational complexity. Linear attention and state space models have become popular for improving long-context efficiency in large language models. Systems like StateFlow partition sequences to reduce activation lifetimes and improve training throughput for models with linear recurrence.",
+      "reference_claims": [
+        "Transformer architectures have time complexity that scales quadratically with sequence length.",
+        "State-space models offer alternative sub-quadratic solutions and linear-time recurrence with linear O(N) computational complexity.",
+        "Linear attention and state space models have become popular for improving long-context efficiency in large language models.",
+        "Systems like StateFlow partition sequences to reduce activation lifetimes and improve training throughput for models with linear recurrence."
+      ],
+      "reference_context": [
+        {
+          "context_id": "ax-03-v2-ctx-01",
+          "source_id": "arxiv:2507.00449v3",
+          "title": "Overcoming Long-Context Limitations of State-Space Models via Context-Dependent Sparse Attention",
+          "url": "http://arxiv.org/abs/2507.00449v3",
+          "excerpt": "Efficient long-context modeling remains a critical challenge for natural language processing (NLP), as the time complexity of the predominant Transformer architecture scales quadratically with the sequence length. Theoretically, we prove that SSMs do not have the expressiveness to solve multi-query joint recall in sub-quadratic time complexity.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "eb28ebac1b129e972fdb621df4d0e657694617e9e482872c271891762b776d08"
+        },
+        {
+          "context_id": "ax-03-v2-ctx-02",
+          "source_id": "arxiv:2507.00449v3",
+          "title": "Overcoming Long-Context Limitations of State-Space Models via Context-Dependent Sparse Attention",
+          "url": "http://arxiv.org/abs/2507.00449v3",
+          "excerpt": "Efficient long-context modeling remains a critical challenge for natural language processing (NLP), as the time complexity of the predominant Transformer architecture scales quadratically with the sequence length. While state-space models (SSMs) offer alternative sub-quadratic solutions, they struggle to capture long-range dependencies effectively.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "eb28ebac1b129e972fdb621df4d0e657694617e9e482872c271891762b776d08"
+        },
+        {
+          "context_id": "ax-03-v2-ctx-03",
+          "source_id": "arxiv:2608.06838v1",
+          "title": "StateFlow: Sequence Pipeline Parallelism for Long-Context Modeling with Linear Recurrence",
+          "url": "http://arxiv.org/abs/2608.06838v1",
+          "excerpt": "Long-context training is increasingly important for large language models, and linear attention and state space models have become popular for improving long-context efficiency. StateFlow further uses profile-guided nonuniform chunking to balance recurrence and softmax attention computation in hybrid models, and overlaps state transitions that expose limited parallelism with surrounding computation.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "f86474e3ce3d65793263949df3e7ce02e27bf44494b22612550c6ed8d47f78a0"
+        },
+        {
+          "context_id": "ax-03-v2-ctx-04",
+          "source_id": "arxiv:2608.06838v1",
+          "title": "StateFlow: Sequence Pipeline Parallelism for Long-Context Modeling with Linear Recurrence",
+          "url": "http://arxiv.org/abs/2608.06838v1",
+          "excerpt": "We present StateFlow, a sequence pipeline parallelism system for models with linear recurrence. StateFlow partitions each sequence into chunks and schedules their execution while propagating boundary states and gradients across chunks, thereby reducing activation lifetimes and improving training throughput.",
+          "excerpt_status": "verbatim_from_original_source",
+          "source_sha256": "f86474e3ce3d65793263949df3e7ce02e27bf44494b22612550c6ed8d47f78a0"
+        }
+      ],
+      "provenance": "silver_auto_generated_independently_audited",
+      "human_review": false,
+      "generator": "groq:openai/gpt-oss-120b",
+      "validator": "gemini:gemini-2.5-flash-lite",
+      "validation_score": 0.9,
+      "claim_support": [
+        {
+          "claim_index": 1,
+          "original_claim_index": 1,
+          "claim": "Transformer architectures have time complexity that scales quadratically with sequence length.",
+          "context_id": "ax-03-v2-ctx-01",
+          "source_id": "arxiv:2507.00449v3",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "Both arxiv:2507.00449v3 and arxiv:2601.01237v1 explicitly state that Transformer architectures have time complexity that scales quadratically with sequence length (O(N^2)).",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 2,
+          "original_claim_index": 2,
+          "claim": "State-space models offer alternative sub-quadratic solutions and linear-time recurrence with linear O(N) computational complexity.",
+          "context_id": "ax-03-v2-ctx-02",
+          "source_id": "arxiv:2507.00449v3",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "arxiv:2507.00449v3 states that 'state-space models (SSMs) offer alternative sub-quadratic solutions'. arxiv:2601.01237v1 states that SSMs offer 'linear O(N) computational complexity'. arxiv:2608.06838v1 mentions 'models with linear recurrence' in the context of long-context modeling, which aligns with state-space models.",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 3,
+          "original_claim_index": 3,
+          "claim": "Linear attention and state space models have become popular for improving long-context efficiency in large language models.",
+          "context_id": "ax-03-v2-ctx-03",
+          "source_id": "arxiv:2608.06838v1",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "arxiv:2608.06838v1 explicitly states: 'linear attention and state space models have become popular for improving long-context efficiency' in the context of 'large language models'.",
+          "mapping_method": "independent_semantic_source_audit"
+        },
+        {
+          "claim_index": 4,
+          "original_claim_index": 4,
+          "claim": "Systems like StateFlow partition sequences to reduce activation lifetimes and improve training throughput for models with linear recurrence.",
+          "context_id": "ax-03-v2-ctx-04",
+          "source_id": "arxiv:2608.06838v1",
+          "decision": "supported",
+          "confidence": 1.0,
+          "rationale": "arxiv:2608.06838v1 introduces 'StateFlow, a sequence pipeline parallelism system for models with linear recurrence' and states that 'StateFlow partitions each sequence into chunks... thereby reducing activation lifetimes and improving training throughput'.",
+          "mapping_method": "independent_semantic_source_audit"
+        }
+      ],
+      "claim_support_status": "independently_semantically_validated",
+      "reference_answer_original": "Linear attention and state-space models improve efficiency on long-context sequence modeling by avoiding the quadratic time complexity associated with predominant Transformer architectures, offering linear or sub-quadratic scaling instead. Specifically, state-space models offer linear-time recurrence and linear O(N) computational complexity compared to the Transformer's quadratic O(N^2) scaling, making them promising alternatives for processing long sequences, although methods like StateFlow or Context-Dependent Sparse Attention are often used to further enhance their practical training throughput, memory reduction, and multi-query joint recall capabilities.",
+      "reference_claims_original": [
+        "Transformer architectures have time complexity that scales quadratically with sequence length.",
+        "State-space models offer alternative sub-quadratic solutions and linear-time recurrence with linear O(N) computational complexity.",
+        "Linear attention and state space models have become popular for improving long-context efficiency in large language models.",
+        "Systems like StateFlow partition sequences to reduce activation lifetimes and improve training throughput for models with linear recurrence."
+      ],
+      "claim_audit": [
+        {
+          "claim_index": 1,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "arxiv:2507.00449v3",
+            "arxiv:2601.01237v1"
+          ],
+          "rationale": "Both arxiv:2507.00449v3 and arxiv:2601.01237v1 explicitly state that Transformer architectures have time complexity that scales quadratically with sequence length (O(N^2))."
+        },
+        {
+          "claim_index": 2,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "arxiv:2507.00449v3",
+            "arxiv:2601.01237v1",
+            "arxiv:2608.06838v1"
+          ],
+          "rationale": "arxiv:2507.00449v3 states that 'state-space models (SSMs) offer alternative sub-quadratic solutions'. arxiv:2601.01237v1 states that SSMs offer 'linear O(N) computational complexity'. arxiv:2608.06838v1 mentions 'models with linear recurrence' in the context of long-context modeling, which aligns with state-space models."
+        },
+        {
+          "claim_index": 3,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "arxiv:2608.06838v1"
+          ],
+          "rationale": "arxiv:2608.06838v1 explicitly states: 'linear attention and state space models have become popular for improving long-context efficiency' in the context of 'large language models'."
+        },
+        {
+          "claim_index": 4,
+          "decision": "supported",
+          "confidence": 1.0,
+          "source_ids": [
+            "arxiv:2608.06838v1"
+          ],
+          "rationale": "arxiv:2608.06838v1 introduces 'StateFlow, a sequence pipeline parallelism system for models with linear recurrence' and states that 'StateFlow partitions each sequence into chunks... thereby reducing activation lifetimes and improving training throughput'."
+        }
+      ],
+      "benchmark_status": "accepted_repaired",
+      "eligible_for_benchmark": true
+    }
+  ]
+}

@@ -19,14 +19,20 @@ class ModelRate:
     source: str
 
 
-# Verified 2026-10-24. OpenRouter's free router is intentionally zero-priced,
+# Verified against official provider pricing on the dates in each source label.
+# OpenRouter's free router is intentionally zero-priced,
 # but quota/availability limits still apply. Gemini embedding output is free.
 DEFAULT_MODEL_RATES: dict[tuple[str, str], ModelRate] = {
     ("groq", "openai/gpt-oss-120b"): ModelRate(0.15, 0.60, "builtin-2026-10-24"),
     ("groq", "openai/gpt-oss-20b"): ModelRate(0.075, 0.30, "builtin-2026-10-25"),
     ("openrouter", "openrouter/free"): ModelRate(0.0, 0.0, "builtin-2026-10-24"),
+    ("openrouter", "openai/gpt-oss-120b"): ModelRate(0.03, 0.15, "openrouter-model-page-2026-10-28"),
+    ("openrouter", "anthropic/claude-haiku-5.5"): ModelRate(0.10, 0.50, "openrouter-model-page-2026-10-28"),
+    ("openrouter", "qwen/qwen3.6-35b-a3b"): ModelRate(0.05, 0.70, "openrouter-model-page-2026-10-29"),
     ("gemini", "gemini-3.6-flash"): ModelRate(0.75, 3.75, "builtin-2026-10-24"),
+    ("gemini", "gemini-3.8-flash"): ModelRate(0.75, 3.75, "google-pricing-2026-10-28"),
     ("gemini", "gemini-3.5-flash-lite"): ModelRate(0.30, 2.50, "builtin-2026-10-24"),
+    ("gemini", "gemini-2.5-flash"): ModelRate(0.30, 2.50, "google-pricing-2026-10-27"),
     ("gemini", "gemini-embedding-2"): ModelRate(0.20, 0.0, "builtin-2026-10-24"),
 }
 

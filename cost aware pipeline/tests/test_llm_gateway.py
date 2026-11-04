@@ -123,6 +123,25 @@ class LLMGatewayRoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, "gemini-result")
         self.assertEqual(calls, ["groq", "openrouter", "gemini"])
 
+    async def test_role_specific_provider_order_controls_expert_only(self) -> None:
+        calls: list[str] = []
+        outcomes = {"openrouter": "A sufficiently detailed cited answer [S1]. " * 3}
+
+        def factory(provider, role, temperature):
+            calls.append(provider)
+            return provider
+
+        with patch.dict(os.environ, {"LLM_PROVIDER_ORDER_EXPERT": "openrouter,gemini,groq"}, clear=False), \
+             patch.object(llm_gateway, "create_chat_model", side_effect=factory):
+            result = await llm_gateway.ainvoke(
+                "expert", 0, lambda provider: FakeChain(outcomes[provider]),
+                {"context": "--- [S1: Source] ---\nEvidence"},
+            )
+
+        self.assertIn("[S1]", result)
+        self.assertEqual(calls, ["openrouter"])
+        self.assertEqual(llm_gateway.provider_order("planner"), ("groq", "openrouter", "gemini"))
+
     async def test_expert_safety_metadata_falls_back_to_next_provider(self) -> None:
         calls: list[str] = []
         outcomes = {
@@ -469,17 +488,19 @@ class LLMGatewayRoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls, ["openrouter"])
         self.assertEqual(summary["throttle_skips"], 1)
         self.assertEqual(summary["provider_calls"], 1)
-        self.assertEqual(summary["fallback_count"], 1)
+        self.assertEqual(summary["fallback_count"], 0)
+        self.assertEqual(summary["provider_failover_count"], 0)
+        self.assertEqual(summary["throttle_reroute_count"], 1)
 
 
 class LLMGatewayConfigurationTests(unittest.TestCase):
-    def test_query_repair_defaults_to_small_gpt_oss_model(self) -> None:
+    def test_openrouter_query_repair_defaults_to_configured_qwen_model(self) -> None:
         with patch.dict(os.environ, {
             "GROQ_MODEL": "openai/gpt-oss-120b",
-            "OPENROUTER_MODEL": "openrouter/free",
+            "OPENROUTER_MODEL": "qwen/qwen3.6-35b-a3b",
         }, clear=True):
             self.assertEqual(llm_gateway.model_for("groq", "query_repair"), "openai/gpt-oss-20b")
-            self.assertEqual(llm_gateway.model_for("openrouter", "query_repair"), "openai/gpt-oss-20b")
+            self.assertEqual(llm_gateway.model_for("openrouter", "query_repair"), "qwen/qwen3.6-35b-a3b")
 
     def test_default_gemini_timeout_is_45_seconds(self) -> None:
         with patch.dict(os.environ, {"LLM_REQUEST_TIMEOUT_SECONDS": "90", "LLM_GEMINI_TIMEOUT_SECONDS": ""}, clear=False):
@@ -491,6 +512,14 @@ class LLMGatewayConfigurationTests(unittest.TestCase):
         with patch.dict(os.environ, {"LLM_PROVIDER_ORDER": "groq,unknown"}, clear=False):
             with self.assertRaisesRegex(ValueError, "Unknown LLM provider"):
                 llm_gateway.provider_order()
+
+    def test_role_specific_provider_order_override(self) -> None:
+        with patch.dict(os.environ, {
+            "LLM_PROVIDER_ORDER": "groq,openrouter,gemini",
+            "LLM_PROVIDER_ORDER_EXPERT": "openrouter,gemini,groq",
+        }, clear=False):
+            self.assertEqual(llm_gateway.provider_order("expert"), ("openrouter", "gemini", "groq"))
+            self.assertEqual(llm_gateway.provider_order("planner"), ("groq", "openrouter", "gemini"))
 
     def test_role_specific_model_override_wins(self) -> None:
         with patch.dict(os.environ, {"GROQ_MODEL": "default", "GROQ_MODEL_EXPERT": "expert-model"}, clear=False):

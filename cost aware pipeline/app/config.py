@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     llm_provider_order: str = "groq,openrouter,gemini"
     groq_model: str = "openai/gpt-oss-120b"
-    openrouter_model: str = "openrouter/free"
+    openrouter_model: str = "qwen/qwen3.6-35b-a3b"
     llm_request_timeout_seconds: int = 90
     entrez_email: str = ""
     request_timeout_seconds: int = 600

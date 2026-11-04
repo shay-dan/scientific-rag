@@ -22,11 +22,22 @@ Research requests use PostgreSQL full-text search and pgvector cosine search, fu
 
 ### LLM gateway
 
-Research generation is provider-agnostic. Every planner, gatekeeper, orchestrator, expert, and synthetic-Q/A call uses one gateway with the default order:
+Research generation is provider-agnostic. Every planner, gatekeeper, orchestrator, expert, and synthetic-Q/A call uses one gateway. The global default order is:
 
 1. Groq — `openai/gpt-oss-120b`
-2. OpenRouter — `openrouter/free`
+2. OpenRouter — `qwen/qwen3.6-35b-a3b`
 3. Gemini — the existing role-specific Flash policy
+
+The order and model can also be overridden per role. The recommended cost-aware setup keeps the short orchestration calls on Groq and routes the evidence-heavy Expert call through a stronger paid model:
+
+```ini
+LLM_PROVIDER_ORDER=groq,openrouter,gemini
+LLM_PROVIDER_ORDER_EXPERT=openrouter,gemini,groq
+OPENROUTER_MODEL_EXPERT=qwen/qwen3.6-35b-a3b
+MODEL_EXPERT=gemini-3.8-flash
+```
+
+This recommendation comes from a small fixed-context experiment, not a production baseline. Across six representative questions with two repetitions, OpenRouter Claude Haiku 5.5 completed 12/12 generations, scored 0.925 overall with the automated comparison judge, averaged 6.85 seconds, and cost about $0.0104 for generation. Gemini 3.8 Flash completed 12/12, scored 0.917, averaged 13.18 seconds, and cost about $0.0726. The same GPT-OSS 120B model completed only 5/12 through paid OpenRouter and 6/12 through Groq because it often omitted the required citations. See [`evaluation/provider-model-comparison-report.md`](evaluation/provider-model-comparison-report.md) for the exact scope and limitations.
 
 Unconfigured providers are skipped. Automatic fallback occurs only for transient/provider-availability failures: timeouts, connection failures, HTTP 408/409/429, HTTP 5xx, and an explicit model-unavailable 404. Configuration, authentication, invalid prompt/schema, and other 4xx errors stop immediately instead of being hidden by another provider.
 
@@ -40,15 +51,18 @@ Configuration:
 
 ```ini
 LLM_PROVIDER_ORDER=groq,openrouter,gemini
+LLM_PROVIDER_ORDER_EXPERT=openrouter,gemini,groq
 GROQ_API_KEY=...
 GROQ_MODEL=openai/gpt-oss-120b
 OPENROUTER_API_KEY=...
-OPENROUTER_MODEL=openrouter/free
+OPENROUTER_MODEL=qwen/qwen3.6-35b-a3b
+OPENROUTER_MODEL_EXPERT=qwen/qwen3.6-35b-a3b
 GOOGLE_API_KEY=...
+MODEL_EXPERT=gemini-3.8-flash
 LLM_REQUEST_TIMEOUT_SECONDS=90
 LLM_GROQ_TIMEOUT_SECONDS=20
-LLM_OPENROUTER_TIMEOUT_SECONDS=12
-LLM_OPENROUTER_EXPERT_MAX_CONTEXT_CHARS=6000
+LLM_OPENROUTER_TIMEOUT_SECONDS=60
+LLM_OPENROUTER_EXPERT_MAX_CONTEXT_CHARS=12000
 LLM_GEMINI_TIMEOUT_SECONDS=45
 LLM_GROQ_RPM_BUDGET=20
 LLM_GROQ_TPM_BUDGET=6000
@@ -56,9 +70,13 @@ LLM_OPENROUTER_RPM_BUDGET=10
 LLM_GROQ_GATEKEEPER_WAIT_SECONDS=4
 ```
 
-Models may also be overridden per role, for example `GROQ_MODEL_EXPERT` or `OPENROUTER_MODEL_PLANNER`. Groq and OpenRouter expose OpenAI-compatible APIs; see their official [Groq compatibility](https://console.groq.com/docs/openai) and [OpenRouter free-router](https://openrouter.ai/openrouter/free) documentation.
+Provider order and models may be overridden per role, for example `LLM_PROVIDER_ORDER_EXPERT`, `GROQ_MODEL_EXPERT`, or `OPENROUTER_MODEL_PLANNER`. Groq and OpenRouter expose OpenAI-compatible APIs; see their official [Groq compatibility](https://console.groq.com/docs/openai) and [OpenRouter Qwen 3.6 35B A3B](https://openrouter.ai/qwen/qwen3.6-35b-a3b) documentation.
 The gateway uses Redis to share conservative one-minute request/token reservations between the API and worker. These defaults are **not** your provider account limits; inspect your own provider dashboards before raising them. Failed calls retain their estimated token reservation until the minute resets, while successful calls reconcile the estimate with reported token usage. A Groq Gatekeeper lease permits one such request at a time across processes; another request waits up to four seconds and then falls back. A 429 also creates a shared Redis cooldown. If Redis admission is unavailable, throttled providers fall back rather than sending an unmetered request; the unthrottled Gemini fallback remains available. This is an admission budget, not a guarantee that a provider will never return 429. The Provider diagnostics tab separates Expert-call latency and shows calls skipped before sending.
-Each LLM attempt has a provider-specific deadline, so a slow free-model route cannot occupy the full research timeout. A provider that returns HTTP 429 enters a temporary cooldown; two retryable failures also open a temporary run-scoped circuit. `Retry-After`, when supplied, determines the 429 cooldown; otherwise `LLM_PROVIDER_COOLDOWN_SECONDS` defaults to 60. If Gemini then fails transiently, the gateway makes one short recovery pass through earlier providers whose cooldowns have expired, only while at least `LLM_RECOVERY_MIN_REMAINING_SECONDS` (default 10) remain. There are at most three actual provider attempts per LLM call, within `LLM_REQUEST_TIMEOUT_SECONDS` (default 90). The Gemini attempt timeout defaults to 45 seconds; override with `LLM_GEMINI_TIMEOUT_SECONDS`. OpenRouter remains in the normal order for short Expert contexts, but an Expert context over `LLM_OPENROUTER_EXPERT_MAX_CONTEXT_CHARS` (default 6000) bypasses it when another provider is available; this avoids repeated 12-second timeouts seen in local large-context probes. Set the limit to `0` to disable this size-based rule. The rule is a latency heuristic, not a claim that OpenRouter cannot answer larger prompts. PubMed's Entrez network calls now use an 8-second socket timeout, at most two Biopython attempts, and a thread-local 90-second fetch deadline. Configure `ENTREZ_REQUEST_TIMEOUT_SECONDS`, `PUBMED_FETCH_TIMEOUT_SECONDS`, `MINING_SOURCE_TIMEOUT_SECONDS` (150), and `RELEVANCE_SCREEN_TIMEOUT_SECONDS` (55) in `.env` if needed. A timed-out source is recorded in source diagnostics; other sources can still finish. The overall `REQUEST_TIMEOUT_SECONDS` remains 600 by default and failed runs retain the stage and a readable timeout message. Socket timeouts limit inactivity, not total response time under a slow trickle; an unusually slow synchronous request can still outlive a cancelled source task.
+Each LLM attempt has a provider-specific deadline, so one slow provider cannot occupy the full research timeout. A provider that returns HTTP 429 enters a temporary cooldown; two retryable failures also open a temporary run-scoped circuit. `Retry-After`, when supplied, determines the 429 cooldown; otherwise `LLM_PROVIDER_COOLDOWN_SECONDS` defaults to 60. If Gemini then fails transiently, the gateway makes one short recovery pass through earlier providers whose cooldowns have expired, only while at least `LLM_RECOVERY_MIN_REMAINING_SECONDS` (default 10) remain. There are at most three actual provider attempts per LLM call, within `LLM_REQUEST_TIMEOUT_SECONDS` (default 90). The Gemini attempt timeout defaults to 45 seconds; override with `LLM_GEMINI_TIMEOUT_SECONDS`. Paid Qwen on OpenRouter has a 35-second provider deadline and accepts Expert contexts up to 12,000 characters by default. Larger contexts bypass OpenRouter when another provider is available. Set `LLM_OPENROUTER_EXPERT_MAX_CONTEXT_CHARS=0` to disable this size-based rule. The rule is a latency heuristic, not a model capability claim. PubMed's Entrez network calls now use an 8-second socket timeout, at most two Biopython attempts, and a thread-local 90-second fetch deadline. Configure `ENTREZ_REQUEST_TIMEOUT_SECONDS`, `PUBMED_FETCH_TIMEOUT_SECONDS`, `MINING_SOURCE_TIMEOUT_SECONDS` (150), and `RELEVANCE_SCREEN_TIMEOUT_SECONDS` (55) in `.env` if needed. A timed-out source is recorded in source diagnostics; other sources can still finish. The overall `REQUEST_TIMEOUT_SECONDS` remains 600 by default and failed runs retain the stage and a readable timeout message. Socket timeouts limit inactivity, not total response time under a slow trickle; an unusually slow synchronous request can still outlive a cancelled source task.
+
+The current v14 configuration uses a 60-second OpenRouter deadline for the
+paid Qwen fallback. This is intentionally longer than the earlier 35-second
+experiment because structured evidence responses can be larger.
 
 ### Retrieval
 
@@ -144,6 +162,49 @@ docker compose exec -T api python scripts/run_fast_benchmark_matrix.py --repetit
 The runner performs a conservative cost preflight before creating anything. With the default reservations, the active 10-case matrix repeated three times requires up to `$4.50` in application reservations (`$0.05` research + `$0.10` judging per case). Reports are written under ignored `evaluation/results/`; review and deliberately copy an approved baseline into version control rather than committing every experiment.
 
 Benchmark jobs have their own one-hour timeout (`EVALUATION_JOB_TIMEOUT_SECONDS=3600`), independent of the per-research-request timeout. The evaluation page reports research and judging progress for the current case.
+
+### Comparative RAG benchmark
+
+The planned complexity comparison is documented in
+[`evaluation/comparative-benchmark-plan.md`](evaluation/comparative-benchmark-plan.md).
+It compares Naive RAG, Hybrid Basic, Hybrid Enhanced, and Agentic Fast on the
+same frozen corpus. Cross-Encoder reranking and human review are not part of
+this experiment. The provider-free preflight is:
+
+```powershell
+python scripts/compare_rag_variants.py --estimate-only --case-count 100 --repetitions 3
+```
+
+The current repository contains 30 reviewed cases, not 100. The comparison
+runner therefore refuses to start a paid 100-case experiment until the
+remaining cases have verified answers, atomic claims, and source excerpts or
+identifiers. This is intentional: duplicating or inventing ground truth would
+make Recall@K, citation support, and Ragas comparisons misleading.
+
+### Current validation status and next work
+
+The v14 Quality Gate is a three-question Fast smoke test, not a final
+production baseline. It completed 3/3 runs with mean Faithfulness 1.00,
+Answer Relevancy 0.883, Context Precision 0.833, and Context Recall 0.700.
+See [`evaluation/v14-structured-synthesis-quality-gate-report-2026-11-04.md`](evaluation/v14-structured-synthesis-quality-gate-report-2026-11-04.md)
+for the detailed report.
+
+Remaining work is staged:
+
+1. Diagnose and improve the ax-04 retrieval and answer-coverage failure.
+2. Compare provider reliability on the structured synthesis contract. Qwen on
+   OpenRouter remains an optional fallback, not a single-provider guarantee.
+3. Label or complete token accounting for provider failures that return no
+   usage metadata.
+4. Run the frozen benchmark repeatedly and define a baseline only after the
+   quality gates pass consistently.
+5. Deploy to staging with HTTPS, external secrets, a separate database,
+   automated backups, and a tested restore procedure.
+6. Run load and failure-recovery tests with multiple workers and simulated
+   Redis/PostgreSQL interruptions.
+7. Complete the security review: CSRF, shared rate limits, dependency and
+   secret scanning, access review, and log-redaction tests.
+8. Publish the final demo only after the production checks above pass.
 
 ## Database migrations
 

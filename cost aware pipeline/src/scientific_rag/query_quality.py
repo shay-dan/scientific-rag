@@ -8,14 +8,18 @@ import re
 
 _STOP_WORDS = {
     "a", "about", "an", "and", "are", "as", "be", "been", "being", "by", "can",
-    "current", "do", "does", "evidence", "for", "from", "how", "in", "into", "is",
-    "known", "latest", "main", "of", "on", "recent", "research", "studies", "the",
-    "their", "to", "use", "used", "uses", "using", "what", "which", "with",
+    "causes", "challenges", "current", "do", "does", "evidence", "for", "from", "how",
+    "in", "into", "is", "known", "latest", "limitations", "main", "of", "on",
+    "opportunities", "prevention", "recent", "research", "risks", "roles", "studies",
+    "strategies", "the", "their", "to", "use", "used", "uses", "using", "what",
+    "which", "with",
 }
 
 # Canonical concepts and useful spelling variants. Long/specific phrases are
 # intentionally listed before generic token extraction.
 _CONCEPTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("robotic manipulation", ("robotic manipulation", "robot manipulation", "manipulation robot", "manipulation robots")),
+    ("reinforcement learning", ("reinforcement learning", "offline reinforcement learning", "online reinforcement learning", "offline rl", "online rl")),
     ("retrieval augmented generation", ("retrieval augmented generation", "retrieval-augmented generation", "rag")),
     ("quantum error correction", ("quantum error correction", "qec")),
     ("fourier neural operator", ("fourier neural operator", "fourier neural operators", "fno")),
@@ -35,6 +39,8 @@ _CONCEPTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("mammography", ("mammography", "mammogram", "tomosynthesis")),
     ("quantum machine learning", ("quantum machine learning", "qml")),
     ("gut microbiome", ("gut microbiome", "intestinal microbiome", "gut microbiota")),
+    ("antimicrobial resistance", ("antimicrobial resistance", "antibiotic resistance", "drug-resistant infection", "drug resistant infection", "amr")),
+    ("healthcare setting", ("healthcare setting", "healthcare settings", "health care setting", "health care settings", "hospital", "hospitals", "clinical setting", "clinical settings")),
 )
 
 

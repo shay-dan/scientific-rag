@@ -14,7 +14,7 @@ from sqlalchemy import select
 
 from app.config import get_settings
 from app.db import close_database, session_factory
-from app.evaluation import diagnose_reference_claims, score_with_ragas
+from app.evaluation import EvaluationUsageTracker, diagnose_reference_claims, score_with_ragas
 from app.models import ResearchEvidence, ResearchRun
 
 
@@ -34,17 +34,25 @@ async def score(run_id: UUID, benchmark_path: Path) -> dict:
         )).scalars())
         if not contexts:
             raise ValueError("The run has no saved evidence passages to evaluate")
+        reference_context = case.get("reference_context")
+        if isinstance(reference_context, list):
+            reference_context = "\n\n".join(
+                item.get("excerpt", "") if isinstance(item, dict) else str(item)
+                for item in reference_context
+            )
         settings = get_settings()
+        usage_tracker = EvaluationUsageTracker()
         scores = await asyncio.wait_for(score_with_ragas(
             question=run.question,
             answer=run.answer,
             retrieved_contexts=contexts,
             reference_answer=case["reference_answer"],
-            reference_context=case.get("reference_context"),
+            reference_context=reference_context,
             api_key=settings.google_api_key,
             judge_model=settings.ragas_judge_model,
             embedding_model=settings.embedding_model,
             embedding_dimensions=settings.embedding_dimensions,
+            usage_tracker=usage_tracker,
         ), timeout=240)
         claim_diagnostics = None
         reference_claims = case.get("reference_claims") or []
@@ -55,16 +63,21 @@ async def score(run_id: UUID, benchmark_path: Path) -> dict:
                 retrieved_contexts=contexts,
                 api_key=settings.google_api_key,
                 judge_model=settings.ragas_judge_model,
+                usage_tracker=usage_tracker,
             ), timeout=120)
         return {
             "run_id": str(run.id),
             "pipeline_version": run.model_metadata.get("retrieval_version"),
             "question": run.question,
-            "reference_dataset": benchmark["name"],
+            "reference_dataset": benchmark.get("name") or benchmark.get("dataset_name") or benchmark_path.stem,
             "retrieved_passages": len(contexts),
             "engine": "ragas",
             "scores": scores,
             "claim_diagnostics": claim_diagnostics,
+            "judge_usage": usage_tracker.summary(
+                judge_model=settings.ragas_judge_model,
+                embedding_model=settings.embedding_model,
+            ),
         }
 
 
@@ -72,9 +85,15 @@ async def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_id", type=UUID)
     parser.add_argument("--benchmark", type=Path, default=Path("evaluation/benchmark-v1.json"))
+    parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     try:
-        print(json.dumps(await score(args.run_id, args.benchmark), indent=2), flush=True)
+        result = await score(args.run_id, args.benchmark)
+        rendered = json.dumps(result, indent=2)
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(rendered + "\n", encoding="utf-8")
+        print(rendered, flush=True)
     finally:
         await close_database()
 

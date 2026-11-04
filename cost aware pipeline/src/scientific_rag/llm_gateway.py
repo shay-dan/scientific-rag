@@ -195,6 +195,19 @@ def summarize_trace(attempts: list[dict[str, Any]]) -> dict[str, Any]:
     skipped_attempts = [attempt for attempt in attempts if attempt.get("skipped")]
     throttle_skips = [attempt for attempt in skipped_attempts if attempt.get("error_type") == "ProviderThrottled"]
     policy_skips = [attempt for attempt in skipped_attempts if attempt.get("error_type") == "ExpertContextLimit"]
+    call_groups: dict[str, list[dict[str, Any]]] = {}
+    for attempt in attempts:
+        call_groups.setdefault(str(attempt["call_id"]), []).append(attempt)
+    provider_failovers = 0
+    throttle_reroutes = 0
+    for call_attempts in call_groups.values():
+        called = [attempt for attempt in call_attempts if not attempt.get("skipped")]
+        failed_providers = {str(attempt["provider"]) for attempt in called if not attempt.get("success")}
+        successful_providers = {str(attempt["provider"]) for attempt in called if attempt.get("success")}
+        if failed_providers and successful_providers and failed_providers != successful_providers:
+            provider_failovers += 1
+        if any(attempt.get("skipped") and attempt.get("error_type") == "ProviderThrottled" for attempt in call_attempts) and called:
+            throttle_reroutes += 1
     for bucket in by_model.values():
         bucket["estimated_cost_usd"] = round(bucket["estimated_cost_usd"], 8) if bucket["cost_available"] else None
     for bucket in by_provider.values():
@@ -209,7 +222,12 @@ def summarize_trace(attempts: list[dict[str, Any]]) -> dict[str, Any]:
         "admission_wait_ms": round(sum(float(attempt.get("admission_wait_ms") or 0) for attempt in attempts), 1),
         "recovery_attempts": len(recovery_attempts),
         "recovery_latency_ms": round(sum(float(attempt["latency_ms"]) for attempt in recovery_attempts), 1),
-        "fallback_count": len({attempt["call_id"] for attempt in attempts if int(attempt["attempt_index"]) > 0 or attempt.get("skipped")}),
+        # Backwards-compatible name, now limited to real failed-provider ->
+        # successful-provider transitions. Admission skips are reported
+        # separately and no longer inflate the fallback number.
+        "fallback_count": provider_failovers,
+        "provider_failover_count": provider_failovers,
+        "throttle_reroute_count": throttle_reroutes,
         "by_provider": by_provider,
         "by_model": by_model,
         "input_tokens": total_input_tokens if token_usage_available else None,
@@ -256,8 +274,9 @@ def _record(attempt: ProviderAttempt) -> None:
         attempts.append(attempt)
 
 
-def provider_order() -> tuple[str, ...]:
-    configured = os.getenv("LLM_PROVIDER_ORDER", ",".join(DEFAULT_PROVIDER_ORDER))
+def provider_order(role: str | None = None) -> tuple[str, ...]:
+    role_override = os.getenv(f"LLM_PROVIDER_ORDER_{role.upper()}") if role else None
+    configured = role_override or os.getenv("LLM_PROVIDER_ORDER", ",".join(DEFAULT_PROVIDER_ORDER))
     providers = tuple(item.strip().lower() for item in configured.split(",") if item.strip())
     unknown = set(providers) - set(DEFAULT_PROVIDER_ORDER)
     if unknown:
@@ -281,14 +300,14 @@ def model_for(provider: str, role: str) -> str:
         role_default = "openai/gpt-oss-20b" if role == "query_repair" else os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
         return os.getenv(f"GROQ_MODEL_{role_key}", role_default)
     if provider == "openrouter":
-        role_default = "openai/gpt-oss-20b" if role == "query_repair" else os.getenv("OPENROUTER_MODEL", "openrouter/free")
+        role_default = os.getenv("OPENROUTER_MODEL", "qwen/qwen3.6-35b-a3b")
         return os.getenv(f"OPENROUTER_MODEL_{role_key}", role_default)
     return ModelPolicy.from_environment().route_for(role).primary
 
 
 def primary_route_label(role: str) -> str:
     cooldowns = _provider_cooldowns.get() or {}
-    for provider in provider_order():
+    for provider in provider_order(role):
         if _key_for(provider) and cooldowns.get(provider, 0) <= time.monotonic():
             return f"{provider}:{model_for(provider, role)}"
     return "unconfigured"
@@ -381,8 +400,8 @@ def is_retryable_error(error: BaseException) -> bool:
     return any(marker in message for marker in RETRYABLE_MARKERS)
 
 
-def _configured_providers() -> Iterable[str]:
-    for provider in provider_order():
+def _configured_providers(role: str | None = None) -> Iterable[str]:
+    for provider in provider_order(role):
         if _key_for(provider):
             yield provider
         else:
@@ -413,7 +432,7 @@ def _retry_after_seconds(error: BaseException) -> float | None:
 
 def create_primary_chat_model(role: str, temperature: float):
     """Build the first configured provider model for constructor compatibility."""
-    provider = next(iter(_configured_providers()), None)
+    provider = next(iter(_configured_providers(role)), None)
     if provider is None:
         raise ValueError("No LLM provider API key is configured")
     return create_chat_model(provider, role, temperature)
@@ -421,7 +440,7 @@ def create_primary_chat_model(role: str, temperature: float):
 
 async def ainvoke(role: str, temperature: float, chain_builder: Callable[[Any], Any], payload: Any):
     """Invoke a chain and fail over only for transient/provider-availability errors."""
-    providers = list(_configured_providers())
+    providers = list(_configured_providers(role))
     if not providers:
         raise ValueError("No LLM provider API key is configured")
 

@@ -14,7 +14,8 @@ sys.path.insert(0, str(project_root / "src"))
 
 from app.main import _aggregate_provider_diagnostics, app
 from app.schemas import EvidenceJobRequest, EvaluationDatasetInput, EvaluationRunInput, ResearchCacheMode, ResearchMode, ResearchRequest
-from app.services import PIPELINE_VERSION, ResearchService
+from app.services import PIPELINE_VERSION, ResearchService, _responses_for_evidence_documents
+from langchain_core.documents import Document
 
 
 class ApiContractTests(unittest.TestCase):
@@ -54,6 +55,27 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(result["fallback_count"], 1)
         self.assertEqual(result["providers"]["groq"]["average_latency_ms"], 150.0)
         self.assertEqual(result["providers"]["openrouter"]["models"], ["openrouter/free"])
+
+    def test_provider_diagnostics_do_not_mix_throttling_with_failover(self) -> None:
+        runs = [SimpleNamespace(model_metadata={"llm_gateway": {
+            "fallback_count": 1, "provider_failover_count": 1,
+            "throttle_reroute_count": 3, "throttle_skips": 4, "failed_attempts": 2,
+        }})]
+        result = _aggregate_provider_diagnostics(runs)
+        self.assertEqual(result["provider_failover_count"], 1)
+        self.assertEqual(result["throttle_reroute_count"], 3)
+        self.assertEqual(result["throttle_skips"], 4)
+        self.assertEqual(result["failed_attempts"], 2)
+
+    def test_response_sources_deduplicate_parent_child_passages_by_citation(self) -> None:
+        documents = [
+            Document(page_content="first passage", metadata={"citation_id": "S1", "doc_id": "PMID:1", "title": "Paper"}),
+            Document(page_content="second passage", metadata={"citation_id": "S1", "doc_id": "PMID:1", "title": "Paper"}),
+            Document(page_content="other paper", metadata={"citation_id": "S2", "doc_id": "PMID:2", "title": "Other"}),
+        ]
+        sources = _responses_for_evidence_documents(documents)
+        self.assertEqual([source.citation_id for source in sources], ["S1", "S2"])
+        self.assertEqual(sources[0].excerpt, "first passage")
 
     def test_provider_diagnostics_separate_expert_latency_and_throttle_skips(self) -> None:
         runs = [SimpleNamespace(model_metadata={"llm_gateway": {

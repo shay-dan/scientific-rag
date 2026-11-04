@@ -15,6 +15,7 @@ from sqlalchemy import func, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import Settings
+from .fts_query import build_postgres_fts_query
 from .models import DocumentChunk, ParentDocument, SourceDocument
 from scientific_rag.costing import calculate_cost, estimate_text_tokens
 from scientific_rag.query_quality import concepts_covered
@@ -258,15 +259,52 @@ class PostgresVectorService:
                     parent_ordinal += 1
         await self.session.flush()
 
-    async def retrieve_context(self, query: str, top_n: int = 10) -> list[Document]:
+    async def retrieve_context(self, query: str, top_n: int = 10, strategy: str = "enhanced") -> list[Document]:
+        """Retrieve evidence using one of the benchmarkable strategies.
+
+        ``naive`` is dense-only top-k chunk retrieval, ``hybrid_basic`` is
+        dense + PostgreSQL full-text search fused with RRF, and ``enhanced``
+        is the production path with early MMR and parent-context expansion.
+        The default remains the production strategy for backwards compatibility.
+        """
+        if strategy not in {"naive", "hybrid_basic", "mmr", "hybrid_mmr", "enhanced"}:
+            raise ValueError(f"Unknown retrieval strategy: {strategy}")
         query_embedding = (await self._embed([query], "RETRIEVAL_QUERY"))[0]
         # The legacy pipeline may issue several retrievals concurrently. An
         # AsyncSession is intentionally single-operation, so serialize only
         # the database portion while embeddings can still be prepared first.
         async with self._session_lock:
-            return await self._retrieve_context_from_database(query, query_embedding, top_n)
+            return await self._retrieve_context_from_database(query, query_embedding, top_n, strategy=strategy)
 
-    async def _retrieve_context_from_database(self, query: str, query_embedding: list[float], top_n: int) -> list[Document]:
+    async def retrieve_context_strategies(
+        self,
+        query: str,
+        strategies: tuple[str, ...],
+        *,
+        top_n: int = 5,
+    ) -> dict[str, list[Document]]:
+        """Run retrieval-only ablations with one shared query embedding."""
+        allowed = {"naive", "hybrid_basic", "mmr", "hybrid_mmr", "enhanced"}
+        unknown = set(strategies) - allowed
+        if unknown:
+            raise ValueError(f"Unknown retrieval strategies: {sorted(unknown)}")
+        query_embedding = (await self._embed([query], "RETRIEVAL_QUERY"))[0]
+        output: dict[str, list[Document]] = {}
+        async with self._session_lock:
+            for strategy in strategies:
+                output[strategy] = await self._retrieve_context_from_database(
+                    query, query_embedding, top_n, strategy=strategy
+                )
+        return output
+
+    async def _retrieve_context_from_database(
+        self,
+        query: str,
+        query_embedding: list[float],
+        top_n: int,
+        *,
+        strategy: str = "enhanced",
+    ) -> list[Document]:
         candidate_limit = max(top_n * 3, 20)
         vector_fetch_limit = max(top_n * 8, 50)
         run_scope = SourceDocument.research_run_id == self.research_run_id if self.restrict_to_current_run else true()
@@ -277,23 +315,53 @@ class PostgresVectorService:
             .order_by(DocumentChunk.embedding.cosine_distance(query_embedding))
             .limit(vector_fetch_limit)
         )
-        tsquery = func.websearch_to_tsquery("english", query)
-        text_statement = (
-            select(DocumentChunk, SourceDocument, func.ts_rank_cd(DocumentChunk.search_vector, tsquery).label("text_score"))
-            .join(SourceDocument, DocumentChunk.source_document_id == SourceDocument.id)
-            .where(DocumentChunk.search_vector.op("@@")(tsquery), run_scope)
-            .order_by(func.ts_rank_cd(DocumentChunk.search_vector, tsquery).desc())
-            .limit(candidate_limit)
-        )
+        try:
+            fts_query, fts_diagnostics = build_postgres_fts_query(query)
+        except ValueError as error:
+            # Some planner-generated sub-questions contain only generic words.
+            # That makes lexical retrieval unsafe, but it must not discard the
+            # valid semantic results already available through pgvector.
+            fts_query = None
+            fts_diagnostics = {
+                "decision": "skipped_no_lexical_terms",
+                "reason": str(error),
+                "fallback": "pgvector_mmr",
+            }
+        text_statement = None
+        if fts_query:
+            tsquery = func.websearch_to_tsquery("english", fts_query)
+            text_statement = (
+                select(DocumentChunk, SourceDocument, func.ts_rank_cd(DocumentChunk.search_vector, tsquery).label("text_score"))
+                .join(SourceDocument, DocumentChunk.source_document_id == SourceDocument.id)
+                .where(DocumentChunk.search_vector.op("@@")(tsquery), run_scope)
+                .order_by(func.ts_rank_cd(DocumentChunk.search_vector, tsquery).desc())
+                .limit(candidate_limit)
+            )
         vector_candidates = [RetrievalCandidate(chunk=row[0], source=row[1]) for row in (await self.session.execute(vector_statement)).all()]
-        vector_results = maximal_marginal_relevance(vector_candidates, query_embedding, limit=candidate_limit)
-        text_rows = (await self.session.execute(text_statement)).all()
+        vector_results = (
+            vector_candidates[:candidate_limit]
+            if strategy in {"naive", "hybrid_basic"}
+            else maximal_marginal_relevance(vector_candidates, query_embedding, limit=candidate_limit)
+        )
+        text_rows = (
+            []
+            if strategy in {"naive", "mmr"} or text_statement is None
+            else (await self.session.execute(text_statement)).all()
+        )
         text_results = [RetrievalCandidate(chunk=row[0], source=row[1]) for row in text_rows]
-        fused_candidates = reciprocal_rank_fusion(vector_results, text_results, limit=candidate_limit)
+        if strategy == "naive":
+            fused_candidates = vector_candidates[:top_n]
+        elif strategy == "mmr":
+            fused_candidates = vector_results[:candidate_limit]
+        else:
+            fused_candidates = reciprocal_rank_fusion(vector_results, text_results, limit=candidate_limit)
         fused_results: list[RetrievalCandidate] = []
         seen_contexts: set[uuid.UUID] = set()
         for candidate in fused_candidates:
-            context_key = parent_context_key(candidate)
+            # The two non-agentic baselines intentionally return chunks. The
+            # production path expands one selected child into its parent so the
+            # comparison isolates parent/child retrieval as an enhancement.
+            context_key = candidate.chunk.id if strategy != "enhanced" else parent_context_key(candidate)
             if context_key in seen_contexts:
                 continue
             seen_contexts.add(context_key)
@@ -340,16 +408,17 @@ class PostgresVectorService:
                 "rejection_reason": rejection,
             })
         candidate_trace.sort(key=lambda item: item["rrf_score"], reverse=True)
-        self.retrieval_traces.append({"query": query, "top_n": top_n, "vector_count": len(vector_candidates),
+        self.retrieval_traces.append({"query": query, "strategy": strategy, "top_n": top_n, "fts_query": fts_query,
+            "fts_diagnostics": fts_diagnostics, "vector_count": len(vector_candidates),
             "mmr_count": len(vector_results), "fulltext_count": len(text_results), "selected_count": len(fused_results),
             "candidates": candidate_trace[:100]})
-        parent_ids = [candidate.chunk.parent_document_id for candidate in fused_results if candidate.chunk.parent_document_id]
+        parent_ids = [candidate.chunk.parent_document_id for candidate in fused_results if candidate.chunk.parent_document_id and strategy == "enhanced"]
         parents_by_id = {
             parent.id: parent
             for parent in (await self.session.execute(select(ParentDocument).where(ParentDocument.id.in_(parent_ids)))).scalars()
         } if parent_ids else {}
         return [
-            Document(
+                Document(
                 page_content=parents_by_id[candidate.chunk.parent_document_id].content if candidate.chunk.parent_document_id in parents_by_id else candidate.chunk.content,
                 metadata={
                     **candidate.chunk.metadata_json,

@@ -75,3 +75,22 @@ class QueryRepairProposal(BaseModel):
     optional_concepts: list[str] = Field(description="Zero to four useful broadening concepts.")
     excluded_concepts: list[str] = Field(description="Concepts that would indicate a clearly different topic.")
     rationale: str = Field(description="A brief explanation of the repair grounded in the question and failed attempts.")
+
+
+class SynthesisClaimAssessment(BaseModel):
+    line_id: int = Field(ge=1, description="The numbered answer line being assessed.")
+    verdict: Literal["supported", "unsupported", "uncertain"] = Field(
+        description="Whether every material factual claim in the line is directly supported by the supplied evidence."
+    )
+    confidence: float = Field(ge=0, le=1)
+    reason: str = Field(description="A concise evidence-grounded rationale.")
+    replacement: str | None = Field(
+        default=None,
+        description="For an unsupported line, a concise evidence-supported replacement with exact source citations; null when no safe replacement exists.",
+    )
+
+
+class SynthesisValidation(BaseModel):
+    assessments: list[SynthesisClaimAssessment] = Field(
+        description="One assessment for every numbered factual answer line."
+    )

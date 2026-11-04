@@ -6,6 +6,8 @@ import unittest
 
 import asyncpg
 
+from app.fts_query import build_postgres_fts_query
+
 
 @unittest.skipUnless(
     os.getenv("RUN_INTEGRATION_TESTS") == "1" and os.getenv("DATABASE_URL_TEST"),
@@ -47,8 +49,14 @@ class PostgresPgvectorIntegrationTests(unittest.TestCase):
                 await connection.execute(
                     "INSERT INTO test_full_text VALUES ('relevant', 'CRISPR cancer treatment'), ('other', 'surface code decoder')"
                 )
+                query, _ = build_postgres_fts_query(
+                    "What are current uses of CRISPR in cancer treatment?"
+                )
                 rows = await connection.fetch(
-                    "SELECT label FROM test_full_text WHERE to_tsvector('english', body) @@ plainto_tsquery('english', 'CRISPR cancer')"
+                    "SELECT label FROM test_full_text "
+                    "WHERE to_tsvector('english', body) @@ websearch_to_tsquery('english', $1) "
+                    "ORDER BY label",
+                    query,
                 )
                 return [row["label"] for row in rows]
             finally:

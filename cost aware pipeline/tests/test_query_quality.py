@@ -16,6 +16,15 @@ from scientific_rag.query_quality import QueryAnchors, build_arxiv_query, build_
 
 
 class QueryQualityTests(unittest.TestCase):
+    def test_robotic_manipulation_keeps_application_and_rl_as_required_anchors(self):
+        anchors = extract_anchors(
+            "How are offline and online reinforcement learning approaches utilized and enhanced for robotic manipulation tasks?"
+        )
+        self.assertEqual(anchors.required[:2], ("robotic manipulation", "reinforcement learning"))
+        query = build_arxiv_query(anchors)
+        self.assertIn('all:"robotic manipulation"', query)
+        self.assertIn('all:"reinforcement learning"', query)
+
     def test_crispr_cancer_anchors_survive_both_provider_builders(self):
         anchors = extract_anchors("What are current uses of CRISPR in cancer research?", "recent studies demonstrate uses")
         self.assertEqual(anchors.required, ("cancer", "crispr"))
@@ -31,6 +40,18 @@ class QueryQualityTests(unittest.TestCase):
         query = build_arxiv_query(anchors, broad=True)
         self.assertIn('all:"surface code"', query)
         self.assertIn('all:"quantum error correction"', query)
+
+    def test_antimicrobial_resistance_keeps_subject_and_setting_not_intent_words(self):
+        anchors = extract_anchors(
+            "What are the main causes and prevention strategies for antimicrobial resistance in hospitals and healthcare settings?"
+        )
+        self.assertEqual(anchors.required, ("antimicrobial resistance", "healthcare setting"))
+        self.assertNotIn("causes", anchors.required)
+        self.assertNotIn("prevention", anchors.required)
+        self.assertNotIn("strategies", anchors.required)
+        query = build_pubmed_query(anchors, broad=True).lower()
+        self.assertIn("antimicrobial resistance", query)
+        self.assertIn("hospital", query)
 
     def test_hyphenated_spelling_does_not_create_a_duplicate_anchor(self):
         surface = extract_anchors("How do rotated surface-code approaches improve quantum error correction?")
@@ -74,6 +95,45 @@ class QueryQualityTests(unittest.TestCase):
             self.assertEqual(trace["attempts"][2]["strategy"], "llm_repair")
 
         asyncio.run(verify())
+
+    def test_external_arxiv_failure_stops_query_ladder_and_skips_llm_repair(self):
+        async def verify():
+            def unavailable(_query, _limit, **kwargs):
+                kwargs["diagnostics"].update({
+                    "returned_count": 0, "screened_count": 0, "indexed_count": 0,
+                    "candidates": [], "errors": ["HTTP 429"], "external_unavailable": True,
+                })
+                return []
+
+            with patch.object(MinerService, "mine_arxiv", side_effect=unavailable) as miner, \
+                 patch("scientific_rag.legacy_pipeline.ainvoke_structured", new=AsyncMock()) as llm:
+                trace = {}
+                docs = await MinerService.mine(
+                    "surface code decoders", "arxiv", 2,
+                    anchor_query="Quantum error correction using surface codes", diagnostics=trace,
+                )
+            self.assertEqual(docs, [])
+            self.assertEqual(miner.call_count, 1)
+            llm.assert_not_awaited()
+            self.assertEqual(trace["retry_ladder_stopped"], "external_source_unavailable")
+            self.assertTrue(trace["external_unavailable"])
+
+        asyncio.run(verify())
+
+    def test_source_outcome_distinguishes_transport_rejection_and_anchor_gap(self):
+        self.assertEqual(
+            Orchestrator._trace_outcome({"external_unavailable": True, "indexed_count": 0}),
+            "external_source_unavailable",
+        )
+        self.assertEqual(
+            Orchestrator._trace_outcome({"returned_count": 3, "indexed_count": 0, "candidates": [{}]}),
+            "all_candidates_rejected",
+        )
+        outcome = Orchestrator._evidence_outcome(
+            {"pubmed": {"attempt_outcomes": ["accepted_sources"]}},
+            {"sufficient": False, "unique_sources": 1, "missing_concepts": ["healthcare setting"]},
+        )
+        self.assertEqual(outcome, "insufficient_anchor_coverage")
 
 
 if __name__ == "__main__":

@@ -172,6 +172,9 @@ def _ui_admin(request: Request) -> Principal:
 def _aggregate_provider_diagnostics(runs: list[ResearchRun]) -> dict:
     providers: dict[str, dict] = {provider: {"attempts": 0, "successes": 0, "failures": 0, "skips": 0, "latency_ms": 0.0, "models": set(), "expert": {"calls": 0, "successes": 0, "failures": 0, "latency_ms": 0.0}} for provider in ("groq", "openrouter", "gemini")}
     total_fallbacks = 0
+    total_throttle_reroutes = 0
+    total_throttle_skips = 0
+    total_failed_attempts = 0
     traced_runs = 0
     for run in runs:
         gateway = run.model_metadata.get("llm_gateway", {})
@@ -179,6 +182,9 @@ def _aggregate_provider_diagnostics(runs: list[ResearchRun]) -> dict:
             continue
         traced_runs += 1
         total_fallbacks += int(gateway.get("fallback_count", 0))
+        total_throttle_reroutes += int(gateway.get("throttle_reroute_count", 0))
+        total_throttle_skips += int(gateway.get("throttle_skips", 0))
+        total_failed_attempts += int(gateway.get("failed_attempts", 0))
         for provider, stats in gateway.get("by_provider", {}).items():
             bucket = providers.setdefault(provider, {"attempts": 0, "successes": 0, "failures": 0, "skips": 0, "latency_ms": 0.0, "models": set(), "expert": {"calls": 0, "successes": 0, "failures": 0, "latency_ms": 0.0}})
             bucket["attempts"] += int(stats.get("attempts", 0))
@@ -203,7 +209,15 @@ def _aggregate_provider_diagnostics(runs: list[ResearchRun]) -> dict:
         expert["average_latency_ms"] = round(expert["latency_ms"] / expert["calls"], 1) if expert["calls"] else 0.0
     for provider, bucket in providers.items():
         bucket["configured"] = bool(os.getenv({"groq": "GROQ_API_KEY", "openrouter": "OPENROUTER_API_KEY", "gemini": "GOOGLE_API_KEY"}.get(provider, "")) or (provider == "gemini" and bool(os.getenv("GEMINI_API_KEY"))))
-    return {"runs": traced_runs, "fallback_count": total_fallbacks, "providers": providers}
+    return {
+        "runs": traced_runs,
+        "fallback_count": total_fallbacks,
+        "provider_failover_count": total_fallbacks,
+        "throttle_reroute_count": total_throttle_reroutes,
+        "throttle_skips": total_throttle_skips,
+        "failed_attempts": total_failed_attempts,
+        "providers": providers,
+    }
 
 
 @app.get("/diagnostics", response_class=HTMLResponse, include_in_schema=False)

@@ -16,8 +16,10 @@ sys.path.insert(0, str(project_root / "src"))
 from langchain_core.documents import Document
 
 from app.pgvector_retrieval import CHILD_CHUNK_OVERLAP, CHILD_CHUNK_SIZE, PARENT_CHUNK_OVERLAP, PARENT_CHUNK_SIZE, PostgresVectorService, RetrievalCandidate, maximal_marginal_relevance, parent_context_key, reciprocal_rank_fusion, source_fingerprint
-from scientific_rag.domain import ArxivRelevanceAssessment, PubMedRelevanceAssessment, QueryPlan, SubQuery
+from app.weak_model_synthesis import EvidenceClaim, StructuredEvidenceAnswerV2
+from scientific_rag.domain import ArxivRelevanceAssessment, PubMedRelevanceAssessment, QueryPlan, SubQuery, SynthesisClaimAssessment, SynthesisValidation
 from scientific_rag.legacy_pipeline import MinerService, Orchestrator, ResearchAgent, _BoundedArxivSession, _bounded_entrez_urlopen, _entrez_request_context
+from scientific_rag.query_quality import extract_anchors
 
 
 def candidate(identifier: uuid.UUID) -> RetrievalCandidate:
@@ -29,6 +31,95 @@ def embedded_candidate(identifier: uuid.UUID, embedding: list[float]) -> Retriev
 
 
 class PgvectorRetrievalTests(unittest.TestCase):
+    def test_source_sufficiency_requires_robotic_manipulation_not_generic_robot_mentions(self) -> None:
+        query_anchors = extract_anchors(
+            "How are offline and online reinforcement learning approaches used for robotic manipulation?"
+        )
+        generic = [Document(
+            page_content="Offline simulation can evaluate online reinforcement learning systems deployed in robots.",
+            metadata={"doc_id": "arxiv:generic", "title": "Offline simulation for online reinforcement learning", "relevance_label": "uncertain"},
+        )]
+        specific = [Document(
+            page_content="We study offline and online reinforcement learning for robotic manipulation.",
+            metadata={"doc_id": "arxiv:specific", "title": "Reinforcement learning for robotic manipulation", "relevance_label": "relevant"},
+        )]
+        self.assertFalse(Orchestrator._source_sufficiency(generic, query_anchors)["sufficient"])
+        self.assertTrue(Orchestrator._source_sufficiency(specific, query_anchors)["sufficient"])
+
+    def test_synthesis_validator_repairs_supported_subset_and_keeps_other_lines(self) -> None:
+        async def verify() -> None:
+            answer = "Supported finding [S1].\nUnsupported extrapolation [S1].\nUncertain limitation [S1]."
+            validation = SynthesisValidation(assessments=[
+                SynthesisClaimAssessment(line_id=1, verdict="supported", confidence=0.98, reason="Directly stated."),
+                SynthesisClaimAssessment(
+                    line_id=2, verdict="unsupported", confidence=0.95, reason="The extrapolation is absent.",
+                    replacement="Evidence-supported correction [S1].",
+                ),
+                SynthesisClaimAssessment(line_id=3, verdict="uncertain", confidence=0.9, reason="Ambiguous."),
+            ])
+            agent = object.__new__(ResearchAgent)
+            with patch("scientific_rag.legacy_pipeline.ainvoke_structured", new=AsyncMock(return_value=validation)):
+                revised, diagnostics = await agent._validate_synthesis(answer, "--- [S1: Source] ---\nSupported finding.")
+            self.assertIn("Supported finding", revised)
+            self.assertNotIn("Unsupported extrapolation", revised)
+            self.assertIn("Evidence-supported correction [S1]", revised)
+            self.assertIn("Uncertain limitation", revised)
+            self.assertEqual(diagnostics["repaired_line_ids"], [2])
+            self.assertEqual(diagnostics["removed_line_ids"], [])
+            self.assertEqual(diagnostics["uncertain_line_ids"], [3])
+
+        asyncio.run(verify())
+
+    def test_hybrid_retrieval_falls_back_to_vector_when_fts_has_no_terms(self) -> None:
+        chunk_id = uuid.uuid4()
+        source_id = uuid.uuid4()
+        chunk = SimpleNamespace(
+            id=chunk_id,
+            source_document_id=source_id,
+            parent_document_id=None,
+            embedding=[1.0, 0.0],
+            content="Evidence about reinforcement learning for robotic manipulation.",
+            metadata_json={},
+        )
+        source = SimpleNamespace(
+            id=source_id,
+            external_id="arxiv:example",
+            title="Reinforcement learning for robotic manipulation",
+            source="arxiv",
+            source_url="https://arxiv.org/abs/example",
+        )
+        vector_result = MagicMock()
+        vector_result.all.return_value = [(chunk, source)]
+        session = SimpleNamespace(execute=AsyncMock(return_value=vector_result))
+        service = PostgresVectorService.__new__(PostgresVectorService)
+        service.session = session
+        service.research_run_id = uuid.uuid4()
+        service.restrict_to_current_run = False
+        service.retrieval_traces = []
+
+        with patch(
+            "app.pgvector_retrieval.build_postgres_fts_query",
+            side_effect=ValueError("Could not derive PostgreSQL FTS terms from the query"),
+        ):
+            documents = asyncio.run(
+                service._retrieve_context_from_database(
+                    "what are the current approaches and limitations",
+                    [1.0, 0.0],
+                    1,
+                    strategy="enhanced",
+                )
+            )
+
+        self.assertEqual(len(documents), 1)
+        self.assertEqual(documents[0].metadata["doc_id"], "arxiv:example")
+        self.assertEqual(session.execute.await_count, 1)
+        trace = service.retrieval_traces[0]
+        self.assertIsNone(trace["fts_query"])
+        self.assertEqual(trace["fts_diagnostics"]["decision"], "skipped_no_lexical_terms")
+        self.assertEqual(trace["fts_diagnostics"]["fallback"], "pgvector_mmr")
+        self.assertEqual(trace["fulltext_count"], 0)
+        self.assertEqual(trace["selected_count"], 1)
+
     def test_pubmed_query_is_bounded_and_keeps_surface_code_terms(self) -> None:
         query = (
             "How do surface-code decoding algorithms map stabilizer syndrome "
@@ -355,6 +446,26 @@ class PgvectorRetrievalTests(unittest.TestCase):
         self.assertEqual(kept, [docs[1]])
         self.assertEqual(trace["candidates"][0]["decision"], "not_indexed_evidence_budget")
 
+    def test_pubmed_relevance_screen_bounds_llm_calls_before_evidence_selection(self) -> None:
+        question = "What clinical evidence supports CAR-T therapy for B-cell lymphoma?"
+        docs = [Document(page_content="CAR-T outcomes in B-cell lymphoma.", metadata={
+            "doc_id": f"PMID:{index}", "title": f"CAR-T lymphoma trial {index}",
+            "source": "pubmed", "type": "abstract",
+        }) for index in range(1, 9)]
+        trace = {"accepted_limit": 2, "candidates": [{"pmid": str(index)} for index in range(1, 9)]}
+        review = PubMedRelevanceAssessment(
+            decision="relevant", confidence=0.9, reason="Direct evidence.",
+            intervention_match="match", population_match="match", evidence_role="direct",
+        )
+        with patch("scientific_rag.legacy_pipeline.ainvoke_structured", new=AsyncMock(return_value=review)) as reviewer:
+            kept = asyncio.run(MinerService._screen_pubmed_documents(docs, research_question=question, diagnostics=trace))
+        self.assertEqual(reviewer.await_count, 6)
+        self.assertEqual(trace["screen_candidate_limit"], 6)
+        self.assertEqual([item["decision"] for item in trace["candidates"][6:]], [
+            "not_screened_candidate_budget", "not_screened_candidate_budget",
+        ])
+        self.assertEqual(len(kept), 2)
+
     def test_pubmed_relevance_screen_retains_ambiguous_candidates_for_recall(self) -> None:
         document = Document(page_content="Broad CRISPR applications across biomedicine.", metadata={
             "doc_id": "PMID:3", "title": "CRISPR Advancements for Human Health", "source": "pubmed", "type": "abstract"})
@@ -574,14 +685,19 @@ class PgvectorRetrievalTests(unittest.TestCase):
 
             agent = ResearchAgent(VectorService(), max_synthesis_subquestions=1)
             agent.decompose_query_async = AsyncMock(return_value=["mammography AI performance"])
-            with patch("scientific_rag.legacy_pipeline.ainvoke_with_fallback", new=AsyncMock(return_value="Limited evidence [S1, S2].")) as invoke:
+            structured = StructuredEvidenceAnswerV2(claims=[EvidenceClaim(
+                text="The selected evidence reports performance on retrospective or preprint data.",
+                source_id="S2", evidence_quote="validation case pF1 of 0.56",
+            )])
+            with patch("scientific_rag.legacy_pipeline.ainvoke_structured", new=AsyncMock(return_value=structured)) as invoke:
                 report = await agent.run_research("How does AI perform in mammography?")
-            context = invoke.await_args.args[3]["context"]
+            context = invoke.await_args.args[2]
             self.assertIn("full-text section Discussion", context)
             self.assertIn("OTHER studies", context)
             self.assertIn("arXiv preprint", context)
             self.assertEqual(report["raw_docs_used"][0].metadata["citation_id"], "S1")
             self.assertEqual(report["raw_docs_used"][1].metadata["citation_id"], "S2")
+            self.assertEqual(report["claim_validation"]["contract"], "structured_evidence_v2")
 
         asyncio.run(verify())
 
@@ -700,7 +816,12 @@ class PgvectorRetrievalTests(unittest.TestCase):
 
         trace = {}
         with patch("scientific_rag.legacy_pipeline.arxiv.Client", Client):
-            docs = MinerService.mine_arxiv("CRISPR cancer research", limit=1, diagnostics=trace)
+            docs = MinerService.mine_arxiv(
+                "CRISPR cancer research",
+                limit=1,
+                diagnostics=trace,
+                allow_search_cache=False,
+            )
         self.assertEqual(len(docs), 1)
         self.assertEqual(docs[0].metadata["doc_id"], "arxiv:2501.00001v2")
         self.assertEqual(docs[0].metadata["source_url"], "https://arxiv.org/abs/2501.00001v2")
@@ -749,12 +870,11 @@ class PgvectorRetrievalTests(unittest.TestCase):
                 "surface code quantum error correction", source="arxiv", limit=1, diagnostics=trace,
             ))
         self.assertEqual(docs, [])
-        # Every search that reaches arXiv gets exactly two bounded transport
-        # attempts. The optional third ladder step requires successful LLM
-        # repair and is therefore not guaranteed in an offline unit test.
-        self.assertGreaterEqual(len(trace["attempts"]), 2)
-        self.assertLessEqual(len(trace["attempts"]), 3)
-        self.assertEqual(send.call_count, len(trace["attempts"]) * 2, trace["errors"])
+        # The transport itself gets two bounded attempts. After both fail, the
+        # provider is unavailable: do not multiply traffic with broad/LLM queries.
+        self.assertEqual(len(trace["attempts"]), 1)
+        self.assertEqual(send.call_count, 2, trace["errors"])
+        self.assertEqual(trace["retry_ladder_stopped"], "external_source_unavailable")
         self.assertIn("ReadTimeout", trace["errors"][0])
 
     def test_arxiv_miner_requires_surface_code_phrase_when_query_requests_it(self) -> None:

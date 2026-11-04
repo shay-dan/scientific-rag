@@ -7,7 +7,7 @@ from unittest.mock import patch
 project_root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(project_root))
 
-from app.evaluation import NativeGeminiEmbeddings, diagnose_reference_claims, diagnose_retrieved_contexts, score_reference_context_semantically, summarize_context_precision_views, summarize_scores
+from app.evaluation import EvaluationUsageTracker, NativeGeminiEmbeddings, diagnose_reference_claims, diagnose_retrieved_contexts, score_reference_context_semantically, summarize_context_precision_views, summarize_scores
 from app.models import EvaluationCase, EvaluationDataset, EvaluationResult, EvaluationRun, ResearchEvidence
 from app.services import _timeline_phase
 
@@ -73,6 +73,16 @@ class EvaluationModelTests(unittest.TestCase):
         requirements = (project_root / "requirements.txt").read_text(encoding="utf-8")
         self.assertIn("ragas>=0.4.3,<0.5", requirements)
         self.assertIn("rapidfuzz>=3,<4", requirements)
+
+    def test_ragas_judge_uses_async_openai_compatible_gemini_client(self) -> None:
+        evaluation = (project_root / "app" / "evaluation.py").read_text(encoding="utf-8")
+        self.assertIn("AsyncOpenAI", evaluation)
+        self.assertIn("generativelanguage.googleapis.com/v1beta/openai/", evaluation)
+        self.assertIn('llm_factory(judge_model, provider="openai", client=client)', evaluation)
+        self.assertIn("RAGAS_JUDGE_MAX_OUTPUT_TOKENS = 8192", evaluation)
+        self.assertIn('llm.model_args["max_tokens"] = RAGAS_JUDGE_MAX_OUTPUT_TOKENS', evaluation)
+        self.assertIn('llm.model_args["reasoning_effort"] = "none"', evaluation)
+        self.assertNotIn('llm_factory(judge_model, provider="google", client=client)', evaluation)
 
     def test_reference_context_is_used_by_the_ragas_evaluation_path(self) -> None:
         evaluation = (project_root / "app" / "evaluation.py").read_text(encoding="utf-8")
@@ -200,7 +210,8 @@ class EvaluationModelTests(unittest.TestCase):
         template = (project_root / "app" / "templates" / "diagnostics.html").read_text(encoding="utf-8")
         self.assertIn("Total calls", template)
         self.assertIn("average latency", template)
-        self.assertIn("fallbacks", template)
+        self.assertIn("provider failovers", template)
+        self.assertIn("throttle reroutes", template)
 
     def test_retrieval_inspector_shows_pubmed_search_candidates_and_decisions(self) -> None:
         template = (project_root / "app" / "templates" / "partials" / "ops_retrieval.html").read_text(encoding="utf-8")
@@ -217,15 +228,13 @@ class EvaluationModelTests(unittest.TestCase):
         self.assertIn("uncertain papers are retained", template)
         self.assertIn("PostgreSQL hybrid retrieval", template)
 
-    def test_synthesis_prompt_requires_evidence_for_every_technical_claim(self) -> None:
+    def test_production_synthesis_uses_the_structured_evidence_contract(self) -> None:
         pipeline = (project_root / "src" / "scientific_rag" / "legacy_pipeline.py").read_text(encoding="utf-8")
-        self.assertIn("Every factual or technical claim must be directly supported", pipeline)
-        self.assertIn("Do not add general background", pipeline)
-        self.assertIn("Sources explicitly marked relevance uncertain are secondary evidence", pipeline)
-        self.assertIn("Do not combine rates from different denominators", pipeline)
-        self.assertIn("may describe a PRIOR CITED STUDY", pipeline)
-        self.assertIn("arXiv benchmark as a prospective clinical outcome study", pipeline)
-        self.assertIn("call it a historical comparison", pipeline)
+        self.assertIn("StructuredEvidenceAnswerV2", pipeline)
+        self.assertIn("generation_prompt_v2", pipeline)
+        self.assertIn("validate_answer_v2", pipeline)
+        self.assertIn("repair_prompt_v2", pipeline)
+        self.assertIn("structured_evidence_v2", pipeline)
 
     def test_evaluation_page_exposes_recent_run_history(self) -> None:
         template = (project_root / "app" / "templates" / "evaluation.html").read_text(encoding="utf-8")
@@ -273,3 +282,35 @@ class EvaluationModelTests(unittest.TestCase):
         embeddings = NativeGeminiEmbeddings("unused", "gemini-embedding-2", 768, client=FakeClient())
         self.assertEqual(embeddings.embed_query("test"), [0.1, 0.2])
         self.assertEqual(embeddings.client.models.kwargs["model"], "gemini-embedding-2")
+
+    def test_evaluation_usage_separates_actual_judge_and_estimated_embeddings(self) -> None:
+        class Details:
+            reasoning_tokens = 7
+        class Usage:
+            prompt_tokens = 100
+            completion_tokens = 25
+            completion_tokens_details = Details()
+        class Response:
+            usage = Usage()
+
+        tracker = EvaluationUsageTracker()
+        tracker.begin_judge_call()
+        tracker.record_openai_response(Response())
+        tracker.record_embeddings(["abcd" * 10])
+        summary = tracker.summary(
+            judge_model="gemini-2.5-flash", embedding_model="gemini-embedding-2"
+        )
+        self.assertEqual(summary["judge"]["attempts"], 1)
+        self.assertEqual(summary["judge"]["input_tokens"], 100)
+        self.assertEqual(summary["judge"]["output_tokens"], 25)
+        self.assertEqual(summary["judge"]["reasoning_tokens"], 7)
+        self.assertTrue(summary["judge"]["usage_actual"])
+        self.assertTrue(summary["embeddings"]["usage_estimated"])
+        self.assertGreater(summary["total_cost_usd"], 0)
+
+    def test_ragas_embeddings_reuse_current_google_sdk_wrapper(self) -> None:
+        evaluation = (project_root / "app" / "evaluation.py").read_text(encoding="utf-8")
+        self.assertIn("def _build_ragas_embeddings", evaluation)
+        self.assertIn("class RagasNativeGeminiEmbeddings(BaseRagasEmbedding)", evaluation)
+        self.assertIn("async def aembed_text", evaluation)
+        self.assertNotIn("from ragas.embeddings import GoogleEmbeddings", evaluation)

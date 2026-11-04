@@ -21,6 +21,7 @@ pymupdf
 python-dotenv>=1,<2
 ragas>=0.4.3,<0.5
 rapidfuzz>=3,<4
+redis>=5,<6
 requests>=2.33,<3
 sqlalchemy[asyncio]>=2.0,<3
 tenacity

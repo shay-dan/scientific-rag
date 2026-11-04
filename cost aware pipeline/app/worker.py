@@ -13,7 +13,7 @@ from .db import close_database, session_factory, verify_database_schema
 from .models import AuditEvent, EvaluationCase, EvaluationResult, EvaluationRun, ResearchEvidence, ResearchRun
 from .schemas import ResearchCacheMode, ResearchMode
 from .services import ResearchService
-from .evaluation import JUDGE_PROMPT, JudgeScore, diagnose_reference_claims, diagnose_retrieved_contexts, score_with_ragas, summarize_scores
+from .evaluation import EvaluationUsageTracker, JUDGE_PROMPT, JudgeScore, diagnose_reference_claims, diagnose_retrieved_contexts, score_with_ragas, summarize_scores
 from google import genai
 from google.genai import types
 
@@ -146,6 +146,7 @@ async def _run_evaluation_job(ctx, evaluation_run_id: str):
                 run.metrics = {**run.metrics, "phase": "evaluation", "current_case": evaluation_index, "current_question": case.question}
                 await session.commit()
                 settings = get_settings()
+                usage_tracker = EvaluationUsageTracker()
                 result.judge_scores = await asyncio.wait_for(score_with_ragas(
                     question=case.question,
                     answer=result.answer or "",
@@ -156,6 +157,7 @@ async def _run_evaluation_job(ctx, evaluation_run_id: str):
                     judge_model=judge_model,
                     embedding_model=settings.embedding_model,
                     embedding_dimensions=settings.embedding_dimensions,
+                    usage_tracker=usage_tracker,
                 ), timeout=settings.evaluation_case_timeout_seconds)
                 if case.reference_claims:
                     try:
@@ -166,6 +168,7 @@ async def _run_evaluation_job(ctx, evaluation_run_id: str):
                                 retrieved_contexts=result.retrieved_contexts,
                                 api_key=settings.google_api_key,
                                 judge_model=judge_model,
+                                usage_tracker=usage_tracker,
                             ),
                             timeout=settings.claim_diagnostic_timeout_seconds,
                         )
@@ -180,6 +183,7 @@ async def _run_evaluation_job(ctx, evaluation_run_id: str):
                             retrieved_contexts=result.retrieved_contexts,
                             api_key=settings.google_api_key,
                             judge_model=judge_model,
+                            usage_tracker=usage_tracker,
                         ),
                         timeout=settings.claim_diagnostic_timeout_seconds,
                     )
@@ -187,6 +191,10 @@ async def _run_evaluation_job(ctx, evaluation_run_id: str):
                     result.judge_scores["retrieval_diagnostics_error"] = type(diagnostic_error).__name__
                 result.judge_scores["engine"] = "ragas"
                 result.judge_scores["context_metrics_mode"] = "ragas_reference_answer"
+                result.judge_scores["judge_usage"] = usage_tracker.summary(
+                    judge_model=judge_model,
+                    embedding_model=settings.embedding_model,
+                )
                 result.status = "judged"
             except Exception as error:
                 try:

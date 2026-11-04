@@ -24,7 +24,26 @@ from .pgvector_retrieval import PostgresVectorService
 from .schemas import ResearchCacheMode, ResearchMode, ResearchResponse, SourceResponse
 
 logger = logging.getLogger(__name__)
-PIPELINE_VERSION = "postgres-hybrid-rrf-mmr-parent-child-v12"
+
+
+def _responses_for_evidence_documents(evidence_documents: list) -> list[SourceResponse]:
+    """Collapse repeated parent/child passages into one cited paper."""
+    sources_by_identity: dict[str, SourceResponse] = {}
+    for document in evidence_documents:
+        citation_id = str(document.metadata.get("citation_id") or "") or None
+        source = SourceResponse(
+            citation_id=citation_id,
+            title=str(document.metadata.get("title", "Untitled source")),
+            source=str(document.metadata.get("source", "unknown")),
+            external_id=str(document.metadata.get("doc_id") or "") or None,
+            source_url=str(document.metadata.get("url") or "") or None,
+            study_design=str(document.metadata.get("study_design") or "") or None,
+            excerpt=str(document.page_content)[:1200],
+        )
+        identity = citation_id or source.external_id or source.source_url or source.title.casefold()
+        sources_by_identity.setdefault(identity, source)
+    return list(sources_by_identity.values())
+PIPELINE_VERSION = "postgres-hybrid-rrf-mmr-parent-child-structured-v14"
 
 
 def _timeline_phase(stage: str, role: str | None) -> str:
@@ -343,6 +362,7 @@ class ResearchService:
             metadata["pubmed_inspector"] = list(pipeline_result.get("metadata", {}).get("pubmed_inspector", []))
             metadata["arxiv_inspector"] = list(pipeline_result.get("metadata", {}).get("arxiv_inspector", []))
             metadata["retrieval_inspector"] = list(vector_service.retrieval_traces)
+            metadata["claim_validation"] = dict(report.get("claim_validation", {}))
             metadata["progress"]["model"] = None
             await self._reconcile_cost(record, metadata)
             record.model_metadata = metadata
@@ -351,18 +371,7 @@ class ResearchService:
                 "providers": sorted({str(item.get("provider")) for item in metadata["llm_gateway"].get("attempts", []) if item.get("provider")}),
                 "status": record.status,
             }))
-            sources = [
-                SourceResponse(
-                    citation_id=str(document.metadata.get("citation_id") or "") or None,
-                    title=str(document.metadata.get("title", "Untitled source")),
-                    source=str(document.metadata.get("source", "unknown")),
-                    external_id=str(document.metadata.get("doc_id") or "") or None,
-                    source_url=str(document.metadata.get("url") or "") or None,
-                    study_design=str(document.metadata.get("study_design") or "") or None,
-                    excerpt=str(document.page_content)[:1200],
-                )
-                for document in evidence_documents
-            ]
+            sources = _responses_for_evidence_documents(evidence_documents)
             await session.commit()
             await session.refresh(record)
             logger.info("research_completed run_id=%s mode=%s source_count=%s", record.id, mode.value, len(sources))
