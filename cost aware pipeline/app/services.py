@@ -16,7 +16,7 @@ from scientific_rag import legacy_pipeline
 from scientific_rag.llm_gateway import begin_trace, end_trace, primary_route_label, summarize_trace
 
 from .config import Settings
-from .cost_policy import ResearchBudget, budget_for
+from .cost_policy import ResearchBudget, budget_for, estimated_generation_calls
 from .cost_control import CostGuard
 from .db import session_factory
 from .models import AuditEvent, ResearchEvidence, ResearchRun, SourceDocument
@@ -44,6 +44,15 @@ def _responses_for_evidence_documents(evidence_documents: list) -> list[SourceRe
         sources_by_identity.setdefault(identity, source)
     return list(sources_by_identity.values())
 PIPELINE_VERSION = "postgres-hybrid-rrf-mmr-parent-child-structured-v14"
+
+
+def effective_pipeline_version(semantic_verification_mode: str) -> str:
+    """Separate cache identities without changing historical off-mode v14 records."""
+    if semantic_verification_mode == "off":
+        return PIPELINE_VERSION
+    if semantic_verification_mode in {"shadow", "enforce"}:
+        return f"{PIPELINE_VERSION}-semantic-{semantic_verification_mode}-v1"
+    raise ValueError(f"Unsupported semantic verification mode: {semantic_verification_mode}")
 
 
 def _timeline_phase(stage: str, role: str | None) -> str:
@@ -120,18 +129,28 @@ class ResearchService:
             return None
         return primary_route_label(role)
 
-    def _metadata(self, mode: ResearchMode, budget: ResearchBudget, stage: str, role: str | None = None) -> dict:
+    def _metadata(self, mode: ResearchMode, budget: ResearchBudget, stage: str, role: str | None = None, *,
+                  semantic_verification_mode: str | None = None) -> dict:
+        verification_mode = semantic_verification_mode or getattr(
+            getattr(self, "settings", None), "semantic_claim_verification_mode", "off"
+        )
         return {
             "policy": "provider-agnostic Groq -> OpenRouter -> Gemini gateway",
             "mode": mode.value,
             "budget": budget.as_dict(),
-            "estimated_max_generation_calls": budget.estimated_max_generation_calls,
+            "estimated_max_generation_calls": estimated_generation_calls(budget, verification_mode),
             "cache_hit": False,
-            "retrieval_version": PIPELINE_VERSION,
+            "retrieval_version": effective_pipeline_version(verification_mode),
+            "semantic_claim_verification_mode": verification_mode,
             "progress": {"stage": stage, "role": role, "model": self._model_for_role(role)},
         }
 
-    async def _find_cached(self, session: AsyncSession, question: str, actor: str, mode: ResearchMode) -> ResearchRun | None:
+    async def _find_cached(self, session: AsyncSession, question: str, actor: str, mode: ResearchMode,
+                           semantic_verification_mode: str | None = None) -> ResearchRun | None:
+        verification_mode = semantic_verification_mode or getattr(
+            getattr(self, "settings", None), "semantic_claim_verification_mode", "off"
+        )
+        version = effective_pipeline_version(verification_mode)
         return (
             await session.execute(
                 select(ResearchRun)
@@ -140,7 +159,7 @@ class ResearchService:
                     ResearchRun.status == "completed",
                     ResearchRun.requested_by == actor,
                     ResearchRun.model_metadata["mode"].as_string() == mode.value,
-                    ResearchRun.model_metadata["retrieval_version"].as_string() == PIPELINE_VERSION,
+                    ResearchRun.model_metadata["retrieval_version"].as_string() == version,
                 )
                 .order_by(ResearchRun.completed_at.desc())
                 .limit(1)
@@ -185,15 +204,22 @@ class ResearchService:
             cache_mode = ResearchCacheMode.refresh_sources
         elif bypass_cache:
             cache_mode = ResearchCacheMode.regenerate_answer
-        cached = await self._find_cached(session, question, actor, mode)
+        semantic_mode = getattr(
+            getattr(self, "settings", None), "semantic_claim_verification_mode", "off"
+        )
+        version = effective_pipeline_version(semantic_mode)
+        cached = await self._find_cached(session, question, actor, mode, semantic_mode)
         if cached is not None and cache_mode is ResearchCacheMode.use_cached_answer:
             logger.info("research_cache_hit run_id=%s mode=%s", cached.id, mode.value)
             return to_response(cached, await self.sources_for_run(session, cached.id), mode=mode, cached=True)
 
         budget = budget_for(mode)
-        metadata = self._metadata(mode, budget, "Queued for research")
+        metadata = self._metadata(
+            mode, budget, "Queued for research",
+            semantic_verification_mode=semantic_mode,
+        )
         metadata["cache_mode"] = cache_mode.value
-        metadata["retrieval_version"] = PIPELINE_VERSION
+        metadata["retrieval_version"] = version
         record = ResearchRun(question=question, requested_by=actor, status="queued", model_metadata=metadata)
         session.add(record)
         await session.flush()
@@ -210,16 +236,32 @@ class ResearchService:
         metadata["queue_job_id"] = str(record.id)
         record.model_metadata = metadata
         await session.commit()
-        await self.redis.enqueue_job("run_research_job", str(record.id), question, mode.value, cache_mode.value, _job_id=str(record.id))
+        await self.redis.enqueue_job(
+            "run_research_job", str(record.id), question, mode.value, cache_mode.value,
+            semantic_mode, _job_id=str(record.id),
+        )
         return to_response(record, mode=mode)
 
-    async def run_queued(self, run_id: UUID, question: str, mode: ResearchMode, cache_mode: ResearchCacheMode) -> None:
+    async def run_queued(self, run_id: UUID, question: str, mode: ResearchMode, cache_mode: ResearchCacheMode,
+                         semantic_verification_mode: str | None = None) -> None:
         async with session_factory() as session:
             record = (await session.execute(select(ResearchRun).where(ResearchRun.id == run_id))).scalar_one()
+            # Persisted run intent is authoritative across worker restarts. The
+            # optional job argument supports new jobs; old queued jobs default
+            # safely to off rather than inheriting a changed worker environment.
+            stored_semantic_mode = str(
+                (record.model_metadata or {}).get("semantic_claim_verification_mode")
+                or semantic_verification_mode
+                or "off"
+            )
+            effective_pipeline_version(stored_semantic_mode)
             record.status = "running"
             await session.commit()
             try:
-                await self._execute(session, record, question, mode, False, cache_mode=cache_mode)
+                await self._execute(
+                    session, record, question, mode, False, cache_mode=cache_mode,
+                    semantic_verification_mode=stored_semantic_mode,
+                )
             except Exception:
                 # _execute persists the failure. Keep this task from producing an unhandled-task warning.
                 logger.exception("queued_research_task_failed run_id=%s", run_id)
@@ -231,12 +273,20 @@ class ResearchService:
         self._validate_request(mode, generate_evaluation_dataset)
         if fresh:  # Deprecated API behavior remains a full source refresh.
             cache_mode = ResearchCacheMode.refresh_sources
-        cached = None if cache_mode is not ResearchCacheMode.use_cached_answer else await self._find_cached(session, question, actor, mode)
+        semantic_mode = getattr(
+            getattr(self, "settings", None), "semantic_claim_verification_mode", "off"
+        )
+        cached = None if cache_mode is not ResearchCacheMode.use_cached_answer else await self._find_cached(
+            session, question, actor, mode, semantic_mode
+        )
         if cached is not None:
             return to_response(cached, await self.sources_for_run(session, cached.id), mode=mode, cached=True)
 
         budget = budget_for(mode)
-        initial_metadata = self._metadata(mode, budget, "Starting research")
+        initial_metadata = self._metadata(
+            mode, budget, "Starting research",
+            semantic_verification_mode=semantic_mode,
+        )
         initial_metadata["cache_mode"] = cache_mode.value
         record = ResearchRun(question=question, requested_by=actor, status="running", model_metadata=initial_metadata)
         session.add(record)
@@ -250,7 +300,10 @@ class ResearchService:
             raise
         session.add(AuditEvent(actor=actor, action="research.started", target_type="research_run", target_id=str(record.id), details={"mode": mode.value, "entrypoint": "api"}))
         await session.commit()
-        return await self._execute(session, record, question, mode, generate_evaluation_dataset, cache_mode=cache_mode)
+        return await self._execute(
+            session, record, question, mode, generate_evaluation_dataset,
+            cache_mode=cache_mode, semantic_verification_mode=semantic_mode,
+        )
 
     async def _set_progress(self, session: AsyncSession, record: ResearchRun, stage: str, role: str | None = None) -> None:
         metadata = dict(record.model_metadata)
@@ -271,8 +324,15 @@ class ResearchService:
         logger.info("research_progress run_id=%s stage=%s role=%s model=%s", record.id, stage, role, self._model_for_role(role))
 
     async def _execute(self, session: AsyncSession, record: ResearchRun, question: str, mode: ResearchMode, generate_evaluation_dataset: bool, *,
-                       cache_mode: ResearchCacheMode = ResearchCacheMode.use_cached_answer) -> ResearchResponse:
+                       cache_mode: ResearchCacheMode = ResearchCacheMode.use_cached_answer,
+                       semantic_verification_mode: str | None = None) -> ResearchResponse:
         budget = budget_for(mode)
+        semantic_mode = str(
+            semantic_verification_mode
+            or (record.model_metadata or {}).get("semantic_claim_verification_mode")
+            or "off"
+        )
+        version = effective_pipeline_version(semantic_mode)
         trace_token = begin_trace(self.redis)
         trace_closed = False
         orchestrator = None
@@ -294,6 +354,8 @@ class ResearchService:
                     retrieval_documents=budget.retrieval_documents,
                     max_context_documents=budget.max_context_documents,
                     progress_callback=progress,
+                    semantic_verification_mode=semantic_mode,
+                    semantic_verification_timeout_seconds=120,
                 )
                 orchestrator = legacy_pipeline.Orchestrator(
                     vector_service,
@@ -338,8 +400,11 @@ class ResearchService:
                         "citation_id": str(metadata.get("citation_id") or "") or None,
                     },
                 ))
-            metadata = self._metadata(mode, budget, "Research complete")
-            metadata["retrieval_version"] = PIPELINE_VERSION
+            metadata = self._metadata(
+                mode, budget, "Research complete",
+                semantic_verification_mode=semantic_mode,
+            )
+            metadata["retrieval_version"] = version
             metadata["llm_gateway"] = summarize_trace(end_trace(trace_token))
             metadata["embedding_usage"] = dict(vector_service.embedding_usage)
             stored_metadata = dict(record.model_metadata)
@@ -375,7 +440,7 @@ class ResearchService:
             await session.commit()
             await session.refresh(record)
             logger.info("research_completed run_id=%s mode=%s source_count=%s", record.id, mode.value, len(sources))
-            return ResearchResponse(id=record.id, status=record.status, answer=record.answer, sources=sources, plan=list(pipeline_result.get("metadata", {}).get("plan_executed", [])), created_at=record.created_at, completed_at=record.completed_at, mode=mode, retrieval_version=PIPELINE_VERSION, source_diagnostics=source_diagnostics, cache_diagnostics=cache_diagnostics, llm_diagnostics=metadata["llm_gateway"], source_sufficiency=metadata["source_sufficiency"])
+            return ResearchResponse(id=record.id, status=record.status, answer=record.answer, sources=sources, plan=list(pipeline_result.get("metadata", {}).get("plan_executed", [])), created_at=record.created_at, completed_at=record.completed_at, mode=mode, retrieval_version=version, source_diagnostics=source_diagnostics, cache_diagnostics=cache_diagnostics, llm_diagnostics=metadata["llm_gateway"], source_sufficiency=metadata["source_sufficiency"])
         except Exception as error:
             failed_run_id = record.id
             try:

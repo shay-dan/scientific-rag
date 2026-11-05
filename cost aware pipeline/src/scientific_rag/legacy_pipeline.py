@@ -47,6 +47,16 @@ from app.weak_model_synthesis import (
     repair_prompt_v2,
     validate_answer_v2,
 )
+from app.claim_verification import (
+    ClaimVerificationError,
+    SEMANTIC_VERIFICATION_MAX_GATEWAY_INVOCATIONS,
+    SemanticVerificationBudgetError,
+    apply_semantic_verdicts,
+    build_semantic_verification_audit,
+    build_verification_inputs,
+    plan_verification_batches,
+    verify_claims,
+)
 
 # --- 1. CONFIGURATION & LOGGING SETUP ---
 
@@ -1410,13 +1420,26 @@ Abstract:
         return final_flat_list
 
 class ResearchAgent:
-    def __init__(self, vector_service, max_synthesis_subquestions: int = 2, retrieval_documents: int = 6, max_context_documents: int = 8, progress_callback=None):
+    def __init__(self, vector_service, max_synthesis_subquestions: int = 2, retrieval_documents: int = 6,
+                 max_context_documents: int = 8, progress_callback=None,
+                 semantic_verification_mode: Literal["off", "shadow", "enforce"] = "off",
+                 semantic_verification_timeout_seconds: float = 120,
+                 semantic_verification_max_gateway_invocations: int = SEMANTIC_VERIFICATION_MAX_GATEWAY_INVOCATIONS):
+        if semantic_verification_mode not in {"off", "shadow", "enforce"}:
+            raise ValueError(f"Unsupported semantic verification mode: {semantic_verification_mode}")
+        if semantic_verification_timeout_seconds <= 0:
+            raise ValueError("Semantic verification timeout must be positive")
+        if semantic_verification_max_gateway_invocations < 1:
+            raise ValueError("Semantic verification gateway invocation limit must be positive")
         print("DEBUG: 🛠️ Initializing ResearchAgent...")
         self.vector_service = vector_service
         self.max_synthesis_subquestions = max_synthesis_subquestions
         self.retrieval_documents = retrieval_documents
         self.max_context_documents = max_context_documents
         self.progress_callback = progress_callback
+        self.semantic_verification_mode = semantic_verification_mode
+        self.semantic_verification_timeout_seconds = semantic_verification_timeout_seconds
+        self.semantic_verification_max_gateway_invocations = semantic_verification_max_gateway_invocations
 
     async def _progress(self, stage: str, role: str | None = None):
         if self.progress_callback:
@@ -1652,7 +1675,68 @@ ANSWER LINES:
             raise RuntimeError(
                 "Structured synthesis still contained invalid evidence references after one repair attempt"
             )
-        answer = render_answer_v2(structured_answer)
+        semantic_audit = None
+        selected_answer = structured_answer
+        if self.semantic_verification_mode != "off":
+            await self._progress("Verifying answer claims against cited evidence", "gatekeeper")
+            verification_started = time.monotonic()
+            try:
+                verification_inputs = build_verification_inputs(structured_answer, evidence_blocks)
+                verification_plan = plan_verification_batches(
+                    verification_inputs,
+                    question=query,
+                )
+                if len(verification_plan) > self.semantic_verification_max_gateway_invocations:
+                    raise SemanticVerificationBudgetError(
+                        "semantic verification requires "
+                        f"{len(verification_plan)} gateway invocations, exceeding the limit of "
+                        f"{self.semantic_verification_max_gateway_invocations}"
+                    )
+                verification_batch = await asyncio.wait_for(
+                    verify_claims(
+                        verification_inputs,
+                        question=query,
+                        max_gateway_invocations=self.semantic_verification_max_gateway_invocations,
+                    ),
+                    timeout=self.semantic_verification_timeout_seconds,
+                )
+                if self.semantic_verification_mode == "enforce":
+                    selected_answer = apply_semantic_verdicts(structured_answer, verification_batch)
+                semantic_audit = build_semantic_verification_audit(
+                    structured_answer,
+                    verification_batch,
+                    mode=self.semantic_verification_mode,
+                    duration_ms=(time.monotonic() - verification_started) * 1000,
+                    filtering_applied=self.semantic_verification_mode == "enforce",
+                    batch_count=len(verification_plan),
+                )
+            except (ClaimVerificationError, TimeoutError) as error:
+                if self.semantic_verification_mode != "shadow":
+                    raise
+                if isinstance(error, SemanticVerificationBudgetError):
+                    safe_reason = "Verification exceeded the configured gateway-call budget."
+                elif isinstance(error, TimeoutError):
+                    safe_reason = (
+                        "Semantic verification exceeded the configured "
+                        f"{self.semantic_verification_timeout_seconds:g}-second deadline."
+                    )
+                else:
+                    safe_reason = "Semantic verification did not return a complete valid assessment."
+                semantic_audit = {
+                    "mode": "shadow",
+                    "status": "error",
+                    "error_type": type(error).__name__,
+                    "failure_reason": safe_reason,
+                    "filtering_applied": False,
+                    "duration_ms": round((time.monotonic() - verification_started) * 1000, 2),
+                }
+
+        final_validation_errors = validate_answer_v2(selected_answer, evidence_blocks)
+        if final_validation_errors:
+            raise RuntimeError(
+                "Semantically selected answer failed mandatory structural evidence validation"
+            )
+        answer = render_answer_v2(selected_answer)
         def validated_claim(item):
             return {
                 **item.model_dump(),
@@ -1661,12 +1745,14 @@ ANSWER LINES:
         claim_validation = {
             "status": "completed",
             "contract": "structured_evidence_v2",
-            "claims": [validated_claim(item) for item in structured_answer.claims],
-            "limitations": [validated_claim(item) for item in structured_answer.limitations],
-            "unanswered_parts": list(structured_answer.unanswered_parts),
+            "claims": [validated_claim(item) for item in selected_answer.claims],
+            "limitations": [validated_claim(item) for item in selected_answer.limitations],
+            "unanswered_parts": list(selected_answer.unanswered_parts),
             "repair": repair_audit,
             "remaining_errors": {},
         }
+        if semantic_audit is not None:
+            claim_validation["semantic_verification"] = semantic_audit
 
         execution_time = time.time() - start_time
         print(f"DEBUG: ✨ Synthesis complete in {execution_time:.2f}s")

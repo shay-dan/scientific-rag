@@ -30,7 +30,7 @@ from .db import close_database, get_session, verify_database_schema
 from .logging_config import configure_logging
 from .models import AuditEvent, EvaluationCase, EvaluationDataset, EvaluationResult, EvaluationRun, ResearchEvidence, ResearchFeedback, ResearchRun, SourceDocument
 from .schemas import EvidenceJobRequest, EvaluationDatasetInput, EvaluationRunInput, HealthResponse, ResearchCacheMode, ResearchMode, ResearchRequest, ResearchResponse
-from .services import PIPELINE_VERSION, ResearchService, to_response
+from .services import ResearchService, effective_pipeline_version, to_response
 from .cost_policy import budget_for
 from .cost_control import CostBudgetExceeded
 from .evaluation import METRIC_NAMES, summarize_context_precision_views, summarize_scores
@@ -951,14 +951,15 @@ async def queue_evidence_job(request: Request, payload: EvidenceJobRequest, sess
     if any(marker in payload.question for marker in ("@", "\n", "\r")):
         raise HTTPException(status_code=422, detail="Generic single-line research question required")
     question = " ".join(payload.question.split())
-    lock_id = int.from_bytes(hashlib.sha256((payload.topic_key + PIPELINE_VERSION).encode()).digest()[:8], "big", signed=True)
+    version = effective_pipeline_version(get_settings().semantic_claim_verification_mode)
+    lock_id = int.from_bytes(hashlib.sha256((payload.topic_key + version).encode()).digest()[:8], "big", signed=True)
     # Transaction-scoped advisory lock prevents duplicate jobs from concurrent users.
     await session.execute(text("SELECT pg_advisory_xact_lock(:lock_id)"), {"lock_id": lock_id})
     record = (await session.execute(
         select(ResearchRun).where(
             ResearchRun.question == question,
             ResearchRun.requested_by == principal.name,
-            ResearchRun.model_metadata["retrieval_version"].as_string() == PIPELINE_VERSION,
+            ResearchRun.model_metadata["retrieval_version"].as_string() == version,
             ResearchRun.status.in_(["queued", "running", "completed"]),
         ).order_by(ResearchRun.created_at.desc()).limit(1)
     )).scalar_one_or_none()

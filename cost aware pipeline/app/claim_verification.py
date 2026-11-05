@@ -1,8 +1,8 @@
 """Deterministic contracts and evidence mapping for semantic claim verification.
 
-This module is not wired into production synthesis. It prepares structurally
-validated claim/evidence pairs and offers an independently callable, bounded LLM
-verifier without defaulting missing judgments to supported.
+This module prepares structurally validated claim/evidence pairs, offers a bounded
+LLM verifier, and deterministically filters enforce-mode answers without defaulting
+missing judgments to supported.
 """
 
 from __future__ import annotations
@@ -29,12 +29,21 @@ TARGET_PATTERN = r"^(claims|limitations)\.[1-9]\d*$"
 MAX_PASSAGE_CONTEXT_CHARS = 2400
 SEMANTIC_VERIFICATION_BATCH_SIZE = 4
 SEMANTIC_VERIFICATION_PROMPT_MAX_CHARS = 24_000
+SEMANTIC_VERIFICATION_MAX_GATEWAY_INVOCATIONS = 5
 _TARGET_RE = re.compile(TARGET_PATTERN)
 _SOURCE_ID_RE = re.compile(r"^S\d+$")
 
 
 class ClaimVerificationError(ValueError):
     """Raised when evidence mapping or assessment validation is incomplete."""
+
+
+class SemanticVerificationBudgetError(ClaimVerificationError):
+    """Raised before provider calls when verification exceeds its call budget."""
+
+
+class NoSemanticallySupportedClaimsError(ClaimVerificationError):
+    """Raised when enforcement would remove every answer claim."""
 
 
 class ClaimVerdict(str, Enum):
@@ -359,16 +368,22 @@ def _validate_verification_inputs(
     return tuple(sorted(inputs, key=lambda item: _target_sort_key(item.target)))
 
 
-def _verification_batches(
-    inputs: tuple[ClaimVerificationInput, ...],
+def plan_verification_batches(
+    inputs: list[ClaimVerificationInput] | tuple[ClaimVerificationInput, ...],
+    *,
     question: str,
 ) -> tuple[tuple[tuple[ClaimVerificationInput, ...], str], ...]:
+    """Validate and deterministically plan bounded gateway calls without invoking an LLM."""
+    input_tuple = tuple(inputs)
+    if not input_tuple:
+        return ()
+    ordered = _validate_verification_inputs(input_tuple, question)
     batches: list[tuple[tuple[ClaimVerificationInput, ...], str]] = []
     cursor = 0
-    while cursor < len(inputs):
-        size = min(SEMANTIC_VERIFICATION_BATCH_SIZE, len(inputs) - cursor)
+    while cursor < len(ordered):
+        size = min(SEMANTIC_VERIFICATION_BATCH_SIZE, len(ordered) - cursor)
         while size > 0:
-            group = inputs[cursor:cursor + size]
+            group = ordered[cursor:cursor + size]
             prompt = build_semantic_verification_prompt(group, question)
             if len(prompt) <= SEMANTIC_VERIFICATION_PROMPT_MAX_CHARS:
                 batches.append((group, prompt))
@@ -376,7 +391,7 @@ def _verification_batches(
                 break
             size -= 1
         if size == 0:
-            target = inputs[cursor].target
+            target = ordered[cursor].target
             raise ClaimVerificationError(
                 f"verification input {target} cannot fit within the "
                 f"{SEMANTIC_VERIFICATION_PROMPT_MAX_CHARS}-character prompt limit"
@@ -384,23 +399,115 @@ def _verification_batches(
     return tuple(batches)
 
 
+def apply_semantic_verdicts(
+    answer: StructuredEvidenceAnswerV2,
+    assessments: ClaimVerificationBatch | dict,
+) -> StructuredEvidenceAnswerV2:
+    """Return a new answer containing only semantically supported fields."""
+    expected_targets = tuple(
+        [f"claims.{index}" for index in range(1, len(answer.claims) + 1)]
+        + [f"limitations.{index}" for index in range(1, len(answer.limitations) + 1)]
+    )
+    validated = validate_assessment_batch(assessments, expected_targets)
+    by_target = {assessment.target: assessment for assessment in validated}
+    retained_claims = [
+        claim
+        for index, claim in enumerate(answer.claims, start=1)
+        if by_target[f"claims.{index}"].verdict is ClaimVerdict.supported
+    ]
+    if not retained_claims:
+        raise NoSemanticallySupportedClaimsError(
+            "semantic enforcement rejected every answer claim"
+        )
+    retained_limitations = [
+        limitation
+        for index, limitation in enumerate(answer.limitations, start=1)
+        if by_target[f"limitations.{index}"].verdict is ClaimVerdict.supported
+    ]
+    return StructuredEvidenceAnswerV2(
+        claims=list(retained_claims),
+        limitations=list(retained_limitations),
+        unanswered_parts=list(answer.unanswered_parts),
+    )
+
+
+def build_semantic_verification_audit(
+    answer: StructuredEvidenceAnswerV2,
+    assessments: ClaimVerificationBatch | dict,
+    *,
+    mode: str,
+    duration_ms: float,
+    filtering_applied: bool,
+    batch_count: int,
+) -> dict:
+    """Build compact audit metadata while preserving original target identifiers."""
+    if mode not in {"shadow", "enforce"}:
+        raise ClaimVerificationError(f"unsupported semantic verification audit mode {mode!r}")
+    expected_targets = tuple(
+        [f"claims.{index}" for index in range(1, len(answer.claims) + 1)]
+        + [f"limitations.{index}" for index in range(1, len(answer.limitations) + 1)]
+    )
+    validated = validate_assessment_batch(assessments, expected_targets)
+    supported = [item.target for item in validated if item.verdict is ClaimVerdict.supported]
+    rejected = [item.target for item in validated if item.verdict is not ClaimVerdict.supported]
+    retained = supported if filtering_applied else list(expected_targets)
+    removed = rejected if filtering_applied else []
+    counts = {
+        verdict.value: sum(1 for item in validated if item.verdict is verdict)
+        for verdict in ClaimVerdict
+    }
+    return {
+        "mode": mode,
+        "status": "completed",
+        "total_assessed_targets": len(validated),
+        "supported_count": counts[ClaimVerdict.supported.value],
+        "contradicted_count": counts[ClaimVerdict.contradicted.value],
+        "insufficient_evidence_count": counts[ClaimVerdict.insufficient_evidence.value],
+        "assessments": [
+            {
+                "original_target_id": item.target,
+                "verdict": item.verdict.value,
+                "reason": item.reason,
+            }
+            for item in validated
+        ],
+        "retained_target_ids": retained,
+        "removed_target_ids": removed,
+        "rejected_target_ids": rejected,
+        "filtering_applied": filtering_applied,
+        "batch_count": batch_count,
+        "duration_ms": round(max(duration_ms, 0.0), 2),
+    }
+
+
 async def verify_claims(
     inputs: list[ClaimVerificationInput] | tuple[ClaimVerificationInput, ...],
     *,
     question: str,
+    max_gateway_invocations: int = SEMANTIC_VERIFICATION_MAX_GATEWAY_INVOCATIONS,
 ) -> ClaimVerificationBatch:
     """Verify claim/evidence pairs sequentially through the existing gateway.
 
-    This fail-closed service is intentionally not called by the production
-    ResearchAgent in Stage 1B.
+    Production integration remains fail-closed in enforce mode and is bounded by
+    the supplied gateway-invocation limit.
     """
     input_tuple = tuple(inputs)
     if not input_tuple:
         return ClaimVerificationBatch()
 
-    ordered = _validate_verification_inputs(input_tuple, question)
+    if max_gateway_invocations < 1:
+        raise SemanticVerificationBudgetError(
+            "semantic verification gateway invocation limit must be positive"
+        )
+    planned = plan_verification_batches(input_tuple, question=question)
+    if len(planned) > max_gateway_invocations:
+        raise SemanticVerificationBudgetError(
+            "semantic verification requires "
+            f"{len(planned)} gateway invocations, exceeding the limit of "
+            f"{max_gateway_invocations}"
+        )
     all_assessments: list[ClaimAssessment] = []
-    for group, prompt in _verification_batches(ordered, question):
+    for group, prompt in planned:
         targets = tuple(item.target for item in group)
         try:
             response = await ainvoke_structured(
@@ -427,6 +534,6 @@ async def verify_claims(
         all_assessments.extend(validated)
 
     merged = ClaimVerificationBatch(assessments=all_assessments)
-    expected_targets = tuple(item.target for item in ordered)
+    expected_targets = tuple(item.target for group, _ in planned for item in group)
     final_assessments = validate_assessment_batch(merged, expected_targets)
     return ClaimVerificationBatch(assessments=list(final_assessments))

@@ -4,6 +4,8 @@ import sys
 import unittest
 from unittest.mock import patch
 
+from pydantic import ValidationError
+
 project_root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(project_root / "src"))
@@ -14,6 +16,20 @@ from app.schemas import ResearchRequest
 
 
 class ApiConfigurationTests(unittest.TestCase):
+    def test_semantic_verification_defaults_to_off(self) -> None:
+        self.assertEqual(Settings().semantic_claim_verification_mode, "off")
+
+    def test_semantic_verification_accepts_all_supported_modes(self) -> None:
+        for mode in ("off", "shadow", "enforce"):
+            with self.subTest(mode=mode):
+                self.assertEqual(
+                    Settings(semantic_claim_verification_mode=mode).semantic_claim_verification_mode,
+                    mode,
+                )
+
+    def test_semantic_verification_rejects_unknown_mode(self) -> None:
+        with self.assertRaises(ValidationError):
+            Settings(semantic_claim_verification_mode="permissive")
     def test_requires_research_secrets(self) -> None:
         with patch.dict(os.environ, {"GOOGLE_API_KEY": "", "ENTREZ_EMAIL": ""}, clear=False):
             with self.assertRaisesRegex(ValueError, "GOOGLE_API_KEY"):

@@ -11,10 +11,15 @@ from app.claim_verification import (
     ClaimVerificationError,
     ClaimVerificationInput,
     ClaimVerdict,
+    NoSemanticallySupportedClaimsError,
     SEMANTIC_VERIFICATION_BATCH_SIZE,
+    SEMANTIC_VERIFICATION_MAX_GATEWAY_INVOCATIONS,
     SEMANTIC_VERIFICATION_PROMPT_MAX_CHARS,
+    SemanticVerificationBudgetError,
+    apply_semantic_verdicts,
     build_semantic_verification_prompt,
     build_verification_inputs,
+    plan_verification_batches,
     validate_assessment_batch,
     verify_claims,
 )
@@ -273,6 +278,91 @@ class AssessmentContractTests(unittest.TestCase):
             ]}, ["claims.1"])
 
 
+class SemanticVerdictFilteringTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.claims = [
+            EvidenceClaim(
+                text=f"Supported scientific claim {index}.",
+                source_id=f"S{index}",
+                evidence_quote=f"Evidence quote {index}",
+            )
+            for index in range(1, 4)
+        ]
+        self.limitations = [
+            EvidenceClaim(
+                text=f"Scientific limitation number {index}.",
+                source_id="S1",
+                evidence_quote=f"Limitation quote {index}",
+            )
+            for index in range(1, 3)
+        ]
+        self.answer = StructuredEvidenceAnswerV2(
+            claims=self.claims,
+            limitations=self.limitations,
+            unanswered_parts=["Long-term evidence is unavailable."],
+        )
+
+    def assessments(self, verdicts: dict[str, str]) -> ClaimVerificationBatch:
+        targets = ["claims.1", "claims.2", "claims.3", "limitations.1", "limitations.2"]
+        return ClaimVerificationBatch(assessments=[
+            ClaimAssessment(
+                target=target,
+                verdict=verdicts.get(target, "supported"),
+                reason=f"Assessment for {target}",
+            )
+            for target in targets
+        ])
+
+    def test_all_supported_returns_equal_but_distinct_answer(self) -> None:
+        filtered = apply_semantic_verdicts(self.answer, self.assessments({}))
+        self.assertEqual(filtered, self.answer)
+        self.assertIsNot(filtered, self.answer)
+
+    def test_mixed_verdicts_remove_only_rejected_fields_in_original_order(self) -> None:
+        filtered = apply_semantic_verdicts(self.answer, self.assessments({
+            "claims.2": "contradicted",
+            "limitations.1": "insufficient_evidence",
+        }))
+        self.assertEqual([item.text for item in filtered.claims], [
+            "Supported scientific claim 1.", "Supported scientific claim 3."
+        ])
+        self.assertEqual([item.text for item in filtered.limitations], ["Scientific limitation number 2."])
+        self.assertEqual(filtered.unanswered_parts, self.answer.unanswered_parts)
+
+    def test_all_limitations_may_be_removed(self) -> None:
+        filtered = apply_semantic_verdicts(self.answer, self.assessments({
+            "limitations.1": "contradicted",
+            "limitations.2": "insufficient_evidence",
+        }))
+        self.assertEqual(filtered.limitations, [])
+        self.assertEqual(len(filtered.claims), 3)
+
+    def test_all_claims_removed_raises_explicit_error(self) -> None:
+        with self.assertRaisesRegex(NoSemanticallySupportedClaimsError, "every answer claim"):
+            apply_semantic_verdicts(self.answer, self.assessments({
+                "claims.1": "contradicted",
+                "claims.2": "insufficient_evidence",
+                "claims.3": "contradicted",
+            }))
+
+    def test_original_answer_is_not_mutated(self) -> None:
+        before = self.answer.model_dump()
+        apply_semantic_verdicts(self.answer, self.assessments({"claims.2": "contradicted"}))
+        self.assertEqual(self.answer.model_dump(), before)
+
+    def test_incomplete_assessments_are_rejected(self) -> None:
+        with self.assertRaisesRegex(ClaimVerificationError, "missing assessments"):
+            apply_semantic_verdicts(self.answer, _batch_for(["claims.1"]))
+
+    def test_assessment_targets_remain_original_after_filtering(self) -> None:
+        batch = self.assessments({"claims.2": "contradicted"})
+        filtered = apply_semantic_verdicts(self.answer, batch)
+        self.assertEqual([item.text for item in filtered.claims], [
+            "Supported scientific claim 1.", "Supported scientific claim 3."
+        ])
+        self.assertIn("claims.3", [item.target for item in batch.assessments])
+
+
 def _verification_input(
     index: int,
     *,
@@ -429,6 +519,36 @@ class SemanticVerifierInvocationTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(gateway.await_count, 5)
         self.assertEqual([item.target for item in result.assessments], ordered_targets)
+
+    async def test_batch_plan_is_inspectable_without_gateway_calls(self) -> None:
+        inputs = [_verification_input(index) for index in range(1, 6)]
+        with patch("app.claim_verification.ainvoke_structured", new=AsyncMock()) as gateway:
+            planned = plan_verification_batches(inputs, question="Research question")
+        self.assertEqual(len(planned), 2)
+        self.assertEqual([[item.target for item in group] for group, _ in planned], [
+            ["claims.1", "claims.2", "claims.3", "claims.4"], ["claims.5"]
+        ])
+        gateway.assert_not_awaited()
+
+    async def test_more_than_five_planned_calls_fail_before_gateway(self) -> None:
+        inputs = []
+        for index in range(1, 7):
+            quote = f"Q{index}-" + ("q" * 2100)
+            inputs.append(_verification_input(
+                index,
+                claim_text="C" * 6000,
+                evidence_quote=quote,
+                context=quote,
+                title="T" * 8000,
+            ))
+        with patch("app.claim_verification.ainvoke_structured", new=AsyncMock()) as gateway:
+            with self.assertRaisesRegex(SemanticVerificationBudgetError, "exceeding the limit"):
+                await verify_claims(
+                    inputs,
+                    question="Research question",
+                    max_gateway_invocations=SEMANTIC_VERIFICATION_MAX_GATEWAY_INVOCATIONS,
+                )
+        gateway.assert_not_awaited()
 
     async def test_oversized_group_is_split_without_losing_evidence(self) -> None:
         inputs = []

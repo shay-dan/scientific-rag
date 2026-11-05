@@ -14,7 +14,12 @@ sys.path.insert(0, str(project_root / "src"))
 
 from app.main import _aggregate_provider_diagnostics, app
 from app.schemas import EvidenceJobRequest, EvaluationDatasetInput, EvaluationRunInput, ResearchCacheMode, ResearchMode, ResearchRequest
-from app.services import PIPELINE_VERSION, ResearchService, _responses_for_evidence_documents
+from app.services import (
+    PIPELINE_VERSION,
+    ResearchService,
+    _responses_for_evidence_documents,
+    effective_pipeline_version,
+)
 from langchain_core.documents import Document
 
 
@@ -121,6 +126,32 @@ class ApiContractTests(unittest.TestCase):
             sql = str(statement.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
             self.assertIn(PIPELINE_VERSION, sql)
             self.assertIn("retrieval_version", sql)
+
+        import asyncio
+        asyncio.run(verify())
+
+    def test_semantic_verification_cache_versions_are_separate(self) -> None:
+        self.assertEqual(effective_pipeline_version("off"), PIPELINE_VERSION)
+        self.assertNotEqual(effective_pipeline_version("shadow"), PIPELINE_VERSION)
+        self.assertNotEqual(effective_pipeline_version("enforce"), PIPELINE_VERSION)
+        self.assertNotEqual(
+            effective_pipeline_version("shadow"), effective_pipeline_version("enforce")
+        )
+
+    def test_enforce_cache_lookup_cannot_match_historical_off_version(self) -> None:
+        async def verify() -> None:
+            service = object.__new__(ResearchService)
+            service.settings = SimpleNamespace(semantic_claim_verification_mode="enforce")
+            session = SimpleNamespace(
+                execute=AsyncMock(return_value=SimpleNamespace(scalar_one_or_none=lambda: None))
+            )
+            await service._find_cached(session, "a question", "tester", ResearchMode.fast)
+            statement = session.execute.await_args.args[0]
+            sql = str(statement.compile(
+                dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}
+            ))
+            self.assertIn(effective_pipeline_version("enforce"), sql)
+            self.assertNotIn(f"'{PIPELINE_VERSION}'", sql)
 
         import asyncio
         asyncio.run(verify())
