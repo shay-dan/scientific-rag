@@ -1,9 +1,24 @@
 .env
+.env.*
+!.env.example
+.venv/
+venv/
 __pycache__/
 *.py[cod]
 .pytest_cache/
-.venv/
-data/
-*.log
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+.ipynb_checkpoints/
 .gradio/
+.idea/
+.vscode/
+data/
+logs/
+backups/
+*.log
 

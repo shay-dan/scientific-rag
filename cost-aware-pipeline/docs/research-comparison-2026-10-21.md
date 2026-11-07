@@ -22,7 +22,7 @@ This is a six-run smoke comparison, **not** a statistical performance or scienti
 
 - PubMed Entrez now uses an 8-second per-network-call socket timeout, two Biopython attempts, and a 90-second thread-local fetch budget. The application still records per-source mining failures and can continue with another source. A socket timeout is an inactivity limit, not a guaranteed total wall-clock bound under a slow trickle response; the outer source timeout can still cancel an await before an unusual synchronous call fully stops.
 - The full local suite passed **107/107**, including three real PostgreSQL/pgvector integration tests (extension availability, vector distance ordering, and PostgreSQL full-text matching). Those tests used temporary tables and did not modify application rows.
-- A GitHub Actions job was added for the `cost aware pipeline` folder with a temporary pgvector PostgreSQL service. It has **not yet been validated by a GitHub-hosted run**; it will run once the workflow is committed and pushed.
+- A GitHub Actions job was added for the application folder with a temporary pgvector PostgreSQL service. It had **not yet been validated by a GitHub-hosted run** at the time of this historical report. The current folder is `cost-aware-pipeline`.
 
 ## Next quality work
 

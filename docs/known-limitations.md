@@ -1,0 +1,44 @@
+# Known limitations
+
+Scientific RAG is an advanced research prototype, not a clinically validated
+medical system.
+
+## Quality and evaluation
+
+- The semantic verifier has mocked integration coverage, but its live scientific
+  classification accuracy is not calibrated. It ships in `off` mode.
+- Current comparative results use small automated Silver datasets. They do not
+  establish a stable winner across domains.
+- Frozen-corpus experiments do not measure the agentic pipeline's ability to mine
+  new evidence when the stored corpus is insufficient.
+- Provider responses and external literature APIs remain probabilistic and may be
+  unavailable, slow, incomplete, or inconsistent.
+- Structured source IDs and verbatim quotes improve traceability but do not prove
+  that every interpretation is scientifically correct.
+
+## Security and deployment
+
+- The beta uses application API keys rather than a full identity provider.
+- A configured empty key such as `admin:` can match an empty submitted key in the
+  current parser. Do not configure empty keys. This known authentication defect is
+  intentionally deferred to the security engineering workstream.
+- Public deployment still requires HTTPS termination, secure cookies, managed
+  secrets, restricted hosts/origins, access review, backup/restore drills, and
+  staging validation.
+- Two scoped dependency advisories are documented in the security workflow and
+  must be revisited when fixed upstream releases become available.
+
+## Operations and cost
+
+- Provider token usage can be absent on failed attempts, so some cost totals are
+  documented as lower bounds or estimates.
+- Application budgets do not cover calls made outside this application.
+- Local load and failure-recovery scripts are workstation checks, not distributed
+  soak tests or capacity guarantees.
+- Deep mode is experimental, disabled by default, and may increase latency and
+  evidence noise as well as cost.
+
+## Licensing
+
+The repository currently has no software license. Redistribution and reuse terms
+must be decided by the maintainer before a public release.

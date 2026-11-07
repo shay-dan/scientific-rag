@@ -244,7 +244,7 @@ Install and start Docker Desktop (or use a working Docker Engine with Compose). 
 
 ```powershell
 git clone https://github.com/shay-dan/scientific-rag.git
-cd "scientific-rag/cost aware pipeline"
+cd scientific-rag/cost-aware-pipeline
 ```
 
 You need a Gemini API key for embeddings and evaluation. Groq and OpenRouter keys are optional but required to use their positions in the generation fallback chain. Research and evaluations may make billable provider calls; opening saved results does not start a new evaluation. This is a protected beta, not a public hosted service.
