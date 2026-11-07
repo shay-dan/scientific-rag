@@ -47,7 +47,5 @@ These conditional means describe only the 50% of cases that produced answers. Th
 
 Artifacts:
 
-- Research runs: [`live-fast-qwen-12-2026-10-30.json`](live-fast-qwen-12-2026-10-30.json)
-- Ragas output for five initially successful judges: [`live-fast-qwen-12-ragas-2026-10-30.json`](live-fast-qwen-12-ragas-2026-10-30.json)
-- Retried sixth judge: [`results/qwen-fast-12-pm02-ragas.json`](results/qwen-fast-12-pm02-ragas.json)
+- Research-run JSON and Ragas outputs are retained locally and are not committed to the repository.
 - Reviewed Silver dataset: [`pilot-silver-v3.json`](pilot-silver-v3.json)

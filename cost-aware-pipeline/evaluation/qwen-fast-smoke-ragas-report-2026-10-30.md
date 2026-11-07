@@ -28,6 +28,4 @@ Three previously completed Fast research runs were scored without repeating rese
 
 Raw outputs:
 
-- [`results/qwen-smoke-pubmed-ragas.json`](results/qwen-smoke-pubmed-ragas.json)
-- [`results/qwen-smoke-arxiv-ragas.json`](results/qwen-smoke-arxiv-ragas.json)
-- [`results/qwen-smoke-mixed-ragas.json`](results/qwen-smoke-mixed-ragas.json)
+- The per-case JSON outputs are retained locally and are not committed to the repository.

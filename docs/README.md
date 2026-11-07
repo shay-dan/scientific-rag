@@ -5,6 +5,7 @@ The root README is the project overview. The maintained application's
 
 ## Start here
 
+- [Engineering Case Study — architectural decisions, measured results, tradeoffs, and limitations](../cost-aware-pipeline/docs/engineering-case-study.md)
 - [Installation, configuration, APIs, and operations](../cost-aware-pipeline/README.md)
 - [Contributing and local verification](../CONTRIBUTING.md)
 - [Known limitations](known-limitations.md)

@@ -65,6 +65,16 @@ The API persists work before enqueueing it. The worker performs planning, mining
 retrieval, synthesis, and optional verification; Redis transports jobs, while
 PostgreSQL remains the system of record.
 
+## Evaluation findings
+
+The committed experiments are exploratory and historical, not a production quality baseline. Their Silver references were model-generated and model-audited rather than independently human-reviewed ground truth.
+
+- A 12-question frozen-corpus comparison dated 2026-10-30 found Hybrid Basic to be the descriptive leader (overall 0.925), ahead of Naive RAG (0.904), Hybrid Enhanced (0.896), and Agentic Fast (0.863). The comparison used one run per configuration, automated Silver ground truth, and unequal context budgets; it does not show that Agentic RAG is unnecessary when external mining is enabled.
+- A 12-case retrieval ablation dated 2026-10-30 measured mean source recall of 0.9514 for Dense and Hybrid Basic, 0.7847 for MMR alone, and 0.9097 for Hybrid + MMR + RRF. Parent expansion had no measurable effect on the short-passage snapshot.
+- A v14 structured-synthesis gate dated 2026-11-04 completed 3/3 Fast cases with faithfulness 1.000, context precision 0.833, context recall 0.700, and answer relevancy 0.883; the 0.90 relevancy gate was missed because one case scored 0.784.
+
+These findings show why the project measures architectural complexity instead of assuming that more retrieval or more agents is always better. See the detailed [Engineering Case Study — architecture decisions, measured results, tradeoffs, and limitations](cost-aware-pipeline/docs/engineering-case-study.md), the [retrieval ablation](cost-aware-pipeline/evaluation/retrieval-ablation-12x5-report.md), and the [frozen comparison conclusions](cost-aware-pipeline/evaluation/rag-comparison-conclusions.md).
+
 ## Quick start with Docker
 
 Requirements:
@@ -130,27 +140,6 @@ docker run --rm `
 The PostgreSQL/pgvector and Redis integration checks are opt-in because they need
 live services. See [CONTRIBUTING.md](CONTRIBUTING.md) for complete commands,
 environment setup, and contribution expectations.
-
-## Evaluation findings
-
-Evaluation evidence in this repository is exploratory and intentionally preserves
-negative results.
-
-- A 12-question frozen-corpus pilot found **Hybrid Basic** (pgvector + PostgreSQL
-  FTS + RRF) descriptively strongest, with overall quality **0.9250**. Naive RAG
-  scored **0.9042**, Hybrid Enhanced **0.8958**, and Agentic Fast **0.8625**.
-- In a retrieval-only ablation, dense retrieval achieved mean source recall
-  **0.9514**. Adding MMR reduced it to **0.7847**; FTS/RRF recovered it to
-  **0.9097**. Parent expansion made no difference on the short-passage snapshot.
-- A later three-question structured-synthesis smoke test completed 3/3 with mean
-  faithfulness **1.000**, answer relevancy **0.883**, context precision **0.833**,
-  and context recall **0.700**.
-
-These are small automated Silver evaluations, not a production benchmark or a
-claim of general scientific accuracy. The frozen pilot disabled external mining,
-which removes a central advantage of the agentic workflow. See
-[RAG comparison conclusions](cost-aware-pipeline/evaluation/rag-comparison-conclusions.md)
-and the [v14 quality-gate report](cost-aware-pipeline/evaluation/v14-structured-synthesis-quality-gate-report-2026-11-04.md).
 
 ## Repository map
 
