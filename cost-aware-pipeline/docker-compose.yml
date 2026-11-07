@@ -1,3 +1,5 @@
+name: costawarepipeline
+
 x-app-service: &app-service
   image: scientific-rag-app:local
   env_file:

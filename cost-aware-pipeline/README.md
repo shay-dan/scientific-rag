@@ -260,6 +260,9 @@ Copy the example only on first setup; do not overwrite an existing `.env`. Edit 
 
 Compose starts four services: the API, PostgreSQL/pgvector, Redis, and one durable research worker. The API stores a queued run in PostgreSQL and Redis delivers it to the worker, so an API restart does not cancel an already queued research request.
 
+The Compose project name is fixed as `costawarepipeline` so existing named volumes
+remain attached even though the repository directory no longer contains spaces.
+
 Open [http://localhost:8000](http://localhost:8000) for the user interface. The developer API documentation remains at [http://localhost:8000/docs](http://localhost:8000/docs).
 
 ## Run locally
