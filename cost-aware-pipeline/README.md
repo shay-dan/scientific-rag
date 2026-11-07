@@ -10,6 +10,34 @@ The optional `HEALTH_COACH_API_KEY` authenticates a dedicated service identity f
 
 The demo is a captioned walkthrough of a saved evaluation, the claim-aware retrieval audit, and the original Ragas context-precision score. It does not trigger live model calls. The scores shown are evaluation metrics, not claims of clinical accuracy.
 
+## Why this project is interesting
+
+Scientific RAG is designed for questions whose evidence is distributed across papers rather than answered reliably by one nearest-neighbor lookup. It retrieves from PubMed and arXiv, or reuses an indexed research corpus; combines PostgreSQL full-text search with pgvector retrieval; and synthesizes structured claims linked to source passages. Research jobs, provider fallbacks, budgets, and traces run asynchronously so the system can expose its evidence and operational tradeoffs instead of presenting an opaque answer.
+
+The application validates source IDs and verbatim quotations deterministically, with an optional semantic verifier in `off`, `shadow`, or `enforce` mode. This does not eliminate hallucinations or establish clinical accuracy: the semantic verifier is integrated but its real scientific classification reliability has not yet been calibrated, and enforcement remains disabled by default.
+
+## Key engineering achievements
+
+- Hybrid PostgreSQL retrieval: `websearch_to_tsquery`/`ts_rank_cd` plus pgvector cosine search, merged with Reciprocal Rank Fusion.
+- Evidence-aware retrieval with early MMR diversification, parent/child passages, source filtering, and traceable rejection reasons.
+- PubMed and arXiv mining with source-specific query construction, cache-aware research modes, and sufficiency checks.
+- Structured citation-linked claims, source-ID and verbatim-quote validation, bounded repair, and optional semantic claim verification.
+- Provider-agnostic Groq → OpenRouter → Gemini fallback with throttling, timeouts, cost reservations, and execution traces.
+- FastAPI, PostgreSQL, Redis/ARQ workers, Docker, Alembic migrations, versioned benchmarks, and Ragas-based evaluation tooling.
+
+## Evaluation findings and limitations
+
+The committed experiments are exploratory and historical unless explicitly marked otherwise; they are not a production quality baseline.
+
+- In the 12-question frozen-corpus comparison dated 2026-10-30, **Hybrid Basic** had the highest descriptive overall score (0.925), ahead of Naive RAG (0.904), Hybrid Enhanced (0.896), and Agentic Fast (0.863). The comparison used one run per question/configuration, an answer-derived frozen corpus, automated Silver ground truth, and unequal context budgets. It therefore shows that additional complexity did not help this snapshot; it does not show that Agentic RAG is unnecessary when external mining is allowed. See [`evaluation/real-frozen-v3-12x4-report.md`](evaluation/real-frozen-v3-12x4-report.md) and [`evaluation/rag-comparison-conclusions.md`](evaluation/rag-comparison-conclusions.md).
+- In the 12-case retrieval-only ablation dated 2026-10-30, Dense retrieval reached mean source recall 0.9514, Hybrid Basic also reached 0.9514, MMR alone fell to 0.7847, and Hybrid + MMR + RRF recovered to 0.9097. The corpus contained short answer-selected excerpts, so parent/child expansion had no measurable effect. This is evidence for further testing, not a general claim that MMR is harmful. See [`evaluation/retrieval-ablation-12x5-report.md`](evaluation/retrieval-ablation-12x5-report.md).
+- The v14 structured-synthesis quality gate dated 2026-11-04 completed 3/3 Fast cases with faithfulness 1.000, context precision 0.833, context recall 0.700, and answer relevancy 0.883. The configured relevancy threshold was 0.90, so the gate missed that target because one arXiv case scored 0.784. See [`evaluation/v14-structured-synthesis-quality-gate-report-2026-11-04.md`](evaluation/v14-structured-synthesis-quality-gate-report-2026-11-04.md).
+- The current repository contains deterministic unit and contract coverage plus PostgreSQL/pgvector and Redis integration tests. These validate implementation behavior and selected failure paths; they do not prove broad scientific correctness, production-scale reliability, or calibrated semantic verification.
+
+**[Engineering Case Study — Architecture Decisions, Tradeoffs, Experiments and Lessons Learned](docs/engineering-case-study.md)**
+
+The case study explains why each layer exists, what was measured, what underperformed, and what remains unproven.
+
 ## What it provides
 
 - `GET /` is the user-facing research interface.

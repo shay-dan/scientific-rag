@@ -36,4 +36,4 @@ The broad 12-question comparison was deliberately not started. The PubMed result
 
 The native Google-client mismatch was replaced with Gemini's OpenAI-compatible async endpoint. Gemini reasoning is disabled for the Ragas judge so that thinking tokens do not exhaust structured output, and the incompatible Ragas Google embedding wrapper was replaced with a modern adapter around the current Google GenAI API. All three saved runs were subsequently scored without repeating research or mining. See [`qwen-fast-smoke-ragas-report-2026-10-30.md`](qwen-fast-smoke-ragas-report-2026-10-30.md).
 
-Raw smoke output: [`live-fast-smoke-qwen-2026-10-29.json`](live-fast-smoke-qwen-2026-10-29.json).
+Raw smoke output is retained locally and is not committed to the repository.
