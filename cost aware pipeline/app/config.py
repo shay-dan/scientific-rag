@@ -1,6 +1,7 @@
 """Environment-backed API configuration."""
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -24,6 +25,7 @@ class Settings(BaseSettings):
     evaluation_job_timeout_seconds: int = 3600
     evaluation_case_timeout_seconds: int = 300
     claim_diagnostic_timeout_seconds: int = 120
+    semantic_claim_verification_mode: Literal["off", "shadow", "enforce"] = "off"
     allow_database_reset: bool = False
     embedding_model: str = "gemini-embedding-2"
     ragas_judge_model: str = "gemini-2.5-flash"

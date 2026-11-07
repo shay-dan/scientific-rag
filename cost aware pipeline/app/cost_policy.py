@@ -32,3 +32,17 @@ _BUDGETS = {
 
 def budget_for(mode: ResearchMode) -> ResearchBudget:
     return _BUDGETS[mode]
+
+
+def estimated_generation_calls(
+    budget: ResearchBudget,
+    semantic_verification_mode: str,
+    *,
+    semantic_verification_max_calls: int = 5,
+) -> int:
+    """Return the conservative run-level generation-call ceiling."""
+    return budget.estimated_max_generation_calls + (
+        semantic_verification_max_calls
+        if semantic_verification_mode in {"shadow", "enforce"}
+        else 0
+    )

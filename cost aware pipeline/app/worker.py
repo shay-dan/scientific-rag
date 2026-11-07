@@ -62,9 +62,13 @@ async def _mark_interrupted_evaluation_runs() -> None:
             await session.commit()
 
 
-async def run_research_job(ctx, run_id: str, question: str, mode: str, cache_mode: str):
+async def run_research_job(ctx, run_id: str, question: str, mode: str, cache_mode: str,
+                           semantic_verification_mode: str | None = None):
     try:
-        await ctx["service"].run_queued(UUID(run_id), question, ResearchMode(mode), ResearchCacheMode(cache_mode))
+        await ctx["service"].run_queued(
+            UUID(run_id), question, ResearchMode(mode), ResearchCacheMode(cache_mode),
+            semantic_verification_mode,
+        )
     except asyncio.CancelledError:
         async with session_factory() as session:
             run = (await session.execute(select(ResearchRun).where(ResearchRun.id == UUID(run_id)))).scalar_one_or_none()
