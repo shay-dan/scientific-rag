@@ -20,7 +20,7 @@ jobs:
           python-version: "3.11"
           cache: pip
       - name: Audit Python dependencies
-        working-directory: cost aware pipeline
+        working-directory: cost-aware-pipeline
         run: |
           python -m pip install pip-audit
           # Ragas 0.4.3 is the latest release. PYSEC-2026-3046 affects only its
@@ -48,7 +48,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build production image
-        run: docker build -t scientific-rag-security:local "cost aware pipeline"
+        run: docker build -t scientific-rag-security:local cost-aware-pipeline
       - name: Scan image
         uses: aquasecurity/trivy-action@v0.36.0
         with:

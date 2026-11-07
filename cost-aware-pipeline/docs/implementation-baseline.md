@@ -4,7 +4,11 @@ Date: 2026-11-05
 
 Stage: 0 — establish the baseline
 
-Maintained application: `cost aware pipeline/`
+Maintained application: `cost-aware-pipeline/`
+
+> Repository note: this file records the Stage 0 baseline. The application was
+> subsequently renamed from a path containing spaces; paths below use its current
+> location without changing the recorded baseline results.
 
 Branch: `codex/stage-0-baseline`
 
@@ -14,7 +18,7 @@ Production pipeline version: `postgres-hybrid-rrf-mmr-parent-child-structured-v1
 
 ## Scope and preservation
 
-This baseline covers only the maintained application under `cost aware pipeline/`.
+This baseline covers only the maintained application under `cost-aware-pipeline/`.
 No root-level legacy implementation was edited. No production code, configuration,
 database schema, API contract, prompt, retrieval behavior, or provider behavior was
 changed during Stage 0.
@@ -22,7 +26,7 @@ changed during Stage 0.
 The following required context was reviewed:
 
 - Root `README.md`.
-- `cost aware pipeline/README.md`.
+- `cost-aware-pipeline/README.md`.
 - `app/services.py`, including the pipeline version and current queue boundary.
 - `evaluation/v14-structured-synthesis-quality-gate-report-2026-11-04.md`.
 - Dependency files, Docker image definition, Compose services, tests, and CI workflows.
@@ -60,7 +64,7 @@ Image build:
 docker build --tag scientific-rag-stage0:15449b7 .
 ```
 
-Test command, executed from `cost aware pipeline/` in the production image:
+Test command, executed from `cost-aware-pipeline/` in the production image:
 
 ```text
 python -m unittest discover -s tests -v
@@ -99,7 +103,7 @@ passed; these messages are expected failure-injection output, not baseline failu
 The repository-root `.github/workflows/ci.yml` is the active CI definition. It contains:
 
 1. A Python 3.11 legacy-application job for the root prototype.
-2. A maintained-application job that builds `cost aware pipeline/`, compiles the app and
+2. A maintained-application job that builds `cost-aware-pipeline/`, compiles the app and
    tests, runs the normal unit suite, applies and verifies Alembic migrations, runs the
    opt-in PostgreSQL/pgvector and Redis integration suites, and smoke-tests `/healthz`.
 
@@ -107,7 +111,7 @@ The repository-root `.github/workflows/security.yml` performs dependency auditin
 filesystem secret/vulnerability/misconfiguration scanning, and a production-image
 scan. It currently documents two scoped Ragas/diskcache vulnerability exceptions.
 
-`cost aware pipeline/.github/workflows/ci.yml` contains a smaller Python 3.11 workflow,
+`cost-aware-pipeline/.github/workflows/ci.yml` contains a smaller Python 3.11 workflow,
 but nested `.github/workflows` directories are not GitHub Actions entry points for this
 repository layout. The root workflow is therefore the authoritative automation.
 

@@ -244,7 +244,7 @@ Install and start Docker Desktop (or use a working Docker Engine with Compose). 
 
 ```powershell
 git clone https://github.com/shay-dan/scientific-rag.git
-cd "scientific-rag/cost aware pipeline"
+cd scientific-rag/cost-aware-pipeline
 ```
 
 You need a Gemini API key for embeddings and evaluation. Groq and OpenRouter keys are optional but required to use their positions in the generation fallback chain. Research and evaluations may make billable provider calls; opening saved results does not start a new evaluation. This is a protected beta, not a public hosted service.
@@ -259,6 +259,9 @@ docker compose up --build
 Copy the example only on first setup; do not overwrite an existing `.env`. Edit `.env` before starting Compose. Use the secret key portion after `admin:` in `APP_API_KEYS` to sign into the browser UI. Never commit `.env`.
 
 Compose starts four services: the API, PostgreSQL/pgvector, Redis, and one durable research worker. The API stores a queued run in PostgreSQL and Redis delivers it to the worker, so an API restart does not cancel an already queued research request.
+
+The Compose project name is fixed as `costawarepipeline` so existing named volumes
+remain attached even though the repository directory no longer contains spaces.
 
 Open [http://localhost:8000](http://localhost:8000) for the user interface. The developer API documentation remains at [http://localhost:8000/docs](http://localhost:8000/docs).
 
