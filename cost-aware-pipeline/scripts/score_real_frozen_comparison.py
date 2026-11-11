@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
-from app.comparison_judge import ComparisonJudgeScore, build_judge_prompt
+from app.comparison_judge import PROMPT_SECURITY_VERSION, ComparisonJudgeScore, build_judge_prompt
 from app.config import get_settings
 from scientific_rag.costing import calculate_cost, estimate_text_tokens
 
@@ -128,6 +128,7 @@ def main() -> int:
             result["judge"] = {
                 **score,
                 "rubric_version": "comparison_judge_v2",
+                "prompt_security": PROMPT_SECURITY_VERSION,
                 "model": settings.ragas_judge_model,
                 "latency_ms": round((time.perf_counter() - started) * 1000, 1),
                 "input_tokens": input_tokens,
