@@ -1,6 +1,6 @@
 # Scientific RAG — engineering roadmap
 
-**Status:** authoritative planning document. Last updated 2026-11-11 (R0-D).
+**Status:** authoritative planning document. Last updated 2026-11-11 (R1 closed).
 **Origin:** owner-approved *Master Implementation Plan*, which consolidated an independent
 audit, a reconciled R0–R13 roadmap, a discovery/evidence-acquisition addendum, and the
 historical engineering handover. Changes to this file require owner approval and an entry
@@ -25,8 +25,8 @@ Operating rules for agents are in [`AGENTS.md`](../AGENTS.md). History, complete
 | Stage | Title | Status | Depends on |
 |---|---|---|---|
 | R0 | Reproduce the development baseline | complete (2026-11-11) | — |
-| R0-D | Permanent engineering documentation | in review | R0 |
-| R1 | Authentication and startup security hardening | in review | R0 |
+| R0-D | Permanent engineering documentation | complete (2026-11-11, PR #5) | R0 |
+| R1 | Authentication and startup security hardening | complete (2026-11-11, PR #6) | R0 |
 | R2 | Research-job lifecycle, recovery, deduplication | not started | R0 |
 | R3 | Untrusted scientific-content security | not started | R1 (order); before R8, R9-F |
 | R4 | Evaluation integrity and reproducibility | not started | R0 |
@@ -82,7 +82,8 @@ needs technical justification, dependencies, risk, cost/benefit, and owner appro
 
 ## R0-D — Permanent engineering documentation
 
-**Status:** in review. **Type:** documentation-only PR.
+**Status:** complete, 2026-11-11 — merged through PR #5 (merge commit `0da065b`).
+**Type:** documentation-only PR.
 
 - Adds `AGENTS.md`, `docs/roadmap.md`, `docs/engineering-handover.md`; links them from
   existing indexes. Existing reports are linked, not copied or moved.
@@ -91,7 +92,8 @@ needs technical justification, dependencies, risk, cost/benefit, and owner appro
 
 ## R1 — Authentication and startup security hardening
 
-**Status:** in review (branch `agent/r1-auth-hardening`, 2026-11-11). **Priority:** critical.
+**Status:** complete, 2026-11-11 — merged through PR #6 (merge commit `155995e`); see
+[Outcome](#r1-outcome). **Priority:** critical.
 **Scope:** `app/auth.py`, `app/config.py`, `.env.example`, auth tests, known-limitations notes.
 
 Historical findings:
@@ -112,6 +114,28 @@ Tests: empty/missing/non-ASCII header, malformed configuration, duplicates, inva
 placeholder secret, valid user/service/admin keys, HTTP-level behavior.
 **Acceptance:** unsafe credentials cannot authenticate or pass startup; valid
 configurations unchanged; focused and full suites pass. **Stop:** security PR, no merge.
+
+### R1 outcome
+
+- **Reproduced before fixing** (tests-only commit `ef70957`, CI 2026-11-11): with
+  `APP_API_KEYS=admin:` a request without `X-API-Key` returned HTTP 200 as admin; a
+  non-ASCII key returned HTTP 500; startup accepted placeholder, empty, malformed,
+  duplicate, invalid-role, and reserved-identity credentials. Review found one more
+  defect (trailing key whitespace silently stripped), reproduced and fixed in `1790d0a`.
+- **Change:** shared credential parser `app/credentials.py` used by startup validation and
+  request authentication; byte-based constant-time comparison that never matches empty
+  values or raises on non-ASCII input; session-secret and service-key validation.
+  Valid configurations behave as before.
+- **Tests (CI on `main` @ `155995e`):** 379 unit tests executed, 7 skipped, 0 failures;
+  7/7 PostgreSQL/pgvector + Redis integration tests passed; migrations and `/healthz` smoke
+  test passed; CI and Security CI green.
+- **Compatibility:** deployments with malformed, whitespace-padded, duplicate, placeholder,
+  unsupported-role, or `health_coach`-named entries now fail at startup with a message
+  naming the entry (never the key).
+- **Known nonblocking limitations (not in R1 scope):** browser sessions remain valid up to
+  8 hours after a key is revoked or rotated; no rate limiting on `POST /login`;
+  client-specific `health_coach` authorization remains (R11); no minimum API-key length
+  (owner decision pending).
 
 ## R2 — Research-job lifecycle, recovery, and deduplication
 
@@ -405,3 +429,6 @@ load evidence; large synthetic evaluation sets presented as gold data.
 | 2026-11-11 | Adopt the Master Implementation Plan (R0–R13) as the authoritative roadmap; supersedes the historical handover's Stage 0S–6 sequence. | Owner instruction; independent audit and reconciliation completed before handover. |
 | 2026-11-11 | Add a Dockerfile-only `zlib1g` upgrade as an authorized R0 baseline correction (PR #4). | Security CI failed on `main` from base-image CVEs; reproduced on re-run; fix verified in PR and `main` CI. |
 | 2026-11-11 | Mark R0 complete. | CI and Security CI green on `6c905fb`; local execution limits recorded above. |
+| 2026-11-11 | Mark R0-D complete (PR #5, `0da065b`). | Documentation-only PR reviewed and merged; CI and Security CI green on `main`. |
+| 2026-11-11 | Mark R1 complete (PR #6, `155995e`). | Defects reproduced by failing tests before the fix; 379 tests (7 skipped, 0 failures), 7/7 integration, CI and Security CI green on `main`. |
+| 2026-11-11 | Do not enforce a minimum API-key length in R1. | Existing setups and CI use shorter keys; recorded as a pending owner decision. |
