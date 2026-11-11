@@ -59,14 +59,17 @@ def validate_secret_value(label: str, value: str) -> None:
 def parse_api_keys(configured: str, service_key: str = "") -> tuple[ApiCredential, ...]:
     """Parse APP_API_KEYS (``name[|role]:key`` entries separated by commas).
 
-    Empty segments (for example a trailing comma) are ignored. Every other
-    malformed or unsafe entry raises CredentialConfigurationError.
+    Whitespace before an entry (after a comma or at the start) is ignored, as
+    are empty or whitespace-only segments such as a trailing comma. Whitespace
+    anywhere else belongs to the identity or key and is rejected, never
+    normalized away. Every malformed or unsafe entry raises
+    CredentialConfigurationError.
     """
     credentials: list[ApiCredential] = []
     for position, raw_entry in enumerate(configured.split(","), start=1):
-        entry = raw_entry.strip()
-        if not entry:
+        if not raw_entry.strip():
             continue
+        entry = raw_entry.lstrip()
         label = f"APP_API_KEYS entry {position}"
         if ":" not in entry:
             raise CredentialConfigurationError(f"{label} must have the form name[|role]:key")

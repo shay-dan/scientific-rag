@@ -29,6 +29,11 @@ class PrincipalForKeyTests(unittest.TestCase):
                 with self.subTest(configured=configured, presented=presented):
                     self.assertIsNone(principal_for_key(presented, configured))
 
+    def test_padded_configured_key_fails_closed_for_trimmed_and_padded_input(self) -> None:
+        for presented in ("valid-secret-key", "valid-secret-key "):
+            with self.subTest(presented=presented):
+                self.assertIsNone(principal_for_key(presented, "admin:valid-secret-key "))
+
     def test_whitespace_only_key_is_rejected(self) -> None:
         self.assertIsNone(principal_for_key("   ", VALID_KEYS))
 

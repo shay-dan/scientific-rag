@@ -91,6 +91,9 @@ class SecurityConfigurationTests(unittest.TestCase):
             "bob:same-key-123,admin:same-key-123",
             "admin:replace-with-a-long-random-access-key",
             "health_coach:service-key-0123456789",
+            "admin:valid-secret-key ",
+            "admin:valid-secret-key\n",
+            "admin:valid-secret-key\t,alice:alice-key-123",
         ):
             with self.subTest(app_api_keys=app_api_keys), self.assertRaises(ValueError):
                 self._settings(app_api_keys=app_api_keys).validate_security_configuration()

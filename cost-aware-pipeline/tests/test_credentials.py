@@ -14,7 +14,7 @@ VALID_KEY = "k3y-Valid_0123456789"
 
 class ParseApiKeysTests(unittest.TestCase):
     def test_valid_configuration_preserves_existing_role_rules(self) -> None:
-        credentials = parse_api_keys(f"admin:{VALID_KEY}, alice:alice-key-123 ,svc|admin:svc-key-456,bob|user:bob-key-789")
+        credentials = parse_api_keys(f"admin:{VALID_KEY}, alice:alice-key-123,\n\tsvc|admin:svc-key-456,  bob|user:bob-key-789")
         self.assertEqual(credentials, (
             ApiCredential("admin", "admin", VALID_KEY),
             ApiCredential("alice", "user", "alice-key-123"),
@@ -37,6 +37,52 @@ class ParseApiKeysTests(unittest.TestCase):
         for configured in ("admin: padded-key", "admin:inner space"):
             with self.subTest(configured=configured), self.assertRaises(CredentialConfigurationError):
                 parse_api_keys(configured)
+
+    def test_rejects_trailing_whitespace_in_key_instead_of_normalizing_it(self) -> None:
+        # Regression (PR #6 review): entry-level strip() removed trailing key whitespace.
+        for configured in (
+            "admin:valid-secret-key ",
+            "admin:valid-secret-key\t",
+            "admin:valid-secret-key\n",
+            "admin:valid-secret-key \n",
+            "admin:valid-secret-key ,alice:alice-key-123",
+            "admin:valid-secret-key\t,alice:alice-key-123",
+            "admin:valid-secret-key\n,alice:alice-key-123",
+            "alice:alice-key-123,admin:valid-secret-key ",
+        ):
+            with self.subTest(configured=configured), self.assertRaisesRegex(CredentialConfigurationError, "whitespace"):
+                parse_api_keys(configured)
+
+    def test_rejects_leading_and_inner_whitespace_in_key(self) -> None:
+        for configured in ("admin:\tvalid-secret-key", "admin:\nvalid-secret-key", "admin:valid\tsecret", "admin:valid\nsecret"):
+            with self.subTest(configured=configured), self.assertRaises(CredentialConfigurationError):
+                parse_api_keys(configured)
+
+    def test_rejects_whitespace_inside_identity(self) -> None:
+        for configured in ("admin :valid-secret-key", "admin\t:valid-secret-key", "ad min:valid-secret-key", "alice |admin:valid-secret-key"):
+            with self.subTest(configured=configured), self.assertRaises(CredentialConfigurationError):
+                parse_api_keys(configured)
+
+    def test_whitespace_before_entries_remains_compatible(self) -> None:
+        for configured in (
+            " admin:valid-secret-key",
+            "\tadmin:valid-secret-key",
+            "\nadmin:valid-secret-key",
+            "alice:alice-key-123, admin:valid-secret-key",
+            "alice:alice-key-123,\n  admin:valid-secret-key",
+            "alice:alice-key-123,\tadmin:valid-secret-key",
+        ):
+            with self.subTest(configured=configured):
+                keys = {credential.name: credential.key for credential in parse_api_keys(configured)}
+                self.assertEqual(keys["admin"], "valid-secret-key")
+
+    def test_whitespace_only_segments_remain_ignored(self) -> None:
+        self.assertEqual(len(parse_api_keys("admin:valid-secret-key, ,\t,\n,")), 1)
+
+    def test_multiple_keys_and_colon_keys_still_parse_with_entry_spacing(self) -> None:
+        credentials = parse_api_keys("ops:key-one-1234, ops:key-two-5678,\n admin:abc:def:ghi")
+        self.assertEqual([(c.name, c.key) for c in credentials],
+                         [("ops", "key-one-1234"), ("ops", "key-two-5678"), ("admin", "abc:def:ghi")])
 
     def test_rejects_malformed_entries(self) -> None:
         for configured in ("justakey", f"admin:{VALID_KEY},garbage", f":{VALID_KEY}", f"|admin:{VALID_KEY}", ""):
