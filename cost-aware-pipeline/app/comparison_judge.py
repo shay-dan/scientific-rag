@@ -6,6 +6,12 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from .untrusted_content import UNTRUSTED_DATA_RULE, render_untrusted
+
+# R3: the rubric text is unchanged; retrieved evidence and the candidate answer are
+# framed as untrusted data blocks. Recorded with each score so results stay comparable.
+PROMPT_SECURITY_VERSION = "r3_untrusted_blocks"
+
 
 class ReferenceClaimAssessment(BaseModel):
     claim_index: int = Field(ge=1)
@@ -33,6 +39,8 @@ Judge only from the verified silver reference and the exact evidence supplied to
 Do not reward fluent unsupported additions. Do not require the candidate to copy the reference wording.
 Treat the silver reference as the target scope, but treat the retrieved evidence as the only factual support
 available to the candidate. Do not infer support from the paper title or from your own knowledge.
+{untrusted_rule}
+Each evidence block's label attribute is its citation label (S1, S2, ...).
 
 QUESTION:
 {question}
@@ -72,11 +80,11 @@ List only citation labels such as S1 or S2 that directly support that assessment
 claim that lacks support in unsupported_candidate_claims. Return the structured score and a concise rationale."""
 
 
-def exact_contexts_for_result(case: dict, result: dict, *, corpus_contexts: dict[str, dict] | None = None) -> list[str]:
-    """Reconstruct exact contexts and the citation labels used during synthesis."""
+def _exact_context_rows(case: dict, result: dict, *, corpus_contexts: dict[str, dict] | None = None) -> list[tuple[str, str, str]]:
+    """(citation label, title, excerpt) for each exact context used during synthesis."""
     by_context = corpus_contexts or {row.get("context_id"): row for row in case.get("reference_context", [])}
     labels: dict[str, str] = {}
-    rendered: list[str] = []
+    rows: list[tuple[str, str, str]] = []
     for source_id, context_id in zip(
         result.get("selected_source_ids", []),
         result.get("selected_context_ids", []),
@@ -86,20 +94,30 @@ def exact_contexts_for_result(case: dict, result: dict, *, corpus_contexts: dict
         if row is None:
             raise ValueError(f"Result references unknown benchmark context: {context_id}")
         label = labels.setdefault(str(source_id), f"S{len(labels) + 1}")
-        rendered.append(f"[{label}: {row.get('title', 'Unknown source')}]\n{row['excerpt']}")
-    if not rendered:
+        rows.append((label, str(row.get("title", "Unknown source")), str(row["excerpt"])))
+    if not rows:
         raise ValueError("Result has no exact retrieved contexts")
-    return rendered
+    return rows
+
+
+def exact_contexts_for_result(case: dict, result: dict, *, corpus_contexts: dict[str, dict] | None = None) -> list[str]:
+    """Reconstruct exact contexts and the citation labels used during synthesis."""
+    return [f"[{label}: {title}]\n{excerpt}" for label, title, excerpt in
+            _exact_context_rows(case, result, corpus_contexts=corpus_contexts)]
 
 
 def build_judge_prompt(case: dict, result: dict, *, corpus_contexts: dict[str, dict] | None = None) -> str:
-    contexts = exact_contexts_for_result(case, result, corpus_contexts=corpus_contexts)
+    rows = _exact_context_rows(case, result, corpus_contexts=corpus_contexts)
     return JUDGE_TEMPLATE.format(
+        untrusted_rule=UNTRUSTED_DATA_RULE,
         question=case["question"],
         reference_answer=case["reference_answer"],
         reference_claims="\n".join(
             f"{index}. {claim}" for index, claim in enumerate(case.get("reference_claims", []), start=1)
         ),
-        retrieved_context="\n\n".join(contexts),
-        answer=result["answer"],
+        retrieved_context="\n\n".join(
+            render_untrusted("EVIDENCE", excerpt, attributes={"label": label, "title": title})
+            for label, title, excerpt in rows
+        ),
+        answer=render_untrusted("CANDIDATE_ANSWER", str(result["answer"])),
     )

@@ -32,6 +32,17 @@ recommend closing or revising the stage instead of writing redundant code.
   needs technical justification and owner approval.
 - No broad re-audits. Use targeted inspection for the current stage.
 
+## Stage implementation and roadmap synchronization
+
+- Every stage PR includes its own `docs/roadmap.md` updates.
+- While the PR is open, the stage is `in review`. It is `complete` only after merge
+  and green CI and Security CI on `main`.
+- Record the completed stage's final status, merge SHA, outcomes, test evidence, and
+  decisions in the next authorized implementation PR. Do not open a separate
+  documentation-only PR after each stage.
+- Every stage and every merge needs separate owner approval. Never merge, or begin
+  another stage, automatically.
+
 ## Git rules
 
 - Start from the latest accepted `main`; record the base SHA and working-tree status.

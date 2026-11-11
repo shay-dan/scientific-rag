@@ -692,7 +692,7 @@ class PgvectorRetrievalTests(unittest.TestCase):
             with patch("scientific_rag.legacy_pipeline.ainvoke_structured", new=AsyncMock(return_value=structured)) as invoke:
                 report = await agent.run_research("How does AI perform in mammography?")
             context = invoke.await_args.args[2]
-            self.assertIn("full-text section Discussion", context)
+            self.assertIn('section="Discussion"', context)
             self.assertIn("OTHER studies", context)
             self.assertIn("arXiv preprint", context)
             self.assertEqual(report["raw_docs_used"][0].metadata["citation_id"], "S1")

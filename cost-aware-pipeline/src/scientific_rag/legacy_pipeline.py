@@ -37,7 +37,9 @@ from .llm_gateway import ainvoke as gateway_ainvoke
 from .llm_gateway import ainvoke_structured
 from .query_quality import QueryAnchors, build_arxiv_query, build_pubmed_query, concepts_covered, extract_anchors, query_is_valid
 from .pipeline_config import PipelineConfig
+from app.untrusted_content import UNTRUSTED_DATA_RULE, has_instruction_like_content, render_untrusted
 from app.weak_model_synthesis import (
+    render_evidence_block,
     StructuredEvidenceAnswerV2,
     V2RepairBatch,
     build_evidence_blocks,
@@ -1019,6 +1021,8 @@ Failed queries: {deterministic_queries}
                 })
                 return paper_id, False
 
+            if has_instruction_like_content(title, abstract):
+                candidate["instruction_like_content"] = True
             prompt = f"""You are a high-recall scientific literature relevance screener.
 Determine whether this PubMed paper is useful evidence for answering the user's research question.
 
@@ -1036,14 +1040,13 @@ Rules:
 - If the question asks for clinical evidence or toxicities, a related therapy alone is background, not direct evidence.
 - Give a concise reason tied to the text. Do not invent details.
 
+{UNTRUSTED_DATA_RULE}
+
 Research question:
 {research_question[:1200]}
 
-Title:
-{title[:600]}
-
-Abstract (or available full-text excerpt):
-{abstract[:5000]}
+Paper (title attribute and abstract or available full-text excerpt):
+{render_untrusted("PAPER", abstract[:5000], attributes={"source": "pubmed", "title": title[:600]})}
 """
             try:
                 async with semaphore:
@@ -1166,6 +1169,8 @@ Abstract (or available full-text excerpt):
                 })
                 return document, False
 
+            if has_instruction_like_content(title, abstract):
+                candidate["instruction_like_content"] = True
             prompt = f"""You are a high-recall scientific literature relevance screener.
 Decide whether this arXiv paper materially helps answer the research question.
 
@@ -1178,14 +1183,13 @@ Rules:
 - For a mammography-specific question, a study solely on FNA cytology, thermography, or ultrasound is not direct evidence, even if mammography appears only as background. Mixed-modality work is relevant when it actually analyzes mammograms.
 - Give a short reason grounded in the title/abstract; do not invent details.
 
+{UNTRUSTED_DATA_RULE}
+
 Research question:
 {research_question[:1200]}
 
-Title:
-{title[:600]}
-
-Abstract:
-{abstract[:5000]}
+Paper (title attribute and abstract):
+{render_untrusted("PAPER", abstract[:5000], attributes={"source": "arxiv", "title": title[:600]})}
 """
             try:
                 async with semaphore:
@@ -1242,8 +1246,9 @@ Abstract:
         prompt = f"""
         You are an expert medical research data scientist creating a gold-standard evaluation dataset.
 
-        Analyze the following consolidated content from the scientific document "{title}" (ID: {source_id}).
+        Analyze the consolidated scientific document content in the untrusted block below.
         Generate exactly {pairs_per_doc} diverse, high-quality, and challenging Question and Answer pairs.
+        {UNTRUSTED_DATA_RULE}
 
         CRITICAL RULES:
         1. Both the question and answer must be entirely answerable from the provided text. Do not bring in outside knowledge.
@@ -1251,9 +1256,7 @@ Abstract:
         3. Keep the tone scientific and authoritative.
 
         Document Context:
-        ---
-        {doc.page_content}
-        ---
+{render_untrusted("DOCUMENT", doc.page_content, attributes={"title": str(title), "id": str(source_id)})}
         """
 
         try:
@@ -1345,12 +1348,13 @@ Abstract:
 
         prompt = f"""
         You are an expert research data scientist building an evaluation matrix.
-        Analyze the following text block from "{title}" (ID: {source_id}).
+        Analyze the text block in the untrusted block below.
         Generate exactly {pairs_per_doc} specific, challenging Question and Answer pairs.
         Both sides must be entirely grounded in this text. No extrapolation.
+        {UNTRUSTED_DATA_RULE}
 
         Text Extract:
-        {safe_content}
+{render_untrusted("DOCUMENT", safe_content, attributes={"title": str(title), "id": str(source_id)})}
         """
 
         parsed_response = await ainvoke_structured("qa_generator", 0.3, prompt, ChunkQAResponse)
@@ -1641,12 +1645,14 @@ ANSWER LINES:
             if passage_type == "abstract":
                 screening_note += " [Passage: paper abstract; distinguish the authors' own results from background statements.]"
             elif passage_type == "full_text":
-                screening_note += f" [Passage: full-text section {section or 'unspecified'}; discussion/introduction may cite OTHER studies. Do not attribute a cited study's numbers to this paper.]"
+                # The section name comes from PMC XML (untrusted); it is carried as a block attribute.
+                screening_note += " [Passage: full-text section given in the block's section attribute; discussion/introduction may cite OTHER studies. Do not attribute a cited study's numbers to this paper.]"
             if document.metadata.get("source") == "arxiv":
                 screening_note += " [arXiv preprint: report benchmark or retrospective validation as such; do not call it established clinical outcome evidence.]"
-            context_blocks.append(
-                f"--- [{document.metadata['citation_id']}: {title}]{screening_note} ---\n{document.page_content}"
-            )
+            context_blocks.append(render_evidence_block(
+                str(document.metadata["citation_id"]), str(title), document.page_content,
+                notes=screening_note, section=(section or "unspecified") if passage_type == "full_text" else None,
+            ))
         formatted_context = "\n\n".join(context_blocks) if context_blocks else "No external documents found."
 
         print("DEBUG: ✍️ Invoking Expert LLM for structured final synthesis...")

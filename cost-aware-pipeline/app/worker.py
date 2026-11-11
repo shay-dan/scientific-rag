@@ -14,7 +14,7 @@ from .models import AuditEvent, EvaluationCase, EvaluationResult, EvaluationRun,
 from .schemas import ResearchCacheMode, ResearchMode
 from .services import ResearchService
 from .job_lifecycle import recovery_loop
-from .evaluation import EvaluationUsageTracker, JUDGE_PROMPT, JudgeScore, diagnose_reference_claims, diagnose_retrieved_contexts, score_with_ragas, summarize_scores
+from .evaluation import EvaluationUsageTracker, JudgeScore, build_judge_prompt, diagnose_reference_claims, diagnose_retrieved_contexts, score_with_ragas, summarize_scores
 from google import genai
 from google.genai import types
 
@@ -212,7 +212,7 @@ async def _run_evaluation_job(ctx, evaluation_run_id: str):
                 result.status = "judged"
             except Exception as error:
                 try:
-                    prompt = JUDGE_PROMPT.format(question=case.question, reference_answer=case.reference_answer, reference_context=case.reference_context or "Not supplied", retrieved_context="\n\n".join(result.retrieved_contexts), answer=result.answer or "")
+                    prompt = build_judge_prompt(question=case.question, reference_answer=case.reference_answer, reference_context=case.reference_context or "Not supplied", retrieved_contexts=list(result.retrieved_contexts), answer=result.answer or "")
                     response = await asyncio.to_thread(
                         lambda: judge.models.generate_content(
                             model=judge_model,
