@@ -91,9 +91,14 @@ documents. Provider/model usage remains in `llm_gateway`.
 
 Cache identity is verification-aware:
 
-- Off: `postgres-hybrid-rrf-mmr-parent-child-structured-v14`.
-- Shadow: the v14 identity plus `semantic-shadow-v1`.
-- Enforce: the v14 identity plus `semantic-enforce-v1`.
+- Off: `postgres-hybrid-rrf-mmr-parent-child-structured-v15`.
+- Shadow: the v15 identity plus `-semantic-shadow-v1`.
+- Enforce: the v15 identity plus `-semantic-enforce-v1`.
+
+v15 (R3) marks answers produced under the untrusted-content security contract. Records
+stored under v14 (and its shadow/enforce variants) remain readable but are never reused
+as cache hits for new research; see
+[untrusted-content-security.md](untrusted-content-security.md#cache-version).
 
 The same effective version is used for lookup, initial/queued/completed metadata,
 background evidence-job locking, and API responses. New queued jobs persist their

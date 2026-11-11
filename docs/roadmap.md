@@ -256,11 +256,16 @@ No dedicated security agent without evidence.
     with a content-derived nonce, neutralizes delimiter runs, chat-role tokens and
     zero-width characters, and keeps metadata to one line. A narrow detector flags
     instruction-like text.
+  - Sentence-bounded isolation of detected instructions. A forged block marker or
+    source header isolates the rest of the passage.
   - Two output-side guards:
-    - Synthesis rejects quotes that reproduce instruction-like text; the existing
-      single repair then fails closed.
-    - The verifier downgrades `supported` to `insufficient_evidence` for flagged
-      evidence.
+    - Synthesis rejects quotes that are instruction-like or occur only inside isolated
+      text; the existing single repair then fails closed.
+    - The verifier never sees isolated text, and withholds instruction-like titles,
+      claims and quotes. It downgrades `supported` to `insufficient_evidence` only for
+      targets whose claim or quote overlaps isolated text. Clean claims from the same
+      passage keep their verdict (owner review of PR #10).
+    - The evidence window never cuts through isolated text.
   - Screening records `instruction_like_content` in candidate traces.
   - Off/shadow/enforce semantics, provenance and structured-output validation are
     unchanged.
@@ -290,8 +295,12 @@ No dedicated security agent without evidence.
   - There are no new model calls. Prompts grow by about 100 tokens per call plus about
     40 per block.
   - Frozen-comparison scores now record `prompt_security`.
-  - `PIPELINE_VERSION` is unchanged, so cached pre-R3 answers are still served. A bump
-    needs owner approval and would regenerate answers at normal cost.
+  - Owner-approved `PIPELINE_VERSION` bump `…-structured-v14` → `…-structured-v15`;
+    shadow and enforce identities follow.
+    - Pre-R3 answers stay readable but are never reused.
+    - The paper corpus is reused.
+    - The first new request per question, caller and mode costs one normal run.
+    - Rolling back the code makes v14 answers reusable again.
 - **Test evidence:** recorded in the R3 PR, and finalized in the next authorized stage PR
   after merge.
 
@@ -544,4 +553,5 @@ load evidence; large synthetic evaluation sets presented as gold data.
 | 2026-11-11 | Mark R2 complete (PR #8, `82a025e`). | 10 defects reproduced by failing tests before fixes; 434 collected / 392 passed / 42 skipped, 42/42 integration, migrations, smoke, and Security green on `main`. |
 | 2026-11-11 | R2 final state confirmed: complete; roadmap synchronized in PR #9 (`bdedebf`). | CI and Security CI green on `main` after PR #9. |
 | 2026-11-11 | Adopt the "Stage implementation and roadmap synchronization" workflow (`AGENTS.md`): each stage PR carries its own roadmap updates; a stage is `in review` while its PR is open and `complete` after merge plus green CI/Security on `main`; completion details are recorded in the next authorized stage PR; no separate docs-only PRs; every stage and merge needs separate owner approval. | Owner instruction with the R3 authorization. |
+| 2026-11-11 | R3 review: narrow the verifier guard to claims or quotes that overlap isolated instruction text, and remove that text from the verifier's view; bump `PIPELINE_VERSION` to v15 (owner-approved). | Reproduced by failing tests (`c326f0d`, `50f70ee`): clean claims beside an injection were downgraded, injected text reached the verifier, and pre-R3 answers were reused. |
 | 2026-11-11 | R3: frame untrusted content in delimited, nonce-tagged blocks and add two deterministic output guards (instruction-like quotes rejected; verifier `supported` downgraded for flagged evidence), with no new agent, dependency, migration or API change. | Reproduced injection paths with attacker-compliant fakes; smallest fix that limits damage regardless of model behavior. |

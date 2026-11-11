@@ -14,7 +14,12 @@ from typing import Iterable, Literal
 from langchain_core.documents import Document
 from pydantic import BaseModel, Field, field_validator
 
-from .untrusted_content import UNTRUSTED_DATA_RULE, find_instruction_like_spans, render_untrusted
+from .untrusted_content import (
+    UNTRUSTED_DATA_RULE,
+    find_instruction_like_spans,
+    quote_outside_instructions,
+    render_untrusted,
+)
 
 
 class EvidenceClaim(BaseModel):
@@ -143,37 +148,14 @@ def render_context(blocks: Iterable[EvidenceBlock]) -> str:
     return "\n\n".join(render_evidence_block(block.source_id, block.title, block.excerpt) for block in blocks)
 
 
-_SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?;])\s+|\n")
-
-
-def _instruction_like_sentences(excerpt: str) -> list[str]:
-    """Normalized sentences of an excerpt that contain instruction-like text.
-
-    Sentences end at terminal punctuation followed by whitespace, or at a newline,
-    so decimals such as ``1.0`` or ``0.84`` do not split a sentence.
-    """
-    boundaries = [(match.start(), match.end()) for match in _SENTENCE_BOUNDARY.finditer(excerpt)]
-    sentences = []
-    for span in find_instruction_like_spans(excerpt):
-        start = max((end for begin, end in boundaries if end <= span.start), default=0)
-        end = min((begin for begin, _ in boundaries if begin >= span.end), default=len(excerpt))
-        sentences.append(_normalise(excerpt[start:end]))
-        sentences.append(_normalise(excerpt[span.start:span.end]))
-    return [sentence for sentence in sentences if sentence]
-
-
 def quote_reproduces_instructions(quote: str, excerpts: Iterable[str]) -> bool:
-    """True when a quote is, or contains, instruction-like text embedded in its source."""
+    """True when a quote is instruction-like, or every occurrence of it in its source
+    lies inside isolated instruction-like text (see ``instruction_mask_ranges``)."""
     if find_instruction_like_spans(quote):
         return True
-    normalized_quote = _normalise(quote)
-    if not normalized_quote:
-        return False
-    for excerpt in excerpts:
-        for sentence in _instruction_like_sentences(excerpt):
-            if normalized_quote in sentence or sentence in normalized_quote:
-                return True
-    return False
+    occurrences = [result for excerpt in excerpts
+                   if (result := quote_outside_instructions(excerpt, quote)) is not None]
+    return bool(occurrences) and not any(occurrences)
 
 
 def _normalise(text: str) -> str:

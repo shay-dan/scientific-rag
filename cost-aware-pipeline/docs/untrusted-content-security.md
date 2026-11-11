@@ -23,8 +23,8 @@ or change configuration.
 |---|---|---|---|
 | PubMed relevance screen (`MinerService._screen_pubmed_documents`) | title, abstract or full-text excerpt | `PAPER` block, title as single-line attribute, data rule | candidate trace `instruction_like_content`; existing confidence thresholds |
 | arXiv relevance screen (`_screen_arxiv_documents`) | title, abstract | `PAPER` block, data rule | candidate trace flag |
-| Structured synthesis (`ResearchAgent.run_research`, `generation_prompt_v2`, `repair_prompt_v2`) | passages, titles, PMC section names | one `EVIDENCE` block per passage; `source_id` and pipeline notes are application-owned and outside the block | verbatim-quote validation; **quotes that reproduce instruction-like text are rejected**; one repair, then fail closed |
-| Semantic verification (`app.claim_verification`) | claim, quote, title, passage | existing JSON framing (`json.dumps` escapes newlines, so a forged end marker stays inside a string); new `instruction_like_content` field | **`supported` is downgraded to `insufficient_evidence`** when the evidence is flagged |
+| Structured synthesis (`ResearchAgent.run_research`, `generation_prompt_v2`, `repair_prompt_v2`) | passages, titles, PMC section names | one `EVIDENCE` block per passage; `source_id` and pipeline notes are application-owned and outside the block | verbatim-quote validation; **a quote is rejected when it is instruction-like or occurs only inside isolated instruction text**; one repair, then fail closed |
+| Semantic verification (`app.claim_verification`) | claim, quote, title, passage | existing JSON framing (`json.dumps` escapes newlines, so a forged end marker stays inside a string); **instruction text is removed before the model sees it** (`instruction_like_content_removed`) | **`supported` becomes `insufficient_evidence` only when the claim or its quote overlaps isolated instruction text**; clean claims from the same passage keep their verdict |
 | Evaluation judges (`app.evaluation`, worker fallback judge) | reference context, retrieved excerpts, candidate answer | instructions first, then the data rule, then `REFERENCE_CONTEXT` / `EXCERPT` / `CANDIDATE_ANSWER` blocks | numeric schema bounds |
 | Frozen comparison judge (`app.comparison_judge`) | excerpts, titles, candidate answer | `EVIDENCE` blocks with application-owned `label`; rubric wording unchanged; scores record `prompt_security` | schema bounds |
 | Evaluation-dataset QA generation (disabled by default) | document chunks | `DOCUMENT` blocks | schema |
@@ -48,11 +48,40 @@ and guards would apply (R9-F readiness).
 - `find_instruction_like_spans` is a deliberately narrow regex detector. It is robust to
   zero-width obfuscation. Flagged blocks carry `instruction_like="yes"`.
 
-Detection never removes evidence and never rejects a paper. It only:
+Detection never rejects a paper or changes provenance (source IDs, titles and passages
+are stored unchanged). It only:
 
 1. prevents an instruction sentence from being quoted as evidence;
-2. prevents a verifier from certifying support from flagged evidence;
+2. removes instruction text from what the verifier model sees, and prevents support
+   that rests on it;
 3. records a flag for audit.
+
+### Isolation (verifier and citation checks)
+
+`instruction_mask_ranges` widens each detected span to its whole sentence, so no
+fragment of the instruction remains. Sentences end at `.`, `!` or `?` followed by
+whitespace, or at a newline; decimals such as `0.84` do not end a sentence.
+
+A provenance forgery is treated more strictly: a forged block marker or a forged
+`--- [Sn: …] ---` header isolates everything from its line to the end of the passage,
+because the text after it has unknown origin. A passage with no sentence boundary is
+isolated entirely.
+
+For the verifier:
+
+- **Passage:** isolated ranges are replaced by `[instruction-like text removed]`.
+- **Title:** an instruction-like title is withheld. The claim is still assessed against
+  its passage.
+- **Claim text or quote:** if either is instruction-like, it is withheld and the target
+  is unsafe.
+- **Quote outside isolated text:** a quote must occur at least once outside isolated
+  ranges, otherwise the target is unsafe (fail closed).
+- **Unsafe targets:** a `supported` verdict for an unsafe target becomes
+  `insufficient_evidence`. The three-class contract and off/shadow/enforce behavior are
+  unchanged.
+- **Window edges:** the verifier's 2,400-character evidence window never cuts through
+  isolated text. An edge that falls inside it moves outside it, so a truncated
+  instruction fragment cannot slip past detection.
 
 ## Verified offline
 
@@ -77,18 +106,41 @@ The attacker-compliant fakes obey every injection. The tests show that:
 - an attacker repair fails closed;
 - an attacker verifier cannot certify flagged evidence.
 
+## Cache version
+
+R3 bumps `PIPELINE_VERSION` from `…-structured-v14` to `…-structured-v15`. The
+shadow and enforce identities (`…-semantic-shadow-v1`, `…-semantic-enforce-v1`) derive
+from it, so all three modes change.
+
+- **Historical records:** v14 records are not modified. They stay readable through
+  `/v1` and keep their stored `retrieval_version`.
+- **New requests:** the cache lookup, in-flight reuse, background evidence-job reuse and
+  the R2 identity lock all key on the effective version. A new request therefore never
+  reuses a pre-R3 answer. Identical new requests still deduplicate onto one run with one
+  cost reservation.
+- **Paper corpus:** documents, chunks and embeddings are not versioned by
+  `PIPELINE_VERSION`, so they are reused. Only answers are regenerated.
+- **Regeneration cost:** the first request for each previously answered question, per
+  caller and mode, costs one normal research run. That is the same reservation and
+  provider usage as an uncached request. Default reservations are $0.05 fast, $0.20
+  standard and $0.75 deep (`COST_*_RESERVATION_USD`); these are budgets, not exact charges.
+  There is no bulk re-run; regeneration happens only on demand.
+- **Rollback:** reverting to v14 code makes v14 answers reusable again. v15 answers
+  created in the meantime are then ignored by lookups but remain readable.
+
 ## Not verified
 
 - Whether real models follow the data rule or ignore injections. That needs a paid live
   probe, which requires owner approval.
-- Injected *scientific misinformation* phrased as a normal finding: no detector can
-  flag it, and structural validation accepts it. Only the verifier guard (when the same
-  passage also contains flagged text) and future R5–R8 work address it.
+- Injected *scientific misinformation* phrased as a normal finding, with no detectable
+  instruction or forged boundary near it: no detector can flag it, and structural
+  validation accepts it. R5–R8 address claim correctness.
 - Homoglyph and paraphrased injections that evade the regex.
 - Ragas internal prompts.
 
 ## Known false positives
 
 Papers about prompt injection, or transcripts with `Assistant:` lines, are flagged.
-The effect is bounded: such quotes cannot be cited, and support from them is
-downgraded. The papers are still retrieved and screened.
+The effect is bounded to the sentence that contains the attack string: that sentence
+cannot be cited and is removed from the verifier's view. Other sentences of the same
+paper remain usable evidence. The papers are still retrieved and screened.

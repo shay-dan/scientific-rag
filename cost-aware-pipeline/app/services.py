@@ -54,7 +54,9 @@ def _responses_for_evidence_documents(evidence_documents: list) -> list[SourceRe
         identity = citation_id or source.external_id or source.source_url or source.title.casefold()
         sources_by_identity.setdefault(identity, source)
     return list(sources_by_identity.values())
-PIPELINE_VERSION = "postgres-hybrid-rrf-mmr-parent-child-structured-v14"
+# v15 (R3): untrusted-content framing and injection guards. v14 answers were produced
+# under the pre-R3 security contract and must not be reused as cache hits.
+PIPELINE_VERSION = "postgres-hybrid-rrf-mmr-parent-child-structured-v15"
 ENQUEUE_TIMEOUT_SECONDS = 10
 
 
@@ -63,7 +65,7 @@ class ResearchFencedOut(RuntimeError):
 
 
 def effective_pipeline_version(semantic_verification_mode: str) -> str:
-    """Separate cache identities without changing historical off-mode v14 records."""
+    """Separate cache identities per verification mode; historical records keep their stored version."""
     if semantic_verification_mode == "off":
         return PIPELINE_VERSION
     if semantic_verification_mode in {"shadow", "enforce"}:

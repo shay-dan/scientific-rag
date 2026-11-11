@@ -67,6 +67,7 @@ _INSTRUCTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
         ("citation_directive",
          r"\b(?:cite|attribute|credit|reference)\b[^.\n]{0,30}?\b(?:this|the following|these)\s+(?:paper|source|study|article|claim)s?\b[^.\n]{0,30}?\b(?:as|for|instead)\b"),
         ("data_boundary", r"\b(?:BEGIN|END)_UNTRUSTED"),
+        ("forged_source_header", r"(?:^|\n)[ \t]*-{3}\s*\[S\d+\s*:"),
     )
 )
 
@@ -97,6 +98,100 @@ def find_instruction_like_spans(text: str) -> list[InstructionSpan]:
 
 def has_instruction_like_content(*texts: str) -> bool:
     return any(find_instruction_like_spans(text or "") for text in texts)
+
+
+# Markers that try to restructure provenance (forged block ends or source headers).
+# Text after one has unknown provenance, so it is isolated through the end of the passage.
+_PROVENANCE_FORGERY = frozenset({"data_boundary", "forged_source_header"})
+# Sentence boundaries: terminal punctuation followed by whitespace, or a newline.
+# Decimals such as 0.84 do not end a sentence.
+_SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+|\n")
+INSTRUCTION_PLACEHOLDER = "[instruction-like text removed]"
+
+
+def instruction_mask_ranges(text: str) -> list[tuple[int, int]]:
+    """Merged character ranges of ``text`` to isolate from evidence.
+
+    Each instruction-like span is widened to its whole sentence (so no fragment of
+    the instruction remains); a provenance forgery is isolated from the start of its
+    line to the end of the text. Text without any boundary is isolated entirely.
+    """
+    spans = find_instruction_like_spans(text or "")
+    if not spans:
+        return []
+    boundaries = [(match.start(), match.end()) for match in _SENTENCE_BOUNDARY.finditer(text)]
+    ranges = []
+    for span in spans:
+        anchor = span.start  # patterns anchored on a newline include it; anchor on the text itself
+        while anchor < span.end and text[anchor].isspace():
+            anchor += 1
+        start = max((end for begin, end in boundaries if end <= anchor), default=0)
+        if span.pattern in _PROVENANCE_FORGERY:
+            end = len(text)
+        else:
+            end = min((begin for begin, _ in boundaries if begin >= span.end), default=len(text))
+            end = max(end, anchor + 1)
+        ranges.append((start, end))
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(ranges):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def mask_instruction_like(text: str) -> str:
+    """``text`` with every isolated range replaced by a short placeholder."""
+    pieces, cursor = [], 0
+    for start, end in instruction_mask_ranges(text):
+        pieces.extend([text[cursor:start], INSTRUCTION_PLACEHOLDER])
+        cursor = end
+    pieces.append(text[cursor:])
+    return "".join(pieces)
+
+
+def _folded_with_positions(text: str) -> tuple[str, list[int]]:
+    """Whitespace-collapsed, case-folded text with raw offsets (matches citation validation)."""
+    characters: list[str] = []
+    positions: list[int] = []
+    pending = None
+    for index, character in enumerate(text):
+        if character.isspace():
+            if characters and pending is None:
+                pending = index
+            continue
+        if pending is not None:
+            characters.append(" ")
+            positions.append(pending)
+            pending = None
+        folded = character.casefold()
+        characters.extend(folded)
+        positions.extend([index] * len(folded))
+    return "".join(characters), positions
+
+
+def quote_outside_instructions(text: str, quote: str) -> bool | None:
+    """Whether ``quote`` occurs in ``text`` at least once outside isolated ranges.
+
+    ``None`` when the quote does not occur at all. A quote that is itself
+    instruction-like is never clean.
+    """
+    folded_text, positions = _folded_with_positions(text or "")
+    folded_quote = " ".join((quote or "").split()).casefold()
+    if not folded_quote:
+        return None
+    ranges = instruction_mask_ranges(text or "")
+    found = False
+    start = folded_text.find(folded_quote)
+    while start >= 0:
+        found = True
+        raw_start = positions[start]
+        raw_end = positions[start + len(folded_quote) - 1] + 1
+        if not any(raw_start < end and begin < raw_end for begin, end in ranges):
+            return not find_instruction_like_spans(quote)
+        start = folded_text.find(folded_quote, start + 1)
+    return False if found else None
 
 
 def neutralize(text: str) -> str:
