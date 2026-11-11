@@ -62,7 +62,11 @@ class _CompliantVerifier:
 
 def _verify(*items: ClaimVerificationInput) -> tuple[dict[str, str], str]:
     fake = _CompliantVerifier()
-    with patch("app.claim_verification.ainvoke_structured", new=AsyncMock(side_effect=fake)):
+
+    async def gateway(**kwargs):
+        return await fake(**kwargs)
+
+    with patch("app.claim_verification.ainvoke_structured", new=AsyncMock(side_effect=gateway)):
         result = asyncio.run(verify_claims(list(items), question="What did the study find?"))
     return {item.target: item.verdict.value for item in result.assessments}, "\n".join(fake.prompts)
 
