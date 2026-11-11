@@ -113,7 +113,7 @@ class JobLifecycleIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def _expire_lease(self, run_id: UUID) -> None:
         async with self.sessions() as session:
             await session.execute(update(ResearchRun.__table__).where(ResearchRun.__table__.c.id == run_id)
-                                  .values(lease_expires_at=utcnow() - timedelta(seconds=30)))
+                                  .values(lease_expires_at=func.now() - timedelta(seconds=30)))
             await session.commit()
 
     async def _daily_spend(self) -> int:
@@ -448,6 +448,110 @@ class JobLifecycleIntegrationTests(unittest.IsolatedAsyncioTestCase):
             report = await recover_research_runs(self.sessions, self.redis, self.guard, self.settings)
         self.assertNotIn(str(run_id), report.expired)
         self.assertEqual((await self._get(run_id)).status, "running")
+
+    # ----- PR #8 review: database clock is authoritative --------------------------
+    async def test_15_worker_clock_behind_does_not_cause_false_recovery(self):
+        run_id = await self._queued_run()
+        skewed = utcnow() - timedelta(minutes=10)
+        with patch("app.job_lifecycle.utcnow", return_value=skewed):
+            await self._claim(run_id, lease_seconds=60)
+            self.assertTrue(await renew_lease(self.sessions, run_id, 1, 60))
+        report = await recover_research_runs(self.sessions, self.redis, self.guard, self.settings)
+        self.assertNotIn(str(run_id), report.expired)
+        self.assertEqual((await self._get(run_id)).status, "running")
+
+    async def test_15b_recovery_worker_clock_ahead_does_not_expire_live_lease(self):
+        run_id = await self._queued_run()
+        await self._claim(run_id, lease_seconds=60)
+        with patch("app.job_lifecycle.utcnow", return_value=utcnow() + timedelta(minutes=10)):
+            report = await recover_research_runs(self.sessions, self.redis, self.guard, self.settings)
+        self.assertNotIn(str(run_id), report.expired)
+        self.assertEqual((await self._get(run_id)).status, "running")
+
+    async def test_15c_lease_expiry_is_measured_on_the_database_clock(self):
+        run_id = await self._queued_run()
+        await self._claim(run_id, lease_seconds=60)
+        async with self.sessions() as session:
+            remaining = await session.scalar(
+                select(func.extract("epoch", ResearchRun.lease_expires_at - func.now())).where(ResearchRun.id == run_id))
+        self.assertTrue(50 <= float(remaining) <= 61, remaining)
+
+    # ----- PR #8 review: bounded execution without lease renewal -------------------
+    async def test_16_database_unavailable_for_lease_window_stops_paid_execution(self):
+        settings = Settings(**{**self.settings.model_dump(), "research_lease_seconds": 1.0, "research_heartbeat_seconds": 0.2})
+        service = ResearchService(settings, self.redis)
+        service.cost_guard = self.guard
+        run_id = await self._queued_run()
+        started = asyncio.Event()
+        finished_normally = []
+
+        async def fake_execute(session, record, *args, **kwargs):
+            started.set()
+            await asyncio.sleep(10)
+            finished_normally.append(True)
+
+        service._execute = fake_execute
+        with patch("app.job_lifecycle.renew_lease", AsyncMock(side_effect=ConnectionError("database unavailable"))):
+            await asyncio.wait_for(
+                service.run_queued(run_id, "q", ResearchMode.fast, ResearchCacheMode.use_cached_answer), 5)
+        self.assertEqual(finished_normally, [])
+        record = await self._get(run_id)
+        self.assertEqual((record.status, record.attempt), ("failed", 2))
+        self.assertEqual(await self._reservation_status(run_id), "retained_unknown_usage")
+
+    # ----- PR #8 review: orphaned ARQ job hash ----------------------------------------
+    async def test_17_orphaned_job_hash_without_queue_entry_is_requeued(self):
+        run_id = await self._queued_run(created_offset_seconds=120)
+        async with self.sessions() as session:
+            from app.job_lifecycle import enqueue_run
+            self.assertIsNotNone(await enqueue_run(self.redis, await session.get(ResearchRun, run_id)))
+        await self.redis.zrem(default_queue_name, str(run_id))  # job hash survives, queue entry lost
+        self.assertTrue(await self.redis.exists(job_key_prefix + str(run_id)))
+        report = await recover_research_runs(self.sessions, self.redis, self.guard, self.settings)
+        self.assertIn(str(run_id), report.requeued)
+        self.assertIsNotNone(await self.redis.zscore(default_queue_name, str(run_id)))
+
+    async def test_17b_job_being_executed_is_not_requeued(self):
+        run_id = await self._queued_run(created_offset_seconds=120)
+        async with self.sessions() as session:
+            from app.job_lifecycle import enqueue_run
+            await enqueue_run(self.redis, await session.get(ResearchRun, run_id))
+        await self.redis.zrem(default_queue_name, str(run_id))
+        await self.redis.set(in_progress_key_prefix + str(run_id), b"1", ex=60)  # a worker holds it
+        report = await recover_research_runs(self.sessions, self.redis, self.guard, self.settings)
+        self.assertNotIn(str(run_id), report.requeued)
+        self.assertIsNone(await self.redis.zscore(default_queue_name, str(run_id)))
+
+    # ----- PR #8 review: PostgreSQL commit failure after Redis reservation -----------
+    async def test_18_commit_failure_after_reservation_releases_it(self):
+        async with self.sessions() as session:
+            with patch.object(session, "commit", AsyncMock(side_effect=ConnectionError("commit lost"))), \
+                    patch("app.services.enqueue_run", AsyncMock()):
+                with self.assertRaises(ConnectionError):
+                    await self.service.queue(session, "Commit failure question", ResearchMode.fast, actor=self.actor)
+        async with self.sessions() as session:
+            count = await session.scalar(select(func.count()).select_from(ResearchRun).where(
+                ResearchRun.requested_by == self.actor, ResearchRun.question == "Commit failure question"))
+        self.assertEqual(count, 0)
+        self.assertEqual(await self._daily_spend(), 0)
+
+    async def test_18b_ambiguous_commit_that_succeeded_keeps_reservation(self):
+        async with self.sessions() as session:
+            real_commit = session.commit
+
+            async def commit_then_fail():
+                await real_commit()
+                raise ConnectionError("acknowledgement lost")
+
+            with patch.object(session, "commit", commit_then_fail), patch("app.services.enqueue_run", AsyncMock()):
+                with self.assertRaises(ConnectionError):
+                    await self.service.queue(session, "Ambiguous commit question", ResearchMode.fast, actor=self.actor)
+        async with self.sessions() as session:
+            record = (await session.execute(select(ResearchRun).where(
+                ResearchRun.requested_by == self.actor, ResearchRun.question == "Ambiguous commit question"))).scalar_one()
+        self.assertEqual(await self._reservation_status(record.id), "reserved")
+        self.assertEqual(await self._daily_spend(), 50_000)
+
 
 
 if __name__ == "__main__":

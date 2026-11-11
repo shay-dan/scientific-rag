@@ -103,6 +103,47 @@ class LeaseKeeperTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(lease.lost)
         self.assertGreaterEqual(renewals.await_count, 2)
 
+class LeaseDeadlineTests(unittest.IsolatedAsyncioTestCase):
+    """PR #8 review: a worker that cannot renew must stop within the lease window."""
+
+    async def test_prolonged_renewal_failure_cancels_within_lease_window(self) -> None:
+        loop = asyncio.get_running_loop()
+        holder = {}
+
+        async def owner():
+            async with LeaseKeeper(None, uuid4(), 1, lease_seconds=0.3, heartbeat_seconds=0.05) as lease:
+                holder["lease"] = lease
+                await asyncio.sleep(2)
+
+        started = loop.time()
+        with patch("app.job_lifecycle.renew_lease", AsyncMock(side_effect=ConnectionError("db down"))):
+            with self.assertRaises(asyncio.CancelledError):
+                await asyncio.wait_for(asyncio.shield(asyncio.ensure_future(owner())), 1.5)
+        self.assertLess(loop.time() - started, 0.6)
+        self.assertTrue(holder["lease"].lost)
+        self.assertEqual(holder["lease"].loss_reason, "unverifiable")
+
+    async def test_connectivity_returning_before_deadline_keeps_execution(self) -> None:
+        renewals = AsyncMock(side_effect=[ConnectionError("blip")] * 3 + [True] * 50)
+        with patch("app.job_lifecycle.renew_lease", renewals):
+            async with LeaseKeeper(None, uuid4(), 1, lease_seconds=0.5, heartbeat_seconds=0.05) as lease:
+                await asyncio.sleep(0.7)  # longer than the lease; renewals succeeded meanwhile
+        self.assertFalse(lease.lost)
+
+    async def test_fenced_renewal_reports_definitive_loss(self) -> None:
+        holder = {}
+
+        async def owner():
+            async with LeaseKeeper(None, uuid4(), 1, lease_seconds=5, heartbeat_seconds=0.02) as lease:
+                holder["lease"] = lease
+                await asyncio.sleep(2)
+
+        with patch("app.job_lifecycle.renew_lease", AsyncMock(return_value=False)):
+            with self.assertRaises(asyncio.CancelledError):
+                await asyncio.wait_for(owner(), 1)
+        self.assertEqual(holder["lease"].loss_reason, "fenced")
+
+
 
 class _AsyncContext:
     def __init__(self, value):
