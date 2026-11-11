@@ -163,6 +163,8 @@ scientific-rag/
 ## Documentation
 
 - [Documentation index](docs/README.md)
+- [Engineering roadmap](docs/roadmap.md) and [project history](docs/engineering-handover.md)
+- [Instructions for coding agents](AGENTS.md)
 - [Application and operations manual](cost-aware-pipeline/README.md)
 - [Semantic claim verification](cost-aware-pipeline/docs/semantic-claim-verifier.md)
 - [Security and privacy review](cost-aware-pipeline/docs/security-privacy-review-2026-10-24.md)
