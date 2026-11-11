@@ -13,6 +13,7 @@ from .db import close_database, session_factory, verify_database_schema
 from .models import AuditEvent, EvaluationCase, EvaluationResult, EvaluationRun, ResearchEvidence, ResearchRun
 from .schemas import ResearchCacheMode, ResearchMode
 from .services import ResearchService
+from .job_lifecycle import recovery_loop
 from .evaluation import EvaluationUsageTracker, JUDGE_PROMPT, JudgeScore, diagnose_reference_claims, diagnose_retrieved_contexts, score_with_ragas, summarize_scores
 from google import genai
 from google.genai import types
@@ -23,6 +24,11 @@ async def startup(ctx):
     await _mark_interrupted_evaluation_runs()
     ctx["service"] = ResearchService(get_settings(), ctx["redis"])
     await ctx["redis"].set("scientific_rag:worker:heartbeat", datetime.now(timezone.utc).isoformat(), ex=60)
+    # Research recovery runs outside ARQ job slots so a long job (max_jobs=1)
+    # cannot delay it. Sweeps are idempotent across concurrent workers.
+    ctx["research_recovery"] = asyncio.create_task(
+        recovery_loop(session_factory, ctx["redis"], ctx["service"].cost_guard, get_settings())
+    )
 
 
 async def worker_heartbeat(ctx):
@@ -39,6 +45,13 @@ async def reliability_probe_job(ctx, batch_id: str, item: int, delay_ms: int = 1
 
 
 async def shutdown(ctx):
+    recovery = ctx.get("research_recovery")
+    if recovery is not None:
+        recovery.cancel()
+        try:
+            await recovery
+        except (asyncio.CancelledError, Exception):
+            pass
     await close_database()
 
 
@@ -64,20 +77,17 @@ async def _mark_interrupted_evaluation_runs() -> None:
 
 async def run_research_job(ctx, run_id: str, question: str, mode: str, cache_mode: str,
                            semantic_verification_mode: str | None = None):
-    try:
-        await ctx["service"].run_queued(
-            UUID(run_id), question, ResearchMode(mode), ResearchCacheMode(cache_mode),
-            semantic_verification_mode,
-        )
-    except asyncio.CancelledError:
-        async with session_factory() as session:
-            run = (await session.execute(select(ResearchRun).where(ResearchRun.id == UUID(run_id)))).scalar_one_or_none()
-            if run and run.status in {"queued", "running"}:
-                run.status = "cancelled"
-                run.completed_at = datetime.now(timezone.utc)
-                session.add(AuditEvent(actor=run.requested_by or "system", action="research.cancelled", target_type="research_run", target_id=run_id, details={"mode": run.model_metadata.get("mode", "fast")}))
-                await session.commit()
-        raise
+    """Claim and execute one research run.
+
+    ARQ may deliver a job more than once (redelivery after a crash, retry after a
+    graceful shutdown). ``run_queued`` claims the run atomically, so only a
+    ``queued`` run executes; cancellation and interruption are persisted there
+    with fencing, never as an unconditional status write.
+    """
+    await ctx["service"].run_queued(
+        UUID(run_id), question, ResearchMode(mode), ResearchCacheMode(cache_mode),
+        semantic_verification_mode,
+    )
 
 
 async def _mark_evaluation_run_failed(evaluation_run_id: str, error: str) -> None:

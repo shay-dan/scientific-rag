@@ -27,6 +27,13 @@ class ResearchRun(Base):
     model_metadata: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Fencing counter (R2). Every ORM UPDATE includes ``WHERE attempt = <loaded>``;
+    # claims, cancellations and recovery increment it so stale writers fail.
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    lease_owner: Mapped[str | None] = mapped_column(String(128))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __mapper_args__ = {"version_id_col": attempt, "version_id_generator": False}
 
 
 class SourceDocument(Base):

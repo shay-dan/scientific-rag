@@ -12,7 +12,7 @@ class MigrationConfigurationTests(unittest.TestCase):
     def test_single_alembic_head_is_declared(self) -> None:
         config = Config(str(PROJECT_ROOT / "alembic.ini"))
         heads = ScriptDirectory.from_config(config).get_heads()
-        self.assertEqual(heads, ["20261026_0001"])
+        self.assertEqual(heads, ["20261111_0002"])
 
     def test_application_startup_does_not_mutate_schema(self) -> None:
         database_module = (PROJECT_ROOT / "app" / "db.py").read_text(encoding="utf-8")

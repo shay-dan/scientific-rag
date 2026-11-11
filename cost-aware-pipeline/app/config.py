@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     request_timeout_seconds: int = 600
     deep_research_timeout_seconds: int = 900
     evaluation_job_timeout_seconds: int = 3600
+    # R2 job lifecycle: a running research job holds a renewable lease.
+    research_lease_seconds: float = 120
+    research_heartbeat_seconds: float = 30
+    research_recovery_interval_seconds: int = 60
+    research_requeue_grace_seconds: int = 60
     evaluation_case_timeout_seconds: int = 300
     claim_diagnostic_timeout_seconds: int = 120
     semantic_claim_verification_mode: Literal["off", "shadow", "enforce"] = "off"
@@ -72,6 +77,10 @@ class Settings(BaseSettings):
             raise ValueError("EVALUATION_JOB_TIMEOUT_SECONDS must be at least REQUEST_TIMEOUT_SECONDS")
         if self.deep_research_timeout_seconds < self.request_timeout_seconds:
             raise ValueError("DEEP_RESEARCH_TIMEOUT_SECONDS must be at least REQUEST_TIMEOUT_SECONDS")
+        if self.research_heartbeat_seconds < 1 or self.research_lease_seconds < 3 * self.research_heartbeat_seconds:
+            raise ValueError("RESEARCH_LEASE_SECONDS must be at least three RESEARCH_HEARTBEAT_SECONDS intervals")
+        if self.research_recovery_interval_seconds < 1 or self.research_requeue_grace_seconds < 0:
+            raise ValueError("Research recovery interval and requeue grace must be positive")
         if self.deep_research_runs_per_day < 1:
             raise ValueError("DEEP_RESEARCH_RUNS_PER_DAY must be at least one")
         if self.cost_daily_budget_usd < 0 or self.cost_monthly_budget_usd < 0:
