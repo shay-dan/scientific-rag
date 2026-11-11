@@ -5,6 +5,9 @@ The root README is the project overview. The maintained application's
 
 ## Start here
 
+- [Engineering roadmap — authoritative staged plan and status](roadmap.md)
+- [Engineering handover — project history, milestones, experiments, decisions](engineering-handover.md)
+- [Instructions for coding agents](../AGENTS.md)
 - [Engineering Case Study — architectural decisions, measured results, tradeoffs, and limitations](../cost-aware-pipeline/docs/engineering-case-study.md)
 - [Installation, configuration, APIs, and operations](../cost-aware-pipeline/README.md)
 - [Contributing and local verification](../CONTRIBUTING.md)
