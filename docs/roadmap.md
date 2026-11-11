@@ -1,6 +1,6 @@
 # Scientific RAG — engineering roadmap
 
-**Status:** authoritative planning document. Last updated 2026-11-11 (R1 closed).
+**Status:** authoritative planning document. Last updated 2026-11-11 (R2 closed).
 **Origin:** owner-approved *Master Implementation Plan*, which consolidated an independent
 audit, a reconciled R0–R13 roadmap, a discovery/evidence-acquisition addendum, and the
 historical engineering handover. Changes to this file require owner approval and an entry
@@ -27,7 +27,7 @@ Operating rules for agents are in [`AGENTS.md`](../AGENTS.md). History, complete
 | R0 | Reproduce the development baseline | complete (2026-11-11) | — |
 | R0-D | Permanent engineering documentation | complete (2026-11-11, PR #5) | R0 |
 | R1 | Authentication and startup security hardening | complete (2026-11-11, PR #6) | R0 |
-| R2 | Research-job lifecycle, recovery, deduplication | in review | R0 |
+| R2 | Research-job lifecycle, recovery, deduplication | complete (2026-11-11, PR #8) | R0 |
 | R3 | Untrusted scientific-content security | not started | R1 (order); before R8, R9-F |
 | R4 | Evaluation integrity and reproducibility | not started | R0 |
 | R5 | Offline semantic-verifier evaluation harness | not started | R0 |
@@ -139,8 +139,8 @@ configurations unchanged; focused and full suites pass. **Stop:** security PR, n
 
 ## R2 — Research-job lifecycle, recovery, and deduplication
 
-**Status:** in review (branch `agent/r2-job-lifecycle`, 2026-11-11; migration `20261111_0002`
-approved by the owner). Design and recovery rules: [research-job-lifecycle.md](../cost-aware-pipeline/docs/research-job-lifecycle.md).
+**Status:** complete, 2026-11-11 — merged through PR #8 (merge commit `82a025e`); see
+[Outcome](#r2-outcome). Design and recovery rules: [research-job-lifecycle.md](../cost-aware-pipeline/docs/research-job-lifecycle.md).
 **Priority:** critical. Must precede longer mining or PDF jobs.
 
 Historical issues: DB commit before Redis enqueue; stranded queued runs; no atomic
@@ -173,6 +173,42 @@ reconciliation.
 **Acceptance:** documented recovery rules; terminal states not overwritten; no duplicated
 successful results; no silently lost reservations; compatible behavior.
 **Stop:** reliability PR with real PostgreSQL/Redis failure tests.
+
+### R2 outcome
+
+- **Design:** atomic claim (`queued -> running` under a row lock); `attempt` as the ORM
+  version column for fencing; PostgreSQL-clock leases renewed by heartbeat, with a
+  monotonic local deadline that stops a worker unable to renew; an idempotent,
+  concurrency-safe recovery loop in each worker (expired leases failed, missing or
+  orphaned ARQ jobs re-enqueued, never-claimed stranded runs failed). Interrupted work is
+  terminated, not resumed. Cancellation persists first, then aborts ARQ.
+- **Cost:** reservations finalize once (only from `reserved`); never-claimed runs release,
+  claimed runs with unknown usage are retained, missing reservations are recorded as
+  missing, never as zero; a failed commit after reservation releases it only when the run
+  is confirmed absent.
+- **Deduplication:** evidence-job lock and lookup share one identity (caller, mode,
+  effective pipeline version, normalized question); identical in-flight submissions reuse
+  one run.
+- **Schema:** owner-approved migration `20261111_0002` (`attempt`, `lease_owner`,
+  `lease_expires_at`, partial index on active runs). API contracts unchanged.
+- **Reproduced before fixing (10 defects, now regression tests):** enqueue failure after
+  commit losing the submission; duplicate delivery executing twice; cancelled-before-start
+  run executing; worker overwriting a cancellation; release undoing reconciled spend;
+  identical submissions creating duplicate runs; worker clock skew and recovery clock skew
+  each expiring healthy leases; execution continuing without renewable lease; orphaned
+  ARQ job hash never re-enqueued; reservation leaked after a failed commit.
+- **CI on `main` @ `82a025e`:** 434 unit tests collected, 392 passed, 42 skipped (the
+  integration tests in the unit step), 0 failures; 42/42 PostgreSQL/pgvector + Redis
+  integration tests passed; migrations `20261026_0001 -> 20261111_0002` and `/healthz`
+  smoke test passed; Security CI green.
+- **Residual risks:** provider calls are not exactly-once (covered by retained
+  reservations); interrupted runs are not resumed; lost Redis budget counters restart for
+  the period; a crash between Redis reservation and PostgreSQL commit over-counts spend
+  until counters expire; lease-less runs (pre-migration rows, synchronous `/v1/research`,
+  evaluation) recover only after the hard timeout plus 15 minutes.
+- **Rollback:** finish or cancel running jobs, stop services, `alembic downgrade
+  20261026_0001` (required), deploy previous code — see
+  [research-job-lifecycle.md](../cost-aware-pipeline/docs/research-job-lifecycle.md#rollback).
 
 ## R3 — Untrusted scientific-content security
 
@@ -434,3 +470,5 @@ load evidence; large synthetic evaluation sets presented as gold data.
 | 2026-11-11 | Mark R0-D complete (PR #5, `0da065b`). | Documentation-only PR reviewed and merged; CI and Security CI green on `main`. |
 | 2026-11-11 | Mark R1 complete (PR #6, `155995e`). | Defects reproduced by failing tests before the fix; 379 tests (7 skipped, 0 failures), 7/7 integration, CI and Security CI green on `main`. |
 | 2026-11-11 | Do not enforce a minimum API-key length in R1. | Existing setups and CI use shorter keys; recorded as a pending owner decision. |
+| 2026-11-11 | Approve migration `20261111_0002` (research-run fencing and lease columns) for R2. | Lease and fence state cannot live safely in `model_metadata`, which the pipeline rewrites on every progress update. |
+| 2026-11-11 | Mark R2 complete (PR #8, `82a025e`). | 10 defects reproduced by failing tests before fixes; 434 collected / 392 passed / 42 skipped, 42/42 integration, migrations, smoke, and Security green on `main`. |
