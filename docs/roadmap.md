@@ -26,7 +26,7 @@ Operating rules for agents are in [`AGENTS.md`](../AGENTS.md). History, complete
 |---|---|---|---|
 | R0 | Reproduce the development baseline | complete (2026-11-11) | — |
 | R0-D | Permanent engineering documentation | in review | R0 |
-| R1 | Authentication and startup security hardening | not started | R0 |
+| R1 | Authentication and startup security hardening | in review | R0 |
 | R2 | Research-job lifecycle, recovery, deduplication | not started | R0 |
 | R3 | Untrusted scientific-content security | not started | R1 (order); before R8, R9-F |
 | R4 | Evaluation integrity and reproducibility | not started | R0 |
@@ -91,8 +91,8 @@ needs technical justification, dependencies, risk, cost/benefit, and owner appro
 
 ## R1 — Authentication and startup security hardening
 
-**Status:** not started. **Priority:** critical. **Scope:** `app/auth.py`, `app/config.py`,
-`.env.example`, auth tests, known-limitations notes.
+**Status:** in review (branch `agent/r1-auth-hardening`, 2026-11-11). **Priority:** critical.
+**Scope:** `app/auth.py`, `app/config.py`, `.env.example`, auth tests, known-limitations notes.
 
 Historical findings:
 - Empty credential authenticating under malformed configuration — *reproduced

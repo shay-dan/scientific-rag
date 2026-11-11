@@ -6,6 +6,8 @@ from typing import Literal
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .credentials import parse_api_keys, validate_secret_value
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
@@ -80,10 +82,14 @@ class Settings(BaseSettings):
             raise ValueError("Cost reservations cannot be negative")
 
     def validate_security_configuration(self) -> None:
-        if not self.app_api_keys:
+        if not self.app_api_keys.strip():
             raise ValueError("APP_API_KEYS is required for the protected beta")
+        if self.health_coach_api_key:
+            validate_secret_value("HEALTH_COACH_API_KEY", self.health_coach_api_key)
+        parse_api_keys(self.app_api_keys, service_key=self.health_coach_api_key)
         if not self.app_session_secret or len(self.app_session_secret) < 32:
             raise ValueError("APP_SESSION_SECRET must be at least 32 characters")
+        validate_secret_value("APP_SESSION_SECRET", self.app_session_secret)
         if not [item for item in self.app_allowed_hosts.split(",") if item.strip()]:
             raise ValueError("APP_ALLOWED_HOSTS must contain at least one host")
         if not [item for item in self.app_allowed_origins.split(",") if item.strip()]:

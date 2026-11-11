@@ -19,9 +19,10 @@ medical system.
 ## Security and deployment
 
 - The beta uses application API keys rather than a full identity provider.
-- A configured empty key such as `admin:` can match an empty submitted key in the
-  current parser. Do not configure empty keys. This known authentication defect is
-  intentionally deferred to the security engineering workstream.
+- Startup rejects empty, whitespace, non-ASCII, duplicate, placeholder, and
+  invalid-role credentials and never authenticates an empty `X-API-Key` (roadmap R1).
+  There is still no minimum API-key length, no login rate limiting, and browser
+  sessions are not re-checked against rotated keys until they expire (8 hours).
 - Public deployment still requires HTTPS termination, secure cookies, managed
   secrets, restricted hosts/origins, access review, backup/restore drills, and
   staging validation.

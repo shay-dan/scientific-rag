@@ -59,3 +59,56 @@ class ApiConfigurationTests(unittest.TestCase):
         self.assertIn("parent_document_id", DocumentChunk.__table__.columns)
         self.assertIn("embedding", DocumentChunk.__table__.columns)
         self.assertIn("question", ResearchRun.__table__.columns)
+
+
+class SecurityConfigurationTests(unittest.TestCase):
+    """R1: startup must fail closed on unsafe credential configuration."""
+
+    SECRET = "ci-test-session-secret-at-least-32-characters"
+
+    def _settings(self, **overrides) -> Settings:
+        values = {"app_api_keys": "admin:ci-test-access-key", "health_coach_api_key": "", "app_session_secret": self.SECRET}
+        values.update(overrides)
+        return Settings(**values)
+
+    def test_accepts_existing_valid_configurations(self) -> None:
+        for overrides in (
+            {},
+            {"app_api_keys": "admin:ci-test-access-key,alice:alice-key-123,ops|admin:ops-key-456"},
+            {"health_coach_api_key": "service-key-0123456789"},
+        ):
+            with self.subTest(overrides=overrides):
+                self._settings(**overrides).validate_security_configuration()
+
+    def test_rejects_unsafe_api_keys(self) -> None:
+        for app_api_keys in (
+            "",
+            "   ",
+            "admin:",
+            "admin:ci-test-access-key,bob:",
+            "garbage",
+            "alice|root:alice-key-123",
+            "bob:same-key-123,admin:same-key-123",
+            "admin:replace-with-a-long-random-access-key",
+            "health_coach:service-key-0123456789",
+            "admin:valid-secret-key ",
+            "admin:valid-secret-key\n",
+            "admin:valid-secret-key\t,alice:alice-key-123",
+        ):
+            with self.subTest(app_api_keys=app_api_keys), self.assertRaises(ValueError):
+                self._settings(app_api_keys=app_api_keys).validate_security_configuration()
+
+    def test_rejects_unsafe_service_key(self) -> None:
+        for service_key in ("   ", "replace-with-a-different-long-random-service-key", "ci-test-access-key"):
+            with self.subTest(service_key=service_key), self.assertRaises(ValueError):
+                self._settings(health_coach_api_key=service_key).validate_security_configuration()
+
+    def test_rejects_unsafe_session_secrets(self) -> None:
+        for secret in ("", "short-secret", "replace-with-a-different-32-character-minimum-secret", " " * 40):
+            with self.subTest(secret=secret), self.assertRaises(ValueError):
+                self._settings(app_session_secret=secret).validate_security_configuration()
+
+    def test_error_does_not_echo_secret_values(self) -> None:
+        with self.assertRaises(ValueError) as raised:
+            self._settings(app_api_keys="bob:TopSecret-987654,admin:TopSecret-987654").validate_security_configuration()
+        self.assertNotIn("TopSecret-987654", str(raised.exception))

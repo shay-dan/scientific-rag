@@ -333,7 +333,7 @@ It rebuilds Compose, runs pricing/budget tests and the provider failure-injectio
 
 ## Security and recovery checks
 
-The protected beta requires `APP_API_KEYS` and a 32-character `APP_SESSION_SECRET`. API clients provide `X-API-Key`; the browser UI has a key-based login. Request and daily-research quotas are enforced atomically in Redis, so they are shared by multiple API processes. Browser state-changing requests also require an allowed same-origin `Origin` header; configure production hosts/origins and secure cookies with `APP_ALLOWED_HOSTS`, `APP_ALLOWED_ORIGINS`, and `APP_SECURE_COOKIES=true` behind HTTPS.
+The protected beta requires `APP_API_KEYS` and a 32-character `APP_SESSION_SECRET`. `APP_API_KEYS` entries use `name[|admin|user]:key`; startup refuses empty, whitespace-padded, non-ASCII, duplicate, or placeholder keys, unsupported roles, the reserved `health_coach` name, and a `HEALTH_COACH_API_KEY` equal to any user key. API clients provide `X-API-Key`; the browser UI has a key-based login. Request and daily-research quotas are enforced atomically in Redis, so they are shared by multiple API processes. Browser state-changing requests also require an allowed same-origin `Origin` header; configure production hosts/origins and secure cookies with `APP_ALLOWED_HOSTS`, `APP_ALLOWED_ORIGINS`, and `APP_SECURE_COOKIES=true` behind HTTPS.
 
 Run the provider-free worker scaling and service-outage recovery checks only on a local test deployment with no active research:
 

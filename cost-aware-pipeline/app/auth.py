@@ -4,10 +4,11 @@ from __future__ import annotations
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-import hmac
 from threading import Lock
 
 from fastapi import HTTPException, Request
+
+from .credentials import CredentialConfigurationError, keys_match, parse_api_keys
 
 
 @dataclass(frozen=True)
@@ -17,20 +18,23 @@ class Principal:
 
 
 def principal_for_key(raw_key: str, configured_keys: str) -> Principal | None:
-    for item in configured_keys.split(","):
-        if ":" not in item:
-            continue
-        identity, key = item.strip().split(":", 1)
-        name, _, declared_role = identity.partition("|")
-        if hmac.compare_digest(raw_key, key):
-            return Principal(name=name, role=declared_role or ("admin" if name == "admin" else "user"))
+    """Resolve a presented key. Empty keys, unparseable configuration, and odd input fail closed."""
+    if not raw_key or not raw_key.strip():
+        return None
+    try:
+        credentials = parse_api_keys(configured_keys)
+    except CredentialConfigurationError:
+        return None
+    for credential in credentials:
+        if keys_match(raw_key, credential.key):
+            return Principal(name=credential.name, role=credential.role)
     return None
 
 
 def require_api_key(request: Request) -> Principal:
     raw_key = request.headers.get("X-API-Key", "")
     service_key = getattr(request.app.state.settings, "health_coach_api_key", "")
-    principal = (Principal("health_coach", "service") if service_key and hmac.compare_digest(raw_key, service_key)
+    principal = (Principal("health_coach", "service") if keys_match(raw_key, service_key)
                  else principal_for_key(raw_key, request.app.state.settings.app_api_keys))
     if principal is None:
         raise HTTPException(status_code=401, detail="Valid X-API-Key required")
