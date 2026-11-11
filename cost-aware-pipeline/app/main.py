@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import get_settings
 from .auth import Principal, RedisBetaLimiter, principal_for_key, require_api_key
+from .job_lifecycle import acquire_identity_lock, cancel_run
 from .db import close_database, get_session, verify_database_schema
 from .logging_config import configure_logging
 from .models import AuditEvent, EvaluationCase, EvaluationDataset, EvaluationResult, EvaluationRun, ResearchEvidence, ResearchFeedback, ResearchRun, SourceDocument
@@ -405,26 +406,25 @@ async def ops_cancel_queue_run(request: Request, run_id: str, session: AsyncSess
 
 
 async def _cancel_research_run(request: Request, session: AsyncSession, run: ResearchRun, principal: Principal) -> None:
-    """Abort one ARQ job and persist an auditable terminal state."""
-    was_queued = run.status == "queued"
+    """Persist cancellation first (fencing any worker), settle cost, then abort the ARQ job.
+
+    The database transition is authoritative: a worker that keeps running after
+    an unconfirmed abort cannot write results (fencing) and stops when its lease
+    renewal fails.
+    """
     job_id = run.model_metadata.get("queue_job_id")
-    try:
-        if job_id:
+    termination = await cancel_run(
+        session, run.id, actor=principal.name, cost_guard=request.app.state.research_service.cost_guard,
+    )
+    if termination is None:
+        raise HTTPException(status_code=409, detail="Only queued or running research jobs can be cancelled")
+    if job_id:
+        try:
             aborted = await Job(job_id, request.app.state.redis).abort(timeout=5)
             if not aborted:
-                raise HTTPException(status_code=409, detail="ARQ could not confirm cancellation; refresh queue status")
-        elif run.status == "queued":
-            raise RuntimeError("Queue job identifier was not stored")
-    except HTTPException:
-        raise
-    except Exception as error:
-        raise HTTPException(status_code=503, detail=f"The queue could not confirm cancellation ({type(error).__name__})") from error
-    run.status = "cancelled"
-    run.completed_at = datetime.now(timezone.utc)
-    if was_queued:
-        await request.app.state.research_service.cost_guard.release_research(str(run.id))
-    session.add(AuditEvent(actor=principal.name, action="research.cancel_requested", target_type="research_run", target_id=str(run.id), details={"previous_status": "queued_or_running"}))
-    await session.commit()
+                logger.warning("research_abort_unconfirmed run_id=%s; fencing and lease loss will stop the worker", run.id)
+        except Exception:
+            logger.warning("research_abort_failed run_id=%s; fencing and lease loss will stop the worker", run.id, exc_info=True)
 
 
 @app.get("/ui/ops/audit", response_class=HTMLResponse, include_in_schema=False)
@@ -478,14 +478,16 @@ async def ops_retry_failed_run(request: Request, run_id: str, session: AsyncSess
     if failed.status != "failed":
         raise HTTPException(status_code=409, detail="Only failed research runs can be restarted")
     mode = ResearchMode(failed.model_metadata.get("mode", "fast"))
-    queued = await request.app.state.research_service.queue(session, failed.question, mode, actor=principal.name, bypass_cache=True, force_mining=True)
-    record = (await session.execute(select(ResearchRun).where(ResearchRun.id == queued.id))).scalar_one()
-    updated_metadata = dict(record.model_metadata)
-    updated_metadata["retry_count"] = int(failed.model_metadata.get("retry_count", 0)) + 1
-    updated_metadata["retry_of"] = str(failed.id)
-    record.model_metadata = updated_metadata
-    session.add(AuditEvent(actor=principal.name, action="research.retry_queued", target_type="research_run", target_id=str(record.id), details={"retry_of": str(failed.id), "mode": mode.value}))
+    retry_metadata = {"retry_count": int(failed.model_metadata.get("retry_count", 0)) + 1, "retry_of": str(failed.id)}
+    # Retry metadata is written with the new run; updating it after enqueueing
+    # would race the worker's claim.
+    queued = await request.app.state.research_service.queue(
+        session, failed.question, mode, actor=principal.name, bypass_cache=True, force_mining=True,
+        extra_metadata=retry_metadata,
+    )
+    session.add(AuditEvent(actor=principal.name, action="research.retry_queued", target_type="research_run", target_id=str(queued.id), details={"retry_of": str(failed.id), "mode": mode.value}))
     await session.commit()
+    record = (await session.execute(select(ResearchRun).where(ResearchRun.id == queued.id))).scalar_one()
     return templates.TemplateResponse(request, "partials/research_progress.html", _progress_context(record))
 
 
@@ -952,13 +954,15 @@ async def queue_evidence_job(request: Request, payload: EvidenceJobRequest, sess
         raise HTTPException(status_code=422, detail="Generic single-line research question required")
     question = " ".join(payload.question.split())
     version = effective_pipeline_version(get_settings().semantic_claim_verification_mode)
-    lock_id = int.from_bytes(hashlib.sha256((payload.topic_key + version).encode()).digest()[:8], "big", signed=True)
-    # Transaction-scoped advisory lock prevents duplicate jobs from concurrent users.
-    await session.execute(text("SELECT pg_advisory_xact_lock(:lock_id)"), {"lock_id": lock_id})
+    # The lock and the reuse lookup share one identity: caller (sharing scope),
+    # research mode, effective pipeline version, and normalized question. The
+    # client-supplied topic_key is not part of the identity.
+    await acquire_identity_lock(session, principal.name, payload.mode.value, version, question)
     record = (await session.execute(
         select(ResearchRun).where(
             ResearchRun.question == question,
             ResearchRun.requested_by == principal.name,
+            ResearchRun.model_metadata["mode"].as_string() == payload.mode.value,
             ResearchRun.model_metadata["retrieval_version"].as_string() == version,
             ResearchRun.status.in_(["queued", "running", "completed"]),
         ).order_by(ResearchRun.created_at.desc()).limit(1)

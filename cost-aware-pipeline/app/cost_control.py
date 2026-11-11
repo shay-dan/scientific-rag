@@ -35,17 +35,24 @@ redis.call('EXPIRE', KEYS[1], tonumber(ARGV[5]))
 return {1, amount, 'reserved'}
 """
 
+# Finalize a reservation exactly once. Only a 'reserved' hash can change; any
+# later call (retry, recovery, duplicate reconciler) is a no-op that reports the
+# existing outcome, so a release can never undo recorded spend. ARGV[1] is the
+# actual micro-dollar amount, or 'keep' to retain the reservation as an upper bound.
 _RECONCILE_SCRIPT = """
 if redis.call('EXISTS', KEYS[1]) == 0 then return {0, 0, 'missing'} end
 local old_amount = tonumber(redis.call('HGET', KEYS[1], 'amount') or '0')
+local status = redis.call('HGET', KEYS[1], 'status') or 'reserved'
+if status ~= 'reserved' then return {2, old_amount, status} end
+local actual = old_amount
+if ARGV[1] ~= 'keep' then actual = tonumber(ARGV[1]) end
+local delta = actual - old_amount
 local daily_key = redis.call('HGET', KEYS[1], 'daily_key')
 local monthly_key = redis.call('HGET', KEYS[1], 'monthly_key')
-local actual = tonumber(ARGV[1])
-local delta = actual - old_amount
-if daily_key then redis.call('INCRBY', daily_key, delta) end
-if monthly_key then redis.call('INCRBY', monthly_key, delta) end
+if delta ~= 0 and daily_key then redis.call('INCRBY', daily_key, delta) end
+if delta ~= 0 and monthly_key then redis.call('INCRBY', monthly_key, delta) end
 redis.call('HSET', KEYS[1], 'amount', actual, 'status', ARGV[2])
-return {1, delta, ARGV[2]}
+return {1, actual, ARGV[2]}
 """
 
 
@@ -112,17 +119,36 @@ class CostGuard:
         amount = self.settings.cost_evaluation_judge_reservation_usd_per_case * max(case_count, 0)
         return await self.reserve(f"evaluation:{run_id}", amount)
 
-    async def reconcile_research(self, run_id: str, actual_usd: float | None, *, status: str = "reconciled") -> Reservation | None:
-        if not self.settings.cost_tracking_enabled or self.redis is None or actual_usd is None:
+    async def _finalize_research(self, run_id: str, amount: int | str, status: str) -> Reservation | None:
+        if not self.settings.cost_tracking_enabled or self.redis is None:
             return None
         key = self._keys(f"research:{run_id}")[0]
-        result = await self.redis.eval(_RECONCILE_SCRIPT, 1, key, round(actual_usd * _SCALE), status)
-        if not int(result[0]):
+        result = await self.redis.eval(_RECONCILE_SCRIPT, 1, key, amount, status)
+        outcome = int(result[0])
+        if outcome == 0:
+            return Reservation(0.0, "missing")
+        # outcome 1: finalized now; outcome 2: already finalized earlier (no change).
+        return Reservation(int(result[1]) / _SCALE, _decode(result[2]))
+
+    async def reconcile_research(self, run_id: str, actual_usd: float | None, *, status: str = "reconciled") -> Reservation | None:
+        """Replace a still-open reservation with known actual spend. Idempotent."""
+        if actual_usd is None:
             return None
-        return Reservation(actual_usd, status)
+        reservation = await self._finalize_research(run_id, round(actual_usd * _SCALE), status)
+        if reservation is None or reservation.status == "missing":
+            return None
+        return reservation
 
     async def release_research(self, run_id: str) -> Reservation | None:
+        """Release a reservation for a run that provably never started paid work."""
         return await self.reconcile_research(run_id, 0.0, status="released")
+
+    async def retain_research(self, run_id: str, reason: str = "retained_unknown_usage") -> Reservation | None:
+        """Keep the full reservation as spend when actual usage cannot be known. ``None`` if missing."""
+        reservation = await self._finalize_research(run_id, "keep", reason)
+        if reservation is None or reservation.status == "missing":
+            return None
+        return reservation
 
 
 def _decode(value) -> str:

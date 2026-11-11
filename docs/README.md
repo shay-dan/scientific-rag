@@ -21,6 +21,7 @@ The root README is the project overview. The maintained application's
 - [Semantic claim verification](../cost-aware-pipeline/docs/semantic-claim-verifier.md)
 - [Query quality and evidence gating](../cost-aware-pipeline/docs/query-quality-validation-2026-10-25.md)
 - [Reliability and production plan](../cost-aware-pipeline/docs/reliability-and-production-plan-2026-10-24.md)
+- [Research job lifecycle and recovery (R2)](../cost-aware-pipeline/docs/research-job-lifecycle.md)
 - API contracts: run the application and open <http://localhost:8000/docs>.
 
 ## Evaluation and experiments

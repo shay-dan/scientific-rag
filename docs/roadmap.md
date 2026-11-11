@@ -27,7 +27,7 @@ Operating rules for agents are in [`AGENTS.md`](../AGENTS.md). History, complete
 | R0 | Reproduce the development baseline | complete (2026-11-11) | — |
 | R0-D | Permanent engineering documentation | complete (2026-11-11, PR #5) | R0 |
 | R1 | Authentication and startup security hardening | complete (2026-11-11, PR #6) | R0 |
-| R2 | Research-job lifecycle, recovery, deduplication | not started | R0 |
+| R2 | Research-job lifecycle, recovery, deduplication | in review | R0 |
 | R3 | Untrusted scientific-content security | not started | R1 (order); before R8, R9-F |
 | R4 | Evaluation integrity and reproducibility | not started | R0 |
 | R5 | Offline semantic-verifier evaluation harness | not started | R0 |
@@ -139,7 +139,9 @@ configurations unchanged; focused and full suites pass. **Stop:** security PR, n
 
 ## R2 — Research-job lifecycle, recovery, and deduplication
 
-**Status:** not started. **Priority:** critical. Must precede longer mining or PDF jobs.
+**Status:** in review (branch `agent/r2-job-lifecycle`, 2026-11-11; migration `20261111_0002`
+approved by the owner). Design and recovery rules: [research-job-lifecycle.md](../cost-aware-pipeline/docs/research-job-lifecycle.md).
+**Priority:** critical. Must precede longer mining or PDF jobs.
 
 Historical issues: DB commit before Redis enqueue; stranded queued runs; no atomic
 execution claim; retry/redelivery conflicts; reservations tied to abandoned runs;

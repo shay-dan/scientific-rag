@@ -246,6 +246,19 @@ class SemanticVerificationProductionFlowTests(unittest.IsolatedAsyncioTestCase):
         verifier.assert_not_awaited()
 
 
+class _NoopLease:
+    """Stand-in for the R2 lease keeper in unit tests without a database."""
+
+    def __init__(self, *args, **kwargs):
+        self.lost = False
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        return None
+
+
 class _AsyncSessionContext:
     def __init__(self, session):
         self.session = session
@@ -402,16 +415,16 @@ class SemanticVerificationServiceIntegrationTests(unittest.IsolatedAsyncioTestCa
     async def test_queued_run_uses_persisted_mode_after_worker_configuration_change(self) -> None:
         record = SimpleNamespace(
             id=uuid4(),
-            status="queued",
+            status="running",
+            attempt=1,
             model_metadata={"semantic_claim_verification_mode": "enforce"},
         )
-        session = SimpleNamespace(
-            execute=AsyncMock(return_value=SimpleNamespace(scalar_one=lambda: record)),
-            commit=AsyncMock(),
-        )
+        session = SimpleNamespace(commit=AsyncMock())
         service = ResearchService(Settings(semantic_claim_verification_mode="off"), redis=None)
         service._execute = AsyncMock()
-        with patch("app.services.session_factory", return_value=_AsyncSessionContext(session)):
+        with patch("app.services.session_factory", return_value=_AsyncSessionContext(session)), \
+                patch("app.services.claim_run", AsyncMock(return_value=record)), \
+                patch("app.services.LeaseKeeper", _NoopLease):
             await service.run_queued(
                 record.id,
                 "Queued research question",
@@ -424,14 +437,13 @@ class SemanticVerificationServiceIntegrationTests(unittest.IsolatedAsyncioTestCa
         )
 
     async def test_legacy_queued_run_defaults_to_off_not_worker_environment(self) -> None:
-        record = SimpleNamespace(id=uuid4(), status="queued", model_metadata={})
-        session = SimpleNamespace(
-            execute=AsyncMock(return_value=SimpleNamespace(scalar_one=lambda: record)),
-            commit=AsyncMock(),
-        )
+        record = SimpleNamespace(id=uuid4(), status="running", attempt=1, model_metadata={})
+        session = SimpleNamespace(commit=AsyncMock())
         service = ResearchService(Settings(semantic_claim_verification_mode="enforce"), redis=None)
         service._execute = AsyncMock()
-        with patch("app.services.session_factory", return_value=_AsyncSessionContext(session)):
+        with patch("app.services.session_factory", return_value=_AsyncSessionContext(session)), \
+                patch("app.services.claim_run", AsyncMock(return_value=record)), \
+                patch("app.services.LeaseKeeper", _NoopLease):
             await service.run_queued(
                 record.id,
                 "Legacy queued research question",

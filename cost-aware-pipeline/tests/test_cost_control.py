@@ -45,13 +45,16 @@ class AtomicFakeRedis:
             reservation = keys[0]
             if reservation not in self.hashes:
                 return [0, 0, b"missing"]
-            actual = int(args[0])
             data = self.hashes[reservation]
+            if data.get("status", "reserved") != "reserved":
+                return [2, data["amount"], data["status"].encode()]
+            actual = data["amount"] if args[0] == "keep" else int(args[0])
             delta = actual - data["amount"]
             self.values[data["daily_key"]] += delta
             self.values[data["monthly_key"]] += delta
             data["amount"] = actual
-            return [1, delta, str(args[1]).encode()]
+            data["status"] = str(args[1])
+            return [1, actual, str(args[1]).encode()]
 
 
 class PricingTests(unittest.TestCase):
@@ -134,6 +137,40 @@ class CostGuardTests(unittest.IsolatedAsyncioTestCase):
         result = await guard.reconcile_research("run", 0.03)
         self.assertEqual(result.amount_usd, 0.03)
         self.assertEqual(sum(value for key, value in redis.values.items() if ":daily:" in key), 30_000)
+
+    async def test_release_after_reconciliation_cannot_undo_recorded_spend(self):
+        redis = AtomicFakeRedis()
+        guard = CostGuard(redis, self.settings(), namespace="test:cost")
+        await guard.reserve_research("run", ResearchMode.standard)
+        await guard.reconcile_research("run", 0.03)
+        released = await guard.release_research("run")
+        self.assertEqual(released.status, "reconciled")
+        self.assertEqual(sum(value for key, value in redis.values.items() if ":daily:" in key), 30_000)
+
+    async def test_retain_keeps_full_reservation_and_is_idempotent(self):
+        redis = AtomicFakeRedis()
+        guard = CostGuard(redis, self.settings(), namespace="test:cost")
+        await guard.reserve_research("run", ResearchMode.standard)
+        first = await guard.retain_research("run")
+        second = await guard.retain_research("run")
+        later_release = await guard.release_research("run")
+        self.assertEqual(first.status, "retained_unknown_usage")
+        self.assertEqual(second.status, "retained_unknown_usage")
+        self.assertEqual(later_release.status, "retained_unknown_usage")
+        self.assertEqual(sum(value for key, value in redis.values.items() if ":daily:" in key), 200_000)
+
+    async def test_release_of_never_started_run_frees_budget(self):
+        redis = AtomicFakeRedis()
+        guard = CostGuard(redis, self.settings(), namespace="test:cost")
+        await guard.reserve_research("run", ResearchMode.standard)
+        released = await guard.release_research("run")
+        self.assertEqual((released.amount_usd, released.status), (0.0, "released"))
+        self.assertEqual(sum(value for key, value in redis.values.items() if ":daily:" in key), 0)
+
+    async def test_missing_reservation_is_reported_not_treated_as_zero_spend(self):
+        guard = CostGuard(AtomicFakeRedis(), self.settings(), namespace="test:cost")
+        self.assertIsNone(await guard.reconcile_research("never-reserved", 0.01))
+        self.assertIsNone(await guard.retain_research("never-reserved"))
 
     async def test_evaluation_reserves_judge_upper_bound_per_case(self):
         redis = AtomicFakeRedis()

@@ -6,9 +6,9 @@ import asyncio
 from datetime import datetime, timezone
 import logging
 import re
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from arq.connections import ArqRedis
 
@@ -19,6 +19,17 @@ from .config import Settings
 from .cost_policy import ResearchBudget, budget_for, estimated_generation_calls
 from .cost_control import CostGuard
 from .db import session_factory
+from .job_lifecycle import (
+    INTERRUPTED_ERROR,
+    LEASE_UNVERIFIABLE_ERROR,
+    LeaseKeeper,
+    acquire_identity_lock,
+    claim_run,
+    enqueue_run,
+    settle_terminated_cost,
+    terminate_run,
+    worker_identity,
+)
 from .models import AuditEvent, ResearchEvidence, ResearchRun, SourceDocument
 from .pgvector_retrieval import PostgresVectorService
 from .schemas import ResearchCacheMode, ResearchMode, ResearchResponse, SourceResponse
@@ -44,6 +55,11 @@ def _responses_for_evidence_documents(evidence_documents: list) -> list[SourceRe
         sources_by_identity.setdefault(identity, source)
     return list(sources_by_identity.values())
 PIPELINE_VERSION = "postgres-hybrid-rrf-mmr-parent-child-structured-v14"
+ENQUEUE_TIMEOUT_SECONDS = 10
+
+
+class ResearchFencedOut(RuntimeError):
+    """This execution no longer owns the run (cancelled or recovered); its results are discarded."""
 
 
 def effective_pipeline_version(semantic_verification_mode: str) -> str:
@@ -166,6 +182,23 @@ class ResearchService:
             )
         ).scalar_one_or_none()
 
+    async def _find_in_flight(self, session: AsyncSession, question: str, actor: str, mode: ResearchMode,
+                              version: str) -> ResearchRun | None:
+        return (
+            await session.execute(
+                select(ResearchRun)
+                .where(
+                    ResearchRun.question == question,
+                    ResearchRun.status.in_(("queued", "running")),
+                    ResearchRun.requested_by == actor,
+                    ResearchRun.model_metadata["mode"].as_string() == mode.value,
+                    ResearchRun.model_metadata["retrieval_version"].as_string() == version,
+                )
+                .order_by(ResearchRun.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
     async def _sources(self, session: AsyncSession, run_id: UUID) -> list[SourceDocument]:
         return list((await session.execute(select(SourceDocument).where(SourceDocument.research_run_id == run_id))).scalars())
 
@@ -195,8 +228,14 @@ class ResearchService:
 
     async def queue(self, session: AsyncSession, question: str, mode: ResearchMode, *, actor: str,
                     cache_mode: ResearchCacheMode = ResearchCacheMode.use_cached_answer,
-                    bypass_cache: bool | None = None, force_mining: bool | None = None) -> ResearchResponse:
-        """Create an immediately visible job; its work continues in a separate session."""
+                    bypass_cache: bool | None = None, force_mining: bool | None = None,
+                    extra_metadata: dict | None = None) -> ResearchResponse:
+        """Create an immediately visible job; its work continues in a separate session.
+
+        The run and its cost reservation are committed before enqueueing. If the
+        enqueue fails or the process stops in between, the run stays ``queued`` and
+        the worker recovery sweep re-enqueues it with the same job id.
+        """
         self._validate_request(mode, False)
         # Compatibility for existing internal callers while the public contract
         # migrates to one explicit three-state policy.
@@ -204,14 +243,23 @@ class ResearchService:
             cache_mode = ResearchCacheMode.refresh_sources
         elif bypass_cache:
             cache_mode = ResearchCacheMode.regenerate_answer
+        if self.redis is None:
+            raise RuntimeError("Research queue is unavailable")
         semantic_mode = getattr(
             getattr(self, "settings", None), "semantic_claim_verification_mode", "off"
         )
         version = effective_pipeline_version(semantic_mode)
+        # Serialize identical submissions (same caller, mode, pipeline version, question).
+        await acquire_identity_lock(session, actor, mode.value, version, question)
         cached = await self._find_cached(session, question, actor, mode, semantic_mode)
         if cached is not None and cache_mode is ResearchCacheMode.use_cached_answer:
             logger.info("research_cache_hit run_id=%s mode=%s", cached.id, mode.value)
             return to_response(cached, await self.sources_for_run(session, cached.id), mode=mode, cached=True)
+        if cache_mode is ResearchCacheMode.use_cached_answer:
+            in_flight = await self._find_in_flight(session, question, actor, mode, version)
+            if in_flight is not None:
+                logger.info("research_in_flight_reused run_id=%s mode=%s", in_flight.id, mode.value)
+                return to_response(in_flight, mode=mode)
 
         budget = budget_for(mode)
         metadata = self._metadata(
@@ -220,7 +268,10 @@ class ResearchService:
         )
         metadata["cache_mode"] = cache_mode.value
         metadata["retrieval_version"] = version
-        record = ResearchRun(question=question, requested_by=actor, status="queued", model_metadata=metadata)
+        run_id = uuid4()
+        metadata["queue_job_id"] = str(run_id)
+        metadata.update(extra_metadata or {})
+        record = ResearchRun(id=run_id, question=question, requested_by=actor, status="queued", model_metadata=metadata)
         session.add(record)
         await session.flush()
         try:
@@ -229,23 +280,58 @@ class ResearchService:
             await session.rollback()
             raise
         session.add(AuditEvent(actor=actor, action="research.started", target_type="research_run", target_id=str(record.id), details={"mode": mode.value}))
-        await session.commit()
+        try:
+            await session.commit()
+        except Exception:
+            await self._compensate_failed_commit(session, record.id)
+            raise
         logger.info("research_queued run_id=%s mode=%s budget=%s", record.id, mode.value, budget.as_dict())
-        if self.redis is None:
-            raise RuntimeError("Research queue is unavailable")
-        metadata["queue_job_id"] = str(record.id)
-        record.model_metadata = metadata
-        await session.commit()
-        await self.redis.enqueue_job(
-            "run_research_job", str(record.id), question, mode.value, cache_mode.value,
-            semantic_mode, _job_id=str(record.id),
-        )
+        try:
+            await asyncio.wait_for(enqueue_run(self.redis, record), timeout=ENQUEUE_TIMEOUT_SECONDS)
+        except Exception:
+            logger.warning("research_enqueue_deferred run_id=%s; the recovery sweep will re-enqueue it", record.id, exc_info=True)
         return to_response(record, mode=mode)
+
+    async def _compensate_failed_commit(self, session: AsyncSession, run_id: UUID) -> None:
+        """Release the Redis reservation only when the run is confirmed not persisted.
+
+        A commit error can be ambiguous (the commit may have succeeded before the
+        connection failed). If persistence cannot be confirmed either way, the
+        reservation is kept: over-counting is preferred to under-counting spend.
+        """
+        try:
+            await session.rollback()
+        except Exception:
+            logger.warning("research_commit_rollback_failed run_id=%s", run_id, exc_info=True)
+        try:
+            async with session_factory() as check:
+                persisted = await check.scalar(
+                    select(func.count()).select_from(ResearchRun).where(ResearchRun.id == run_id)
+                )
+        except Exception:
+            logger.warning("research_commit_outcome_unknown run_id=%s; reservation retained", run_id, exc_info=True)
+            return
+        if persisted:
+            logger.warning("research_commit_error_but_persisted run_id=%s; reservation kept, recovery will enqueue", run_id)
+            return
+        guard = getattr(self, "cost_guard", None)
+        if guard is not None:
+            try:
+                await guard.release_research(str(run_id))
+            except Exception:
+                logger.warning("research_reservation_release_failed run_id=%s", run_id, exc_info=True)
 
     async def run_queued(self, run_id: UUID, question: str, mode: ResearchMode, cache_mode: ResearchCacheMode,
                          semantic_verification_mode: str | None = None) -> None:
+        settings = self.settings
         async with session_factory() as session:
-            record = (await session.execute(select(ResearchRun).where(ResearchRun.id == run_id))).scalar_one()
+            record = await claim_run(session, run_id, owner=worker_identity(), lease_seconds=settings.research_lease_seconds)
+            if record is None:
+                # Duplicate delivery, redelivery after completion, or cancellation
+                # before start: the run is not queued, so nothing is executed.
+                logger.info("research_claim_skipped run_id=%s", run_id)
+                return
+            attempt = record.attempt
             # Persisted run intent is authoritative across worker restarts. The
             # optional job argument supports new jobs; old queued jobs default
             # safely to off rather than inheriting a changed worker environment.
@@ -255,16 +341,60 @@ class ResearchService:
                 or "off"
             )
             effective_pipeline_version(stored_semantic_mode)
-            record.status = "running"
-            await session.commit()
+            lease = LeaseKeeper(
+                session_factory, run_id, attempt,
+                lease_seconds=settings.research_lease_seconds,
+                heartbeat_seconds=settings.research_heartbeat_seconds,
+            )
             try:
-                await self._execute(
-                    session, record, question, mode, False, cache_mode=cache_mode,
-                    semantic_verification_mode=stored_semantic_mode,
-                )
+                async with lease:
+                    await self._execute(
+                        session, record, question, mode, False, cache_mode=cache_mode,
+                        semantic_verification_mode=stored_semantic_mode,
+                    )
+            except ResearchFencedOut:
+                logger.warning("research_execution_fenced_out run_id=%s attempt=%s", run_id, attempt)
+            except asyncio.CancelledError:
+                task = asyncio.current_task()
+                if lease.lost and task is not None:
+                    # Our own heartbeat cancelled the work. "fenced": a newer owner
+                    # (cancellation or recovery) already holds the run. "unverifiable":
+                    # ownership could not be confirmed in time, so stop and record it
+                    # with the same bounded, fenced cleanup (recovery covers failure).
+                    task.uncancel()
+                    logger.warning("research_execution_stopped_after_lease_loss run_id=%s attempt=%s reason=%s",
+                                   run_id, attempt, lease.loss_reason)
+                    if lease.loss_reason == "unverifiable":
+                        await self._mark_interrupted(run_id, attempt, error=LEASE_UNVERIFIABLE_ERROR,
+                                                     reason="lease_unverifiable")
+                    return
+                await self._mark_interrupted(run_id, attempt)
+                raise
             except Exception:
                 # _execute persists the failure. Keep this task from producing an unhandled-task warning.
                 logger.exception("queued_research_task_failed run_id=%s", run_id)
+
+    async def _mark_interrupted(self, run_id: UUID, attempt: int, *, error: str = INTERRUPTED_ERROR,
+                                reason: str = "worker_interrupted") -> None:
+        """Bounded, shielded terminal write after worker cancellation (shutdown or timeout).
+
+        If this cannot finish (for example the process is killed), the lease expires
+        and the recovery sweep applies the same transition.
+        """
+        async def cleanup() -> None:
+            async with session_factory() as session:
+                termination = await terminate_run(
+                    session, run_id, status="failed", error=error, actor="system",
+                    action="research.interrupted", expected_statuses=("running",), expected_attempt=attempt,
+                    reason=reason,
+                )
+                if termination is not None:
+                    await settle_terminated_cost(session, getattr(self, "cost_guard", None), termination)
+
+        try:
+            await asyncio.wait_for(asyncio.shield(cleanup()), timeout=15)
+        except (Exception, asyncio.CancelledError):
+            logger.warning("research_interrupt_cleanup_incomplete run_id=%s; recovery will finalize it", run_id, exc_info=True)
 
     async def run(self, session: AsyncSession, question: str, mode: ResearchMode, generate_evaluation_dataset: bool, *,
                   actor: str = "api", cache_mode: ResearchCacheMode = ResearchCacheMode.use_cached_answer,
@@ -337,6 +467,9 @@ class ResearchService:
         trace_closed = False
         orchestrator = None
         vector_service = None
+        # Fencing token (R2): the attempt this execution owns. A cancellation or
+        # recovery increments it, after which every write from here fails.
+        fence = getattr(record, "attempt", None)
         logger.info("research_started run_id=%s mode=%s question_length=%s", record.id, mode.value, len(question))
         try:
             async with self._lock:
@@ -384,6 +517,8 @@ class ResearchService:
             record.status = str(pipeline_result.get("status") or "completed")
             record.answer = report["answer"]
             record.completed_at = datetime.now(timezone.utc)
+            record.lease_owner = None
+            record.lease_expires_at = None
             evidence_documents = report.get("raw_docs_used", [])
             for ordinal, document in enumerate(evidence_documents):
                 metadata = dict(document.metadata or {})
@@ -441,20 +576,33 @@ class ResearchService:
             await session.refresh(record)
             logger.info("research_completed run_id=%s mode=%s source_count=%s", record.id, mode.value, len(sources))
             return ResearchResponse(id=record.id, status=record.status, answer=record.answer, sources=sources, plan=list(pipeline_result.get("metadata", {}).get("plan_executed", [])), created_at=record.created_at, completed_at=record.completed_at, mode=mode, retrieval_version=version, source_diagnostics=source_diagnostics, cache_diagnostics=cache_diagnostics, llm_diagnostics=metadata["llm_gateway"], source_sufficiency=metadata["source_sufficiency"])
+        except asyncio.CancelledError:
+            if not trace_closed:
+                end_trace(trace_token)
+            raise
         except Exception as error:
             failed_run_id = record.id
             try:
                 # A failed JSON/DB flush leaves the AsyncSession unusable until
                 # rollback. Reload the run so the failure itself can be persisted.
                 await session.rollback()
-                recovered_record = await session.get(ResearchRun, failed_run_id)
+                recovered_record = await session.get(ResearchRun, failed_run_id, populate_existing=True)
                 if recovered_record is not None:
                     record = recovered_record
             except Exception:
                 logger.exception("research_failure_recovery_failed run_id=%s", failed_run_id)
+            if fence is not None and (getattr(record, "attempt", fence) != fence or record.status != "running"):
+                # Cancelled or recovered while executing: the newer owner already
+                # wrote the terminal state and settled cost. Never overwrite it.
+                if not trace_closed:
+                    end_trace(trace_token)
+                logger.warning("research_fenced_out run_id=%s attempt=%s current_status=%s", failed_run_id, fence, record.status)
+                raise ResearchFencedOut(f"Research run {failed_run_id} is no longer owned by this execution") from error
             record.status = "failed"
             record.error = str(error) or type(error).__name__
             record.completed_at = datetime.now(timezone.utc)
+            record.lease_owner = None
+            record.lease_expires_at = None
             metadata = dict(record.model_metadata)
             if not trace_closed:
                 metadata["llm_gateway"] = summarize_trace(end_trace(trace_token))

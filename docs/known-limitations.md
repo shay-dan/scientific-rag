@@ -36,6 +36,10 @@ medical system.
 - Application budgets do not cover calls made outside this application.
 - Local load and failure-recovery scripts are workstation checks, not distributed
   soak tests or capacity guarantees.
+- Research jobs are claimed, leased, and fenced (roadmap R2), but interrupted
+  runs are failed rather than resumed, external provider calls are not
+  exactly-once, and lost Redis budget counters restart for the period. See
+  [research job lifecycle](../cost-aware-pipeline/docs/research-job-lifecycle.md).
 - Deep mode is experimental, disabled by default, and may increase latency and
   evidence noise as well as cost.
 
