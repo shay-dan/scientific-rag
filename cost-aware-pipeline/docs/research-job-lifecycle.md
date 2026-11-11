@@ -23,6 +23,15 @@ queued --claim--> running --success--> completed | insufficient_evidence
   (default 30) for `RESEARCH_LEASE_SECONDS` (default 120), only while its
   `attempt` still matches. If renewal affects no row, the worker cancels its own
   execution.
+- **Clock:** lease acquisition, renewal, and every expiry decision use PostgreSQL's
+  `now()`. Application clocks only drive local timers, so worker or recovery clock
+  skew cannot expire a healthy lease.
+- **Local deadline:** the worker tracks, on a monotonic clock, when its last
+  confirmed lease could expire (measured from *before* the renewal request, minus
+  one heartbeat). If renewals keep failing (for example, the database is
+  unreachable) and that deadline passes, it stops execution and attempts the
+  bounded, fenced cleanup; if cleanup cannot reach the database, recovery fails
+  the run after the lease expires.
 - **Fencing:** cancellation, recovery, and worker cleanup increment `attempt`.
   Any later write by the previous owner raises `StaleDataError` and is discarded;
   the newer terminal state stands.
@@ -33,12 +42,15 @@ queued --claim--> running --success--> completed | insufficient_evidence
 |---|---|
 | Enqueue fails after the run is committed, or the process stops in between | Run stays `queued`; the response is still returned. The recovery sweep re-enqueues it with the run id as ARQ job id after `RESEARCH_REQUEUE_GRACE_SECONDS` (default 60). |
 | Redis unavailable before commit | The cost reservation fails; nothing is persisted and the request errors. |
+| PostgreSQL commit fails after the Redis reservation | The request errors. The reservation is released only after a fresh query confirms the run was not persisted; if the commit actually succeeded, the run is kept and later enqueued by recovery; if persistence cannot be determined, the reservation is kept. |
+| Lease cannot be renewed for the lease period (database unreachable) | The worker stops execution at its local deadline and records the run as failed when possible; otherwise recovery does after expiry. Short outages within the period are tolerated. |
 | Duplicate or late ARQ delivery (redelivery after crash, retry after shutdown) | Claim fails because the run is not `queued`; nothing executes. |
 | Worker crash or hard kill during execution | Lease stops renewing. After expiry, recovery marks the run `failed` with an explanatory error. No automatic re-execution. |
 | Worker shutdown or ARQ job timeout (cancellation) | Bounded (15 s), shielded, fenced write marks the run `failed` as interrupted; if that cannot finish, recovery does it after lease expiry. |
 | User cancels a queued or running run | Database transition first (fences the worker), then cost settlement, then a best-effort ARQ abort. A worker that keeps running loses its lease within one heartbeat and stops. |
 | Completed run delivered again | Claim fails; result unchanged. |
 | Redis data loss (queue) | Queued runs without an ARQ job are re-enqueued. Running jobs continue; leases live in PostgreSQL. |
+| ARQ job hash survives but its queue entry is lost (orphan) | A job counts as live only if it is in the ARQ queue or in progress. Recovery deletes the orphaned hash under `WATCH` (aborted by any concurrent enqueue or pickup) and re-enqueues. Without this, the run would wait until the hash expired (about one day). |
 | ARQ holds a result for a run that was never claimed | Run is failed as stranded and its reservation released. |
 | Several workers run recovery concurrently | Row locks plus fencing let exactly one sweep terminate a run; re-enqueue uses ARQ job-id deduplication. |
 | Identical submissions at the same time | A transaction advisory lock on (caller, mode, effective pipeline version, question) serializes them; the second reuses the in-flight run when the cache policy allows reuse. |
@@ -73,8 +85,12 @@ never treated as zero spend.
   calls are **not** exactly-once: a fenced-out execution may already have spent
   money before it stopped; that spend is covered by the retained reservation.
 - Interrupted runs are not resumed automatically; users retry them.
-- Lease checks compare worker and database clocks; large clock skew (a sizeable
-  fraction of the lease) can cause premature or late recovery.
+- Cross-store crash window: if the process dies after the Redis reservation and
+  before the PostgreSQL commit, the reservation stays counted (no run exists to
+  reconcile it) until its daily or monthly counter expires. This errs toward
+  over-counting spend; no distributed transaction is used.
+- The local deadline assumes the monotonic clock advances normally; a paused
+  process (for example, a suspended VM) is still fenced by the database lease.
 - If Redis loses its daily or monthly counters, budgets restart from zero for
   that period; PostgreSQL keeps per-run reservation diagnostics only.
 - With a single worker (`max_jobs = 1`), a stranded queued run is re-enqueued by

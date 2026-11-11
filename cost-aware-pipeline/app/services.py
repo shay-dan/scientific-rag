@@ -8,7 +8,7 @@ import logging
 import re
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from arq.connections import ArqRedis
 
@@ -21,6 +21,7 @@ from .cost_control import CostGuard
 from .db import session_factory
 from .job_lifecycle import (
     INTERRUPTED_ERROR,
+    LEASE_UNVERIFIABLE_ERROR,
     LeaseKeeper,
     acquire_identity_lock,
     claim_run,
@@ -279,13 +280,46 @@ class ResearchService:
             await session.rollback()
             raise
         session.add(AuditEvent(actor=actor, action="research.started", target_type="research_run", target_id=str(record.id), details={"mode": mode.value}))
-        await session.commit()
+        try:
+            await session.commit()
+        except Exception:
+            await self._compensate_failed_commit(session, record.id)
+            raise
         logger.info("research_queued run_id=%s mode=%s budget=%s", record.id, mode.value, budget.as_dict())
         try:
             await asyncio.wait_for(enqueue_run(self.redis, record), timeout=ENQUEUE_TIMEOUT_SECONDS)
         except Exception:
             logger.warning("research_enqueue_deferred run_id=%s; the recovery sweep will re-enqueue it", record.id, exc_info=True)
         return to_response(record, mode=mode)
+
+    async def _compensate_failed_commit(self, session: AsyncSession, run_id: UUID) -> None:
+        """Release the Redis reservation only when the run is confirmed not persisted.
+
+        A commit error can be ambiguous (the commit may have succeeded before the
+        connection failed). If persistence cannot be confirmed either way, the
+        reservation is kept: over-counting is preferred to under-counting spend.
+        """
+        try:
+            await session.rollback()
+        except Exception:
+            logger.warning("research_commit_rollback_failed run_id=%s", run_id, exc_info=True)
+        try:
+            async with session_factory() as check:
+                persisted = await check.scalar(
+                    select(func.count()).select_from(ResearchRun).where(ResearchRun.id == run_id)
+                )
+        except Exception:
+            logger.warning("research_commit_outcome_unknown run_id=%s; reservation retained", run_id, exc_info=True)
+            return
+        if persisted:
+            logger.warning("research_commit_error_but_persisted run_id=%s; reservation kept, recovery will enqueue", run_id)
+            return
+        guard = getattr(self, "cost_guard", None)
+        if guard is not None:
+            try:
+                await guard.release_research(str(run_id))
+            except Exception:
+                logger.warning("research_reservation_release_failed run_id=%s", run_id, exc_info=True)
 
     async def run_queued(self, run_id: UUID, question: str, mode: ResearchMode, cache_mode: ResearchCacheMode,
                          semantic_verification_mode: str | None = None) -> None:
@@ -323,10 +357,16 @@ class ResearchService:
             except asyncio.CancelledError:
                 task = asyncio.current_task()
                 if lease.lost and task is not None:
-                    # Our own heartbeat cancelled the work after losing the lease;
-                    # the newer owner (cancellation or recovery) holds the run.
+                    # Our own heartbeat cancelled the work. "fenced": a newer owner
+                    # (cancellation or recovery) already holds the run. "unverifiable":
+                    # ownership could not be confirmed in time, so stop and record it
+                    # with the same bounded, fenced cleanup (recovery covers failure).
                     task.uncancel()
-                    logger.warning("research_execution_stopped_after_lease_loss run_id=%s attempt=%s", run_id, attempt)
+                    logger.warning("research_execution_stopped_after_lease_loss run_id=%s attempt=%s reason=%s",
+                                   run_id, attempt, lease.loss_reason)
+                    if lease.loss_reason == "unverifiable":
+                        await self._mark_interrupted(run_id, attempt, error=LEASE_UNVERIFIABLE_ERROR,
+                                                     reason="lease_unverifiable")
                     return
                 await self._mark_interrupted(run_id, attempt)
                 raise
@@ -334,7 +374,8 @@ class ResearchService:
                 # _execute persists the failure. Keep this task from producing an unhandled-task warning.
                 logger.exception("queued_research_task_failed run_id=%s", run_id)
 
-    async def _mark_interrupted(self, run_id: UUID, attempt: int) -> None:
+    async def _mark_interrupted(self, run_id: UUID, attempt: int, *, error: str = INTERRUPTED_ERROR,
+                                reason: str = "worker_interrupted") -> None:
         """Bounded, shielded terminal write after worker cancellation (shutdown or timeout).
 
         If this cannot finish (for example the process is killed), the lease expires
@@ -343,9 +384,9 @@ class ResearchService:
         async def cleanup() -> None:
             async with session_factory() as session:
                 termination = await terminate_run(
-                    session, run_id, status="failed", error=INTERRUPTED_ERROR, actor="system",
+                    session, run_id, status="failed", error=error, actor="system",
                     action="research.interrupted", expected_statuses=("running",), expected_attempt=attempt,
-                    reason="worker_interrupted",
+                    reason=reason,
                 )
                 if termination is not None:
                     await settle_terminated_cost(session, getattr(self, "cost_guard", None), termination)

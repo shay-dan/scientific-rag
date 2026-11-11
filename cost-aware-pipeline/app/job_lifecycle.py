@@ -10,7 +10,10 @@ Rules (see docs/roadmap.md, R2):
   ``StaleDataError`` instead of overwriting the newer state.
 * The executing worker renews its lease every ``research_heartbeat_seconds``. A run
   is treated as abandoned only when its lease has expired, never because of age
-  alone. Runs without a lease (pre-R2 rows and the synchronous API path) are
+  alone. Lease acquisition, renewal, and expiry use the PostgreSQL clock, so
+  application clock skew cannot expire a healthy lease. A worker that cannot
+  confirm a renewal stops its own execution before its last confirmed lease could
+  have expired (monotonic local deadline). Runs without a lease (pre-R2 rows and the synchronous API path) are
   recovered only after the hard execution timeout plus a grace period.
 * Queued runs whose ARQ job is missing (enqueue failure, crash after commit, Redis
   data loss) are re-enqueued with the same job id. Nothing is executed twice:
@@ -33,10 +36,12 @@ import hashlib
 import logging
 import os
 import socket
+import time
 from typing import Any, Callable
 from uuid import UUID
 
-from sqlalchemy import select, text, update
+from redis.exceptions import WatchError
+from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.exc import StaleDataError
 
@@ -57,6 +62,11 @@ UNLEASED_TIMEOUT_ERROR = (
 INTERRUPTED_ERROR = (
     "The research worker was interrupted (shutdown or job timeout) before completion. "
     "Provider usage is unknown, so the cost reservation is retained. Retry the research to run it again."
+)
+LEASE_UNVERIFIABLE_ERROR = (
+    "The research worker could not renew its lease within the lease period (database "
+    "unreachable) and stopped execution. Provider usage is unknown, so the cost reservation "
+    "is retained. Retry the research to run it again."
 )
 STRANDED_ERROR = (
     "The research job could not be delivered to a worker. No research was started and the "
@@ -107,19 +117,24 @@ async def _locked_run(session: AsyncSession, run_id: UUID) -> ResearchRun | None
     )).scalar_one_or_none()
 
 
+async def _database_now(session: AsyncSession) -> datetime:
+    """The authoritative clock for lease decisions."""
+    return await session.scalar(select(func.now()))
+
+
 async def claim_run(session: AsyncSession, run_id: UUID, *, owner: str, lease_seconds: int) -> ResearchRun | None:
     """Atomically move ``queued -> running``. Returns the claimed record or ``None``."""
     record = await _locked_run(session, run_id)
     if record is None or record.status != "queued":
         await session.rollback()
         return None
-    now = utcnow()
+    database_now = await _database_now(session)
     record.attempt = record.attempt + 1
     record.status = "running"
     record.lease_owner = owner
-    record.lease_expires_at = now + timedelta(seconds=lease_seconds)
+    record.lease_expires_at = database_now + timedelta(seconds=lease_seconds)
     metadata = dict(record.model_metadata or {})
-    metadata["execution"] = {"attempt": record.attempt, "claimed_at": now.isoformat(), "worker": owner}
+    metadata["execution"] = {"attempt": record.attempt, "claimed_at": database_now.isoformat(), "worker": owner}
     record.model_metadata = metadata
     try:
         await session.commit()
@@ -139,47 +154,68 @@ async def renew_lease(session_factory: Callable, run_id: UUID, attempt: int, lea
                 ResearchRun.__table__.c.attempt == attempt,
                 ResearchRun.__table__.c.status == "running",
             )
-            .values(lease_expires_at=utcnow() + timedelta(seconds=lease_seconds))
+            .values(lease_expires_at=func.now() + timedelta(seconds=lease_seconds))
         )
         await session.commit()
         return result.rowcount == 1
 
 
 class LeaseKeeper:
-    """Background lease renewal for one claimed run; cancels the owner task if the lease is lost."""
+    """Background lease renewal for one claimed run.
 
-    def __init__(self, session_factory: Callable, run_id: UUID, attempt: int, *, lease_seconds: int,
+    The owner task is cancelled when the lease is definitively lost (renewal
+    matched no row: ``loss_reason == "fenced"``) or when no renewal has been
+    confirmed for long enough that the last confirmed lease may expire
+    (``loss_reason == "unverifiable"``). The local deadline uses a monotonic
+    clock started *before* each successful renewal request, minus one heartbeat
+    as a safety margin, so the worker stops before recovery may take over.
+    """
+
+    def __init__(self, session_factory: Callable, run_id: UUID, attempt: int, *, lease_seconds: float,
                  heartbeat_seconds: float, owner_task: asyncio.Task | None = None) -> None:
         self.session_factory = session_factory
         self.run_id = run_id
         self.attempt = attempt
         self.lease_seconds = lease_seconds
         self.heartbeat_seconds = heartbeat_seconds
+        self.margin_seconds = min(heartbeat_seconds, lease_seconds / 3)
         self.owner_task = owner_task or asyncio.current_task()
         self.lost = False
+        self.loss_reason: str | None = None
+        # The claim committed just before construction; its lease started no later than now.
+        self.valid_until = time.monotonic() + lease_seconds - self.margin_seconds
         self._task: asyncio.Task | None = None
+
+    def _lose(self, reason: str) -> None:
+        self.lost = True
+        self.loss_reason = reason
+        logger.warning("research_lease_lost run_id=%s attempt=%s reason=%s", self.run_id, self.attempt, reason)
+        if self.owner_task is not None and not self.owner_task.done():
+            self.owner_task.cancel()
 
     async def _loop(self) -> None:
         while True:
-            await asyncio.sleep(self.heartbeat_seconds)
+            remaining = self.valid_until - time.monotonic()
+            await asyncio.sleep(max(min(self.heartbeat_seconds, remaining), 0))
+            attempt_started = time.monotonic()
+            timeout = max(min(self.heartbeat_seconds, self.valid_until - attempt_started), 0.001)
             try:
                 renewed = await asyncio.wait_for(
                     renew_lease(self.session_factory, self.run_id, self.attempt, self.lease_seconds),
-                    timeout=self.heartbeat_seconds,
+                    timeout=timeout,
                 )
             except asyncio.CancelledError:
                 raise
             except Exception:
-                # Transient database errors: keep trying. If the lease expires
-                # meanwhile, recovery fences this attempt and the next renewal fails.
                 logger.warning("research_lease_renewal_error run_id=%s attempt=%s", self.run_id, self.attempt, exc_info=True)
+                if time.monotonic() >= self.valid_until:
+                    self._lose("unverifiable")
+                    return
                 continue
             if not renewed:
-                self.lost = True
-                logger.warning("research_lease_lost run_id=%s attempt=%s", self.run_id, self.attempt)
-                if self.owner_task is not None and not self.owner_task.done():
-                    self.owner_task.cancel()
+                self._lose("fenced")
                 return
+            self.valid_until = attempt_started + self.lease_seconds - self.margin_seconds
 
     async def __aenter__(self) -> "LeaseKeeper":
         self._task = asyncio.create_task(self._loop())
@@ -217,8 +253,8 @@ async def terminate_run(
     action: str,
     expected_statuses: tuple[str, ...] = ACTIVE_STATUSES,
     expected_attempt: int | None = None,
-    lease_expired_before: datetime | None = None,
-    created_before_without_lease: datetime | None = None,
+    require_expired_lease: bool = False,
+    unleased_older_than_seconds: float | None = None,
     reason: str,
 ) -> Termination | None:
     """Fenced transition of an active run to a terminal state. ``None`` if preconditions no longer hold."""
@@ -229,12 +265,15 @@ async def terminate_run(
     if expected_attempt is not None and record.attempt != expected_attempt:
         await session.rollback()
         return None
-    if lease_expired_before is not None:
-        if record.lease_expires_at is None or record.lease_expires_at >= lease_expired_before:
+    if require_expired_lease or unleased_older_than_seconds is not None:
+        database_now = await _database_now(session)
+        if require_expired_lease and (record.lease_expires_at is None or record.lease_expires_at >= database_now):
             await session.rollback()
             return None
-    if created_before_without_lease is not None:
-        if record.lease_expires_at is not None or record.created_at >= created_before_without_lease:
+        if unleased_older_than_seconds is not None and (
+            record.lease_expires_at is not None
+            or record.created_at >= database_now - timedelta(seconds=unleased_older_than_seconds)
+        ):
             await session.rollback()
             return None
     previous_status, previous_attempt = record.status, record.attempt
@@ -318,17 +357,53 @@ async def cancel_run(session: AsyncSession, run_id: UUID, *, actor: str, cost_gu
     return termination
 
 
-async def _arq_job_present(redis, job_id: str) -> bool:
+def _queue_name(redis) -> str:
+    from arq.constants import default_queue_name
+
+    return getattr(redis, "default_queue_name", None) or default_queue_name
+
+
+async def _arq_job_active(redis, job_id: str) -> bool:
+    """True when a worker can still pick the job (queued) or is running it (in progress)."""
+    from arq.constants import in_progress_key_prefix
+
+    if await redis.zscore(_queue_name(redis), job_id) is not None:
+        return True
+    return bool(await redis.exists(in_progress_key_prefix + job_id))
+
+
+async def _clear_orphaned_job(redis, job_id: str) -> bool:
+    """Delete a job hash that no worker can ever pick up (no queue entry, not in progress).
+
+    ARQ's ``enqueue_job`` refuses a job id whose hash exists, so an orphaned hash
+    would block re-enqueueing until it expires. The check and delete run under
+    WATCH, so a concurrent enqueue or pickup aborts the delete.
+    """
     from arq.constants import in_progress_key_prefix, job_key_prefix
 
-    return bool(await redis.exists(job_key_prefix + job_id, in_progress_key_prefix + job_id))
+    job_key, in_progress_key, queue = job_key_prefix + job_id, in_progress_key_prefix + job_id, _queue_name(redis)
+    async with redis.pipeline(transaction=True) as pipe:
+        try:
+            await pipe.watch(job_key, in_progress_key, queue)
+            if (await pipe.zscore(queue, job_id) is not None or await pipe.exists(in_progress_key)
+                    or not await pipe.exists(job_key)):
+                await pipe.reset()
+                return False
+            pipe.multi()
+            pipe.delete(job_key)
+            await pipe.execute()
+            return True
+        except WatchError:
+            return False
 
 
 async def _arq_result_only(redis, job_id: str) -> bool:
-    """True when ARQ holds a finished result but no live job for this id."""
-    from arq.constants import result_key_prefix
+    """True when ARQ holds a finished result for this id and no live job."""
+    from arq.constants import job_key_prefix, result_key_prefix
 
-    return bool(await redis.exists(result_key_prefix + job_id)) and not await _arq_job_present(redis, job_id)
+    if not await redis.exists(result_key_prefix + job_id) or await _arq_job_active(redis, job_id):
+        return False
+    return not await redis.exists(job_key_prefix + job_id)
 
 
 def _enqueue_arguments(record: ResearchRun) -> tuple:
@@ -356,12 +431,15 @@ class RecoveryReport:
         return {"expired": self.expired, "unleased": self.unleased, "requeued": self.requeued, "stranded": self.stranded}
 
 
-async def recover_research_runs(session_factory: Callable, redis, cost_guard, settings, *, now: datetime | None = None) -> RecoveryReport:
-    """One idempotent recovery sweep. Safe to run concurrently from several workers."""
-    now = now or utcnow()
+async def recover_research_runs(session_factory: Callable, redis, cost_guard, settings) -> RecoveryReport:
+    """One idempotent recovery sweep. Safe to run concurrently from several workers.
+
+    All time comparisons use the PostgreSQL clock.
+    """
     report = RecoveryReport([], [], [], [])
     hard_limit = max(settings.request_timeout_seconds, settings.deep_research_timeout_seconds) + 900
     async with session_factory() as session:
+        database_now = await _database_now(session)
         rows = (await session.execute(
             select(ResearchRun.id, ResearchRun.status, ResearchRun.attempt, ResearchRun.lease_expires_at, ResearchRun.created_at)
             .where(ResearchRun.status.in_(ACTIVE_STATUSES))
@@ -369,34 +447,37 @@ async def recover_research_runs(session_factory: Callable, redis, cost_guard, se
 
     for run_id, status, attempt, lease_expires_at, created_at in rows:
         try:
-            if status == "running" and lease_expires_at is not None and lease_expires_at < now:
+            if status == "running" and lease_expires_at is not None and lease_expires_at < database_now:
                 async with session_factory() as session:
                     termination = await terminate_run(
                         session, run_id, status="failed", error=LEASE_EXPIRED_ERROR, actor="system",
                         action="research.recovered", expected_statuses=("running",), expected_attempt=attempt,
-                        lease_expired_before=now, reason="lease_expired",
+                        require_expired_lease=True, reason="lease_expired",
                     )
                     if termination is not None:
                         await settle_terminated_cost(session, cost_guard, termination)
                         report.expired.append(str(run_id))
-            elif status == "running" and lease_expires_at is None and created_at < now - timedelta(seconds=hard_limit):
+            elif (status == "running" and lease_expires_at is None
+                  and created_at < database_now - timedelta(seconds=hard_limit)):
                 async with session_factory() as session:
                     termination = await terminate_run(
                         session, run_id, status="failed", error=UNLEASED_TIMEOUT_ERROR, actor="system",
                         action="research.recovered", expected_statuses=("running",), expected_attempt=attempt,
-                        created_before_without_lease=now - timedelta(seconds=hard_limit), reason="unleased_timeout",
+                        unleased_older_than_seconds=hard_limit, reason="unleased_timeout",
                     )
                     if termination is not None:
                         await settle_terminated_cost(session, cost_guard, termination)
                         report.unleased.append(str(run_id))
             elif (status == "queued" and attempt == 0 and redis is not None
-                  and created_at < now - timedelta(seconds=settings.research_requeue_grace_seconds)):
-                if await _arq_job_present(redis, str(run_id)):
+                  and created_at < database_now - timedelta(seconds=settings.research_requeue_grace_seconds)):
+                if await _arq_job_active(redis, str(run_id)):
                     continue
                 async with session_factory() as session:
                     record = await session.get(ResearchRun, run_id)
                     if record is None or record.status != "queued" or record.attempt != 0:
                         continue
+                    if await _clear_orphaned_job(redis, str(run_id)):
+                        logger.warning("research_orphaned_job_cleared run_id=%s", run_id)
                     job = await enqueue_run(redis, record)
                     if job is not None:
                         session.add(AuditEvent(actor="system", action="research.requeued", target_type="research_run",
