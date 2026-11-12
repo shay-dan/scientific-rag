@@ -220,7 +220,9 @@ class SplitLeakageTests(unittest.TestCase):
         development = build_evidence_pack(BENCHMARK, split="development")
         validation = build_evidence_pack(BENCHMARK, split="validation")
         self.assertEqual([e["evidence_id"] for e in development["evidence"]], ["E1", "E2", "E3", "E4", "E5", "E6", "E7"])
-        self.assertEqual([e["evidence_id"] for e in validation["evidence"]], ["E4", "E5", "E8"])  # E4/E5 unlabeled distractors
+        # E4/E5 belong to P3, which is labeled (grade 0) for development question q1, so the
+        # validation pack excludes them (paper ownership; owner review of PR #13).
+        self.assertEqual([e["evidence_id"] for e in validation["evidence"]], ["E8"])
         self.assertNotIn("E8", {e["evidence_id"] for e in development["evidence"]})
 
 
@@ -344,7 +346,9 @@ class HoldoutTests(unittest.TestCase):
         for record_type, name in (("question", "questions.jsonl"), ("paper", "papers.jsonl"),
                                   ("evidence", "evidence.jsonl"), ("claim", "claims.jsonl"),
                                   ("relevance", "relevance.jsonl"), ("label_mapping", "label_mappings.jsonl")):
-            records = [r for r in bench.records[record_type] if record_type != "claim" or r["question_id"] != "q5"]
+            records = [r for r in bench.records[record_type]
+                       if not (record_type in ("claim", "relevance") and r["question_id"] == "q5")
+                       and not (record_type == "evidence" and r["evidence_id"] == "E8")]
             (holdout / name).write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
             files.append({"path": name, "record_type": record_type, "format": "jsonl", "sha256": file_sha256(holdout / name)})
         manifest = {**bench.manifest, "files": files, "splits": ["holdout"]}
@@ -385,10 +389,13 @@ class HoldoutTests(unittest.TestCase):
                               evaluate=lambda b: {}, log_path=Path(tempfile.gettempdir()) / "unused.jsonl",
                               evaluator="x", run_label="x")
 
-    def test_aggregate_only_strips_per_item_data(self) -> None:
-        stripped = aggregate_only({"per_question": {"q1": {}}, "population": {"without_relevant_labels": ["q3"], "questions": 4},
-                                   "enforcement_simulation": {"per_answer": [1], "answers": 1}})
-        self.assertEqual(stripped, {"population": {"questions": 4}, "enforcement_simulation": {"answers": 1}})
+    def test_aggregate_only_keeps_only_allowlisted_fields(self) -> None:
+        stripped = aggregate_only({"schema": "scientific-rag-retrieval-report/v1", "per_question": {"q1": {}},
+                                   "population": {"without_relevant_labels": ["q3"], "questions": 4},
+                                   "warnings": ["free text"]})
+        self.assertEqual(stripped, {"schema": "scientific-rag-retrieval-report/v1", "population": {"questions": 4}})
+        self.assertEqual(aggregate_only({"schema": "something-else/v1", "secret": "x"}),
+                         {"schema": "something-else/v1", "note": "unknown report schema"})
 
     def test_repository_contains_no_holdout_questions(self) -> None:
         for path in (project_root / "tests" / "fixtures").rglob("*.jsonl"):

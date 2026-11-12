@@ -17,6 +17,7 @@ from collections import Counter
 
 from ..evaluation_report import bootstrap_mean_interval, canonical_json, sha256_hex, wilson_interval
 from .contracts import Benchmark, records_hash
+from .splits import paper_families, paper_family_owners
 
 PACK_SCHEMA = "scientific-rag-evidence-pack/v1"
 RUN_SCHEMA = "scientific-rag-retrieval-run/v1"
@@ -30,10 +31,12 @@ _TOKEN = re.compile(r"[a-z0-9]+")
 def build_evidence_pack(benchmark: Benchmark, *, split: str, pack_id: str | None = None) -> dict:
     """Freeze one split's retrieval corpus into a portable pack.
 
-    The pack holds every evidence segment except those tied to another split's
-    questions (by association, claim or relevance label): unassociated segments stay
-    in as distractors, so retrieval is not artificially easy. Papers are those of the
-    included segments plus papers labeled for this split's questions.
+    Excluded: segments tied to another split's questions (association, claim or
+    passage label), and every segment of a paper whose family is owned by another
+    split (labeled, cited or associated there), even unlabeled ones. Kept: the
+    split's own material and genuine distractors (families no question owns), so
+    retrieval is not artificially easy. A family owned by several splits is leakage
+    (reported by ``check_splits``) and is excluded from every pack it could leak into.
     """
     questions_in = {str(q["question_id"]) for q in benchmark.of("question") if q.get("split") == split}
     other = {str(q["question_id"]) for q in benchmark.of("question") if q.get("split") != split}
@@ -47,11 +50,19 @@ def build_evidence_pack(benchmark: Benchmark, *, split: str, pack_id: str | None
     for relevance in benchmark.of("relevance"):
         if str(relevance.get("question_id")) in other and relevance.get("evidence_id"):
             tied_elsewhere.add(str(relevance["evidence_id"]))
-    evidence = sorted((dict(e) for e in benchmark.of("evidence") if str(e["evidence_id"]) not in tied_elsewhere),
+    # Paper/family ownership: a paper (or any paper of its family) labeled, cited or associated
+    # with another split's questions is excluded with all its segments, even unlabeled ones.
+    family = paper_families(benchmark)
+    owners = paper_family_owners(benchmark)
+    foreign_families = {fam for fam, splits in owners.items() if splits - {split}}
+    evidence = sorted((dict(e) for e in benchmark.of("evidence")
+                       if str(e["evidence_id"]) not in tied_elsewhere
+                       and family.get(str(e["paper_id"]), str(e["paper_id"])) not in foreign_families),
                       key=lambda e: str(e["evidence_id"]))
     paper_ids = {str(e["paper_id"]) for e in evidence} | {
         str(r["paper_id"]) for r in benchmark.of("relevance") if str(r.get("question_id")) in questions_in}
-    papers = sorted((dict(p) for p in benchmark.of("paper") if str(p["paper_id"]) in paper_ids),
+    papers = sorted((dict(p) for p in benchmark.of("paper") if str(p["paper_id"]) in paper_ids
+                     and family.get(str(p["paper_id"]), str(p["paper_id"])) not in foreign_families),
                     key=lambda p: str(p["paper_id"]))
     questions = sorted(({"question_id": str(q["question_id"]), "text": q["text"]}
                         for q in benchmark.of("question") if str(q["question_id"]) in questions_in),
@@ -111,6 +122,21 @@ def lexical_baseline_run(pack: dict, *, top_k: int = 10, k1: float = 1.2, b: flo
             "results": results}
 
 
+class PackIdentityError(ValueError):
+    """The run was not verifiably produced against the evidence pack being scored."""
+
+
+def verify_pack_identity(pack: dict, run: dict) -> None:
+    identity = run.get("evidence_pack")
+    if not isinstance(identity, dict) or not identity.get("pack_id") or not identity.get("content_hash"):
+        raise PackIdentityError("retrieval run has no evidence_pack identity (pack_id and content_hash); "
+                                "its scores would not be comparable")
+    if identity["pack_id"] != pack["pack_id"] or identity["content_hash"] != pack["content_hash"]:
+        raise PackIdentityError(f"retrieval run was produced against pack {identity['pack_id']!r} "
+                                f"({str(identity['content_hash'])[:12]}…), not {pack['pack_id']!r} "
+                                f"({pack['content_hash'][:12]}…)")
+
+
 # --- evaluation ---------------------------------------------------------------------------------
 def _round(value: float | None) -> float | None:
     return None if value is None else round(value, 4)
@@ -160,6 +186,8 @@ def evaluate_retrieval(benchmark: Benchmark, pack: dict, run: dict, *, ks: tuple
                               top K papers / ideal DCG from the labeled grades;
       passage Recall/Precision@K use evidence-level relevance labels (grade >= 1) and
                               are averaged over questions that have passage labels.
+    The run must carry ``evidence_pack`` {pack_id, content_hash} equal to the pack's;
+    otherwise ``PackIdentityError`` is raised and nothing is scored.
     Results that are missing, failed or duplicated are listed. Two variants:
       ``completed``: only questions with a valid ``ok`` result;
       ``all_questions``: missing/failed/duplicate results count as empty rankings.
@@ -167,6 +195,7 @@ def evaluate_retrieval(benchmark: Benchmark, pack: dict, run: dict, *, ks: tuple
     """
     if run.get("schema") != RUN_SCHEMA:
         raise ValueError(f"retrieval run schema must be {RUN_SCHEMA}")
+    verify_pack_identity(pack, run)   # scores are only comparable on the exact corpus the run used
     split = pack["split"]
     paper_of = pack_paper_of(pack)
     questions = sorted(str(q["question_id"]) for q in pack["questions"])
@@ -244,8 +273,6 @@ def evaluate_retrieval(benchmark: Benchmark, pack: dict, run: dict, *, ks: tuple
                 "evidence supports any claim or suffices to answer the question."]
     if len(evaluable) < 30:
         warnings.append("Fewer than 30 evaluable questions: intervals are wide and differences are inconclusive.")
-    if run.get("evidence_pack", {}).get("content_hash") not in (None, pack["content_hash"]):
-        warnings.append("The run was produced against a different evidence pack (content hash mismatch).")
     if unknown_evidence or unknown_questions:
         warnings.append("Some ranked evidence IDs or result question IDs are not in the pack; they were ignored.")
     report = {
@@ -253,7 +280,7 @@ def evaluate_retrieval(benchmark: Benchmark, pack: dict, run: dict, *, ks: tuple
         "split": split,
         "provenance": {"benchmark_id": benchmark.manifest.get("benchmark_id"),
                        "benchmark_version": benchmark.manifest.get("version"),
-                       "pack_id": pack["pack_id"], "pack_hash": pack["content_hash"],
+                       "pack_id": pack["pack_id"], "pack_hash": pack["content_hash"], "pack_identity": "verified",
                        "run_id": run.get("run_id"), "system": run.get("system"),
                        "run_hash": sha256_hex(sorted(canonical_json(r) for r in run.get("results") or [])),
                        "seed": seed, "ks": list(ks)},

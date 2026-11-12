@@ -524,6 +524,14 @@ uncertainty. Expansion is a separate decision.
   `.gitignore` excludes holdout paths.
 - **Fixture:** synthetic (`tests/fixtures/benchmark_r6a`), with hand-calculated
   retrieval and discovery expectations; not a benchmark.
+- **Review corrections (owner review of PR #13):** reproduced first (`bdcb108`), then
+  fixed:
+  - packs exclude every segment of a paper family owned by another split, keeping
+    genuine distractors;
+  - retrieval scoring requires a matching `pack_id` and `content_hash`
+    (`PackIdentityError` otherwise);
+  - the owner holdout path fully validates before scoring and builds its output from
+    an allowlist.
 - **Remaining before the R6 pilot:**
   - R6B adapters for the independent benchmark release (owner authorization; no access
     in R6A);

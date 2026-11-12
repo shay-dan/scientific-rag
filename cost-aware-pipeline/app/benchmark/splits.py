@@ -73,29 +73,7 @@ def check_splits(benchmark: Benchmark, *, threshold: float = NEAR_DUPLICATE_THRE
         issues.append(Issue("error", "near_duplicate_leakage", "question", f"{left}~{right}",
                             f"near-duplicate questions across splits (similarity {score})"))
 
-    papers = {str(p["paper_id"]): p for p in benchmark.of("paper") if isinstance(p, dict) and p.get("paper_id")}
-    family = {pid: str(paper.get("family_id") or pid) for pid, paper in papers.items()}
-    uses: dict[str, set[str]] = {}
-
-    def use(paper_id, question_id) -> None:
-        split = single.get(str(question_id))
-        if split:
-            uses.setdefault(family.get(str(paper_id), str(paper_id)), set()).add(split)
-
-    evidence = {str(e["evidence_id"]): e for e in benchmark.of("evidence") if isinstance(e, dict) and e.get("evidence_id")}
-    for relevance in benchmark.of("relevance"):
-        if isinstance(relevance, dict):
-            use(relevance.get("paper_id"), relevance.get("question_id"))
-    for item in evidence.values():
-        for qid in item.get("question_ids") or []:
-            use(item.get("paper_id"), qid)
-    for claim in benchmark.of("claim"):
-        if not isinstance(claim, dict):
-            continue
-        for eid in claim.get("evidence_ids") or []:
-            if str(eid) in evidence:
-                use(evidence[str(eid)].get("paper_id"), claim.get("question_id"))
-    for paper_family, splits in sorted(uses.items()):
+    for paper_family, splits in sorted(paper_family_owners(benchmark).items()):
         if len(splits) > 1:
             issues.append(Issue("error", "split_leakage_paper", "paper", paper_family,
                                 f"paper family used by questions in splits {sorted(splits)}"))
@@ -107,6 +85,48 @@ def check_splits(benchmark: Benchmark, *, threshold: float = NEAR_DUPLICATE_THRE
         issues.append(Issue("error", "near_duplicate_leakage", "claim", f"{left}~{right}",
                             f"near-duplicate claims across splits (similarity {score})"))
     return sorted(set(issues))
+
+
+def paper_families(benchmark: Benchmark) -> dict[str, str]:
+    """paper_id -> family_id (a paper without a family is its own family)."""
+    return {str(p["paper_id"]): str(p.get("family_id") or p["paper_id"])
+            for p in benchmark.of("paper") if isinstance(p, dict) and p.get("paper_id")}
+
+
+def paper_family_owners(benchmark: Benchmark) -> dict[str, set[str]]:
+    """family_id -> splits whose questions label, cite or are associated with any paper in it.
+
+    A paper is owned through relevance labels (paper- or passage-level), evidence
+    question associations, and claims citing its evidence. Unowned families are
+    absent (they are genuine distractors).
+    """
+    split_of: dict[str, set[str]] = {}
+    for question in benchmark.of("question"):
+        if isinstance(question, dict) and question.get("question_id"):
+            split_of.setdefault(str(question["question_id"]), set()).add(str(question.get("split")))
+    single = {qid: next(iter(splits)) for qid, splits in split_of.items() if len(splits) == 1}
+    family = paper_families(benchmark)
+    owners: dict[str, set[str]] = {}
+
+    def own(paper_id, question_id) -> None:
+        split = single.get(str(question_id))
+        if split:
+            owners.setdefault(family.get(str(paper_id), str(paper_id)), set()).add(split)
+
+    evidence = {str(e["evidence_id"]): e for e in benchmark.of("evidence") if isinstance(e, dict) and e.get("evidence_id")}
+    for relevance in benchmark.of("relevance"):
+        if isinstance(relevance, dict):
+            own(relevance.get("paper_id"), relevance.get("question_id"))
+    for item in evidence.values():
+        for qid in item.get("question_ids") or []:
+            own(item.get("paper_id"), qid)
+    for claim in benchmark.of("claim"):
+        if not isinstance(claim, dict):
+            continue
+        for eid in claim.get("evidence_ids") or []:
+            if str(eid) in evidence:
+                own(evidence[str(eid)].get("paper_id"), claim.get("question_id"))
+    return owners
 
 
 def split_summary(benchmark: Benchmark) -> dict:
