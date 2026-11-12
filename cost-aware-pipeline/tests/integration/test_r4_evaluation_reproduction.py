@@ -9,6 +9,7 @@ judge, so the run mixes two evaluator engines.
 Requires RUN_INTEGRATION_TESTS=1 and DATABASE_URL_TEST (migrated).
 """
 import asyncio
+import json
 import os
 import unittest
 from datetime import datetime, timezone
@@ -187,6 +188,27 @@ class R4EvaluationWorkerReproductionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("prompt_versions", provenance["judge"])
         self.assertEqual(run.status, "completed_with_errors")
 
+
+    async def test_api_responses_keep_their_contract_and_add_the_report(self):
+        await self._run_worker()
+        from app import main as api
+
+        admin = SimpleNamespace(role="admin", name="admin")
+        with patch.object(api, "require_api_key", return_value=admin), patch.object(api, "_ui_admin", return_value=admin):
+            async with self.sessions() as session:
+                body = await api.get_evaluation_run(SimpleNamespace(), str(self.run.id), session)
+            async with self.sessions() as session:
+                exported = json.loads((await api.export_evaluation_run(SimpleNamespace(), str(self.run.id), session)).body)
+        for key in ("id", "status", "mode", "case_count", "scored_count", "averages", "context_precision_views", "results"):
+            self.assertIn(key, body)  # pre-R4 keys unchanged
+        self.assertEqual(body["case_count"], 10)
+        self.assertEqual(body["scored_count"], 5)
+        self.assertEqual(set(body["averages"]), {"faithfulness", "answer_relevancy", "context_precision", "context_recall"})
+        self.assertEqual(sum(body["report"]["population"]["outcomes"].values()), 10)
+        self.assertEqual(sorted({item["outcome"] for item in body["results"]}),
+                         ["insufficient_evidence", "judged", "research_failed", "research_timeout"])
+        self.assertEqual(len(exported["report"]["cases"]), 10)
+        self.assertEqual(exported["failed_count"], 5)  # legacy field: unjudged cases
 
 if __name__ == "__main__":
     unittest.main()

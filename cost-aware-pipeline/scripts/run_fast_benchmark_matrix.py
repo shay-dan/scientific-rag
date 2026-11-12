@@ -23,6 +23,7 @@ from sqlalchemy import select
 project_root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(project_root))
 
+from app.evaluation_report import infer_case_provenance
 from app.config import get_settings
 from app.cost_control import CostGuard
 from app.db import close_database, session_factory
@@ -91,7 +92,7 @@ async def create_and_queue(payload: dict, repetition: int, redis) -> str:
                 reference_answer=case["reference_answer"],
                 reference_context=case.get("reference_context"),
                 reference_claims=case.get("reference_claims", []),
-                provenance="human",
+                provenance=infer_case_provenance(case, payload),
             )
             for case in payload["cases"]
         ])

@@ -57,6 +57,7 @@ class EvaluationModelTests(unittest.TestCase):
                 },
             },
             {
+                "engine": "ragas",
                 "context_precision": 0.2,
                 "retrieval_diagnostics": {
                     "strict_ranked_precision": 0.5,
