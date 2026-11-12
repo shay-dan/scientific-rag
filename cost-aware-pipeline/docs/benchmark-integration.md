@@ -90,9 +90,14 @@ model-generated and unreviewed labels stay provisional.
 - **Paper level:** a paper, or its whole `family_id`, may be labeled, cited or associated
   only with questions of one split.
 - **Claim level:** near-duplicate claims across splits are refused.
-- **Evidence packs:** a pack contains every segment except those tied to another split's
-  questions. Unlabeled distractors may appear in several packs; labeled material never
-  crosses splits.
+- **Evidence packs:** a paper family is *owned* by a split when any of its papers is
+  labeled, cited or associated with that split's questions. A pack excludes:
+  - every segment tied to another split's questions;
+  - **every segment of a family owned by another split, including unlabeled segments**.
+
+  Genuine distractors (families no question owns) may appear in several packs. A family
+  owned by several splits is leakage: it is reported, and it is excluded from every pack
+  it could leak into.
 
 ## Evidence packs — `scientific-rag-evidence-pack/v1`
 
@@ -121,6 +126,11 @@ production retriever) or be imported from any system.
 | nDCG@K | Graded gain 2^grade − 1 with a log₂ discount, divided by the ideal DCG from the labels. |
 | Success@K | The question has ≥ 1 relevant paper in the top K (Wilson CI). |
 | Passage Recall/Precision@K | Same definitions with passage-level labels, over questions that have them. |
+
+**Pack identity is enforced.** A run must carry `evidence_pack` {`pack_id`,
+`content_hash`} equal to the pack being scored. A missing, mismatched or
+other-corpus identity raises `PackIdentityError` and nothing is scored. Reports record
+`pack_identity: verified`.
 
 How questions and results are counted:
 
@@ -184,12 +194,22 @@ The holdout never enters the repository or an implementation agent's workspace:
    machine holding the holdout:
    - It refuses a holdout directory inside the repository.
    - It verifies the commitment before evaluating.
+   - It runs **full validation** before scoring: contracts, references, label mappings,
+     split leakage, and only-holdout questions. On any error it refuses, reporting only
+     issue codes and counts, and logs nothing.
    - It evaluates a verifier predictions file or a retrieval run produced by the system
      under test.
-3. **Output and logging.** The script writes **aggregate metrics only**: no question
-   text, claim text, labels, per-question or per-answer rows. It appends a log entry
-   for every use, recording the time, evaluator, run label, commitment, benchmark
-   version, git provenance and summary hash.
+3. **Output and logging.** The script writes **aggregate metrics only**, built from an
+   explicit **allowlist** for each report schema:
+   - It keeps counts, rates, intervals, means, class and safety metrics, coverage,
+     simulation totals, identifiers and hashes.
+   - Every other field is dropped, as is any string value that isn't a short
+     identifier, wherever it appears. A new per-item field added to a report therefore
+     cannot leak.
+   - Unknown report schemas yield only their schema name.
+
+   It appends a log entry for every scored use, recording the time, evaluator, run
+   label, commitment, benchmark version, git provenance and summary hash.
 
 `.gitignore` excludes common holdout paths, and a test checks that no repository fixture
 contains holdout questions. Implementation agents never run the owner script or
