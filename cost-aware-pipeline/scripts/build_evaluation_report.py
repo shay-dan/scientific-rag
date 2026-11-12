@@ -37,6 +37,10 @@ def load_records(payload: dict) -> tuple[dict, list[dict]]:
                 case_provenance=None, status=str(item.get("status")), judge_scores=scores, error=item.get("error")))
     provenance = report.get("provenance") or {"legacy_run": True, "evaluation_run_id": payload.get("id"),
                                                "mode": payload.get("mode")}
+    expected = (report.get("population") or {}).get("total_cases")
+    if expected is not None and expected != len(records):
+        raise SystemExit(f"Export has {len(records)} case records but the run population is {expected}; "
+                         "use the UI export, which includes every dataset case.")
     return provenance, list(records)
 
 

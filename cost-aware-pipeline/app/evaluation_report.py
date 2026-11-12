@@ -24,7 +24,9 @@ import random
 import re
 from typing import Any, Iterable
 
-REPORT_SCHEMA = "scientific-rag-evaluation-report/v1"
+# v2: outcomes not_executed and research_interrupted (population is the full dataset,
+# not only cases with result rows); judge cost completeness statuses; git SHA source.
+REPORT_SCHEMA = "scientific-rag-evaluation-report/v2"
 CASE_RECORD_SCHEMA = "scientific-rag-evaluation-case/v1"
 QUALITY_METRICS = ("faithfulness", "answer_relevancy", "context_precision", "context_recall")
 BOOTSTRAP_RESAMPLES = 2000
@@ -44,12 +46,15 @@ OUTCOMES = (
     "judge_timeout",             # the last evaluator engine timed out
     "invalid_judge_output",      # the last evaluator engine returned invalid output
     "missing_assessment",        # answered but never assessed (e.g. interrupted run)
+    "research_interrupted",      # research started but never finished (worker interrupted)
+    "not_executed",              # never started (run interrupted or stopped before this case)
 )
 ANSWERED = ("judged", "judge_failed", "judge_timeout", "invalid_judge_output", "missing_assessment")
 ABSTAINED = ("insufficient_evidence",)
 ACQUISITION_FAILURES = ("acquisition_unavailable", "screening_failed")
 RESEARCH_FAILURES = ("research_failed", "research_timeout")
 JUDGE_FAILURES = ("judge_failed", "judge_timeout", "invalid_judge_output", "missing_assessment")
+NOT_COMPLETED = ("research_interrupted", "not_executed")
 
 # Case provenance. Only explicitly declared values are trusted.
 CASE_PROVENANCE = ("human_reviewed", "human_authored", "synthetic", "model_generated", "unspecified")
@@ -237,14 +242,22 @@ def legacy_case_record(*, case_id: str, case_hash: str, case_provenance: str | N
     judge_scores = judge_scores or {}
     if isinstance(judge_scores.get("case_record"), dict):
         return judge_scores["case_record"]
+    # "completed" = research answered, judging never recorded; "running" = research never finished.
     category = {"judged": "judged", "insufficient_evidence": "insufficient_evidence", "failed": "research_failed",
-                "judge_failed": "judge_failed"}.get(status, "missing_assessment")
+                "judge_failed": "judge_failed", "completed": "missing_assessment", "queued": "not_executed",
+                }.get(status, "research_interrupted")
     engine = str(judge_scores.get("engine") or "unknown")
     judge = {"engine": engine, "model": judge_scores.get("judge_usage", {}).get("judge", {}).get("model"),
              "rubric_version": "pre-r4-unversioned"} if category == "judged" else {}
     return build_case_record(case_id=case_id, case_hash=case_hash, case_provenance=case_provenance,
                              category=category, stage=None, error=error, judge=judge,
                              raw_scores=judge_scores, inferred=True)
+
+
+def not_executed_record(*, case_id: str, case_hash: str, case_provenance: str | None) -> dict:
+    """Record for a dataset case that has no result row: it was never started."""
+    return build_case_record(case_id=case_id, case_hash=case_hash, case_provenance=case_provenance,
+                             category="not_executed", stage=None)
 
 
 # --- statistics ----------------------------------------------------------------------------------
@@ -308,6 +321,7 @@ def build_evaluation_report(provenance: dict, records: list[dict], *, seed: int 
         "acquisition_failures": group_count(ACQUISITION_FAILURES),
         "research_failures": group_count(RESEARCH_FAILURES),
         "judge_failures": group_count(JUDGE_FAILURES),
+        "not_completed": group_count(NOT_COMPLETED),
         "inferred_from_legacy": sum(bool(record["outcome"].get("inferred_from_legacy")) for record in ordered),
     }
     completion = {
@@ -317,6 +331,7 @@ def build_evaluation_report(provenance: dict, records: list[dict], *, seed: int 
         "research_failure_rate": _rate(population["research_failures"], total),
         "judge_coverage_of_answered": _rate(counts["judged"], answered),
         "judged_rate": _rate(counts["judged"], total),
+        "not_completed_rate": _rate(population["not_completed"], total),
     }
 
     groups: dict[tuple[str, str, str], list[dict]] = {}
@@ -357,6 +372,11 @@ def build_evaluation_report(provenance: dict, records: list[dict], *, seed: int 
                         "its interval is wide and differences are inconclusive.")
     if population["inferred_from_legacy"]:
         warnings.append("Some outcomes were inferred from pre-R4 result statuses.")
+    if population["not_completed"]:
+        warnings.append(f"{population['not_completed']} case(s) were never executed or were interrupted; "
+                        "the run is incomplete and they carry no outcome beyond that.")
+    if str(provenance.get("git_sha") or "unknown") == "unknown":
+        warnings.append("Git SHA unknown: reproducible code attribution is unavailable for this run.")
     unspecified = sum(record.get("case_provenance") in {"unspecified", "legacy_human_unverified"} for record in ordered)
     if unspecified:
         warnings.append(f"{unspecified} case(s) have unspecified or unverified provenance; they are not gold labels.")
@@ -407,9 +427,11 @@ def _count(values: Iterable[str]) -> dict[str, int]:
 def _cost_summary(records: list[dict], provenance: dict) -> dict:
     research_known, research_complete, research_missing = 0.0, 0, 0
     judge_costs: dict[str, float] = {}
+    judge_lower_bounds: dict[str, float] = {}
+    judge_status_counts: dict[str, int] = {}
     judge_unknown = 0
     provider_failure_totals: dict[str, int] = {}
-    judge_attempts = judge_failures = 0
+    judge_attempts = judge_failures = judge_uncertain = 0
     for record in records:
         research = record.get("research") or {}
         if research.get("cost_usd") is not None:
@@ -423,22 +445,35 @@ def _cost_summary(records: list[dict], provenance: dict) -> dict:
             judge_summary = (usage or {}).get("judge") or {}
             judge_attempts += int(judge_summary.get("attempts") or 0)
             judge_failures += int(judge_summary.get("failures") or 0)
-            cost = (usage or {}).get("total_cost_usd")
-            if cost is None:
-                judge_unknown += 1
+            judge_uncertain += int(judge_summary.get("uncertain_calls") or 0)
+            # Usage summaries written before the R4 review carry no completeness status;
+            # their usage_actual flag was unreliable, so their cost is unverified.
+            status = str(judge_summary.get("cost_status") or "unverified_legacy")
+            judge_status_counts[status] = judge_status_counts.get(status, 0) + 1
+            if status in {"complete", "no_calls"} and judge_summary.get("cost_usd") is not None:
+                judge_costs[engine_name] = round(judge_costs.get(engine_name, 0.0) + float(judge_summary["cost_usd"]), 8)
             else:
-                judge_costs[engine_name] = round(judge_costs.get(engine_name, 0.0) + float(cost), 8)
+                judge_unknown += 1
+                lower = judge_summary.get("known_cost_lower_bound_usd")
+                if lower is not None:
+                    judge_lower_bounds[engine_name] = round(judge_lower_bounds.get(engine_name, 0.0) + float(lower), 8)
     return {
         "research_cost_known_usd": round(research_known, 8),
         "research_cases_with_complete_cost": research_complete,
         "research_cases_without_cost": research_missing,
+        # Judge costs: confirmed only where every call reported usage.
         "judge_cost_known_usd_by_engine": dict(sorted(judge_costs.items())),
+        "judge_cost_lower_bound_usd_by_engine": dict(sorted(judge_lower_bounds.items())),
         "judge_usage_records_without_cost": judge_unknown,
+        "judge_cost_status_counts": dict(sorted(judge_status_counts.items())),
+        "judge_cost_complete": judge_unknown == 0,
         "judge_attempts": judge_attempts,
         "judge_failures": judge_failures,
+        "judge_uncertain_calls": judge_uncertain,
         "research_provider_failures": dict(sorted(provider_failure_totals.items())),
         "reservation": provenance.get("cost_reservation"),
-        "note": "Known costs are lower bounds when any usage record lacks cost; reservations are budgets, not charges.",
+        "note": "Missing usage is never treated as zero cost. Unconfirmed judge costs are reported as lower "
+                "bounds; research costs are lower bounds unless complete; reservations are budgets, not charges.",
     }
 
 
@@ -502,9 +537,11 @@ def render_markdown(report: dict) -> str:
     lines += ["## Costs and provider failures", "",
               f"- Research cost known: ${costs['research_cost_known_usd']:.6f} "
               f"({costs['research_cases_with_complete_cost']} complete, {costs['research_cases_without_cost']} without cost)",
-              f"- Judge cost known by engine: {', '.join(f'{k}=${v:.6f}' for k, v in costs['judge_cost_known_usd_by_engine'].items()) or '—'}"
-              f" ({costs['judge_usage_records_without_cost']} usage records without cost)",
-              f"- Judge attempts / failures: {costs['judge_attempts']} / {costs['judge_failures']}",
+              f"- Judge cost confirmed by engine: {', '.join(f'{k}=${v:.6f}' for k, v in costs['judge_cost_known_usd_by_engine'].items()) or '—'}"
+              f" ({costs['judge_usage_records_without_cost']} usage records without confirmed cost; lower bounds: "
+              f"{', '.join(f'{k}≥${v:.6f}' for k, v in costs['judge_cost_lower_bound_usd_by_engine'].items()) or '—'})",
+              f"- Judge cost status counts: {', '.join(f'{k}={v}' for k, v in costs['judge_cost_status_counts'].items()) or '—'}",
+              f"- Judge attempts / failures / uncertain: {costs['judge_attempts']} / {costs['judge_failures']} / {costs['judge_uncertain_calls']}",
               f"- Research provider failures: {', '.join(f'{k}={v}' for k, v in costs['research_provider_failures'].items()) or 'none'}",
               f"- {costs['note']}", "", "## Warnings", ""]
     lines += [f"- {warning}" for warning in report["warnings"]] or ["- None."]
@@ -541,34 +578,47 @@ def render_csv(records: list[dict]) -> str:
 
 
 # --- provenance ---------------------------------------------------------------------------------
-def resolve_git_sha(env: dict | None = None, repo_root: str | None = None) -> str:
-    """Commit of the running code: build-time env var, CI env var, or the local .git."""
+def resolve_git_provenance(env: dict | None = None, repo_root: str | None = None) -> dict:
+    """Commit of the running code and where it came from; never guessed.
+
+    Sources, in order: ``SCIENTIFIC_RAG_GIT_SHA`` (image build argument ``GIT_SHA``),
+    then the local ``.git`` checkout. ``GITHUB_SHA`` is deliberately not used: in CI it
+    can name a different commit (for example a pull request's merge ref) than the code
+    actually built. If nothing is available the SHA stays ``unknown``.
+    """
     import os
     from pathlib import Path
 
     env = os.environ if env is None else env
-    for name in ("SCIENTIFIC_RAG_GIT_SHA", "GIT_SHA", "GITHUB_SHA"):
-        value = str(env.get(name) or "").strip()
-        if re.fullmatch(r"[0-9a-f]{7,40}", value):
-            return value
+    value = str(env.get("SCIENTIFIC_RAG_GIT_SHA") or "").strip().lower()
+    if re.fullmatch(r"[0-9a-f]{40}", value):
+        return {"sha": value, "source": "build_arg"}
     root = Path(repo_root) if repo_root else Path(__file__).resolve().parents[2]
     try:
         head = (root / ".git" / "HEAD").read_text(encoding="utf-8").strip()
+        sha = None
         if head.startswith("ref: "):
             ref = head[5:]
             ref_file = root / ".git" / ref
             if ref_file.exists():
-                return ref_file.read_text(encoding="utf-8").strip()
-            packed = root / ".git" / "packed-refs"
-            if packed.exists():
-                for line in packed.read_text(encoding="utf-8").splitlines():
-                    if line.endswith(" " + ref):
-                        return line.split(" ", 1)[0]
-        elif re.fullmatch(r"[0-9a-f]{40}", head):
-            return head
+                sha = ref_file.read_text(encoding="utf-8").strip()
+            else:
+                packed = root / ".git" / "packed-refs"
+                if packed.exists():
+                    sha = next((line.split(" ", 1)[0] for line in packed.read_text(encoding="utf-8").splitlines()
+                                if line.endswith(" " + ref)), None)
+        else:
+            sha = head
+        if sha and re.fullmatch(r"[0-9a-f]{40}", sha):
+            # A working tree may have uncommitted changes; .git cannot tell us.
+            return {"sha": sha, "source": "local_git_checkout_uncommitted_changes_not_detected"}
     except OSError:
         pass
-    return "unknown"
+    return {"sha": "unknown", "source": "unavailable"}
+
+
+def resolve_git_sha(env: dict | None = None, repo_root: str | None = None) -> str:
+    return resolve_git_provenance(env, repo_root)["sha"]
 
 
 def library_version(name: str) -> str | None:
@@ -592,10 +642,12 @@ def build_run_provenance(*, run_id: str, dataset_id: str, dataset_name: str, cas
     for value in case_provenance:
         key = normalize_case_provenance(value)
         counts[key] = counts.get(key, 0) + 1
+    git = {"sha": git_sha, "source": "explicit"} if git_sha else resolve_git_provenance()
     return {
         "report_schema": REPORT_SCHEMA,
         "evaluation_run_id": run_id,
-        "git_sha": git_sha or resolve_git_sha(),
+        "git_sha": git["sha"],
+        "git_sha_source": git["source"],
         "pipeline_version": pipeline_version,
         "semantic_verification_mode": semantic_verification_mode,
         "mode": mode,

@@ -32,6 +32,7 @@ placeholders. Do not overwrite an existing `.env` and never commit credentials.
 ```powershell
 Copy-Item .env.example .env
 notepad .env
+$env:GIT_SHA = git rev-parse HEAD   # records the source commit in evaluation provenance
 docker compose up --build
 ```
 

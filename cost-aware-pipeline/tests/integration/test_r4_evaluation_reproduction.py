@@ -186,6 +186,11 @@ class R4EvaluationWorkerReproductionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(provenance["dataset"]["content_hash"]), 64)
         self.assertEqual(provenance["dataset"]["case_provenance"], {"model_generated": 10})
         self.assertIn("prompt_versions", provenance["judge"])
+        built_sha = os.getenv("SCIENTIFIC_RAG_GIT_SHA", "")
+        if len(built_sha) == 40:  # CI image built with --build-arg GIT_SHA
+            self.assertEqual((provenance["git_sha"], provenance["git_sha_source"]), (built_sha, "build_arg"))
+        else:
+            self.assertIn(provenance["git_sha_source"], {"unavailable", "local_git_checkout_uncommitted_changes_not_detected"})
         self.assertEqual(run.status, "completed_with_errors")
 
 

@@ -372,6 +372,18 @@ and failure context.
   - Prompt versions (`*/v2`) with topic wording removed; R3 framing kept.
   - Additive API fields (`report`, per-result `outcome`); offline
     `scripts/build_evaluation_report.py`; image build arg `GIT_SHA`.
+- **Review corrections (owner review of PR #11):** reproduced first (`f8ca9ce` integration,
+  `f354f11` unit), then fixed:
+  - after an interruption the report covered only cases with result rows (5 of 10), and
+    an interrupted case counted as answered. Now the population is the dataset, with
+    outcomes `not_executed` and `research_interrupted` (report contract v2);
+  - a judge response without usage metadata reported `usage_actual=True` and a cost.
+    Now there is an explicit `cost_status` (`no_calls`, `complete`,
+    `partial_lower_bound`, `unknown`, `rate_unknown`), confirmed cost only when complete,
+    and lower bounds otherwise;
+  - CI and Compose did not pass `GIT_SHA`. Now CI builds with the checked-out commit and
+    verifies it in the image, Compose passes `GIT_SHA`, `git_sha_source` is recorded,
+    `GITHUB_SHA` is not substituted, and unknown SHAs produce a report warning.
 - **Not done:** the dataset schema has no version column, so runs identify datasets by
   content hash (`dataset.version` is `null`); adding one needs an approved migration.
 - **Test evidence:** recorded in the R4 PR; finalized in the next authorized stage PR.

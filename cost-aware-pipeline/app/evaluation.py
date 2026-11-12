@@ -21,11 +21,18 @@ RAGAS_JUDGE_MAX_OUTPUT_TOKENS = 8192
 
 @dataclass
 class EvaluationUsageTracker:
-    """Collect judge usage exactly when providers expose it, and label estimates."""
+    """Collect judge usage exactly when providers expose it, and label estimates.
+
+    R4: usage completeness is explicit. A response without usage metadata, a failed
+    call (the provider may still have billed it) or an unfinished call makes the
+    judge cost unknown or a lower bound; it is never reported as confirmed zero.
+    """
 
     judge_attempts: int = 0
     judge_successes: int = 0
     judge_failures: int = 0
+    judge_responses_with_usage: int = 0
+    judge_responses_without_usage: int = 0
     judge_input_tokens: int = 0
     judge_output_tokens: int = 0
     judge_reasoning_tokens: int = 0
@@ -42,7 +49,9 @@ class EvaluationUsageTracker:
         self.judge_successes += 1
         usage = getattr(response, "usage", None)
         if usage is None:
+            self.judge_responses_without_usage += 1
             return
+        self.judge_responses_with_usage += 1
         self.judge_input_tokens += int(getattr(usage, "prompt_tokens", 0) or 0)
         self.judge_output_tokens += int(getattr(usage, "completion_tokens", 0) or 0)
         details = getattr(usage, "completion_tokens_details", None)
@@ -52,7 +61,9 @@ class EvaluationUsageTracker:
         self.judge_successes += 1
         usage = getattr(response, "usage_metadata", None)
         if usage is None:
+            self.judge_responses_without_usage += 1
             return
+        self.judge_responses_with_usage += 1
         self.judge_input_tokens += int(getattr(usage, "prompt_token_count", 0) or 0)
         candidates = int(getattr(usage, "candidates_token_count", 0) or 0)
         reasoning = int(getattr(usage, "thoughts_token_count", 0) or 0)
@@ -63,10 +74,26 @@ class EvaluationUsageTracker:
         self.embedding_calls += 1
         self.embedding_input_tokens_estimated += estimate_text_tokens(texts)
 
+    def judge_cost_status(self) -> tuple[str, int]:
+        """(status, uncertain call count); status is no_calls, complete, partial_lower_bound or unknown."""
+        unfinished = max(self.judge_attempts - self.judge_successes - self.judge_failures, 0)
+        uncertain = self.judge_failures + self.judge_responses_without_usage + unfinished
+        if self.judge_attempts == 0:
+            return "no_calls", 0
+        if uncertain == 0:
+            return "complete", 0
+        return ("partial_lower_bound" if self.judge_responses_with_usage else "unknown"), uncertain
+
     def summary(self, *, judge_model: str, embedding_model: str) -> dict:
-        judge_cost, judge_rate_source = calculate_cost(
+        status, uncertain = self.judge_cost_status()
+        known_cost, judge_rate_source = calculate_cost(
             "gemini", judge_model, self.judge_input_tokens, self.judge_output_tokens
         )
+        if status == "no_calls":
+            known_cost = 0.0
+        elif known_cost is None and status in {"complete", "partial_lower_bound"}:
+            status = "rate_unknown"
+        judge_cost = known_cost if status in {"complete", "no_calls"} else None
         embedding_cost, embedding_rate_source = calculate_cost(
             "gemini", embedding_model, self.embedding_input_tokens_estimated, 0
         )
@@ -80,11 +107,21 @@ class EvaluationUsageTracker:
                 "attempts": self.judge_attempts,
                 "successes": self.judge_successes,
                 "failures": self.judge_failures,
+                "responses_with_usage": self.judge_responses_with_usage,
+                "responses_without_usage": self.judge_responses_without_usage,
+                "uncertain_calls": uncertain,
                 "input_tokens": self.judge_input_tokens,
                 "output_tokens": self.judge_output_tokens,
                 "reasoning_tokens": self.judge_reasoning_tokens,
-                "usage_actual": True,
+                # True only when every call made returned provider-reported usage.
+                "usage_actual": status == "complete",
+                "usage_complete": status in {"complete", "no_calls"},
+                "cost_status": status,
+                # Confirmed cost only when usage is complete; otherwise None.
                 "cost_usd": judge_cost,
+                # Cost of the calls that did report usage: a lower bound when incomplete.
+                "known_cost_lower_bound_usd": (round(known_cost, 8) if known_cost is not None
+                                               and self.judge_responses_with_usage else (0.0 if status == "no_calls" else None)),
                 "rate_source": judge_rate_source,
             },
             "embeddings": {
@@ -97,7 +134,11 @@ class EvaluationUsageTracker:
                 "cost_usd": embedding_cost,
                 "rate_source": embedding_rate_source,
             },
+            # Judge cost (confirmed) plus the estimated embedding cost; None when the
+            # judge cost is not confirmed.
             "total_cost_usd": total_cost,
+            "total_cost_status": status if total_cost is not None else (
+                "embedding_rate_unknown" if judge_cost is not None else status),
         }
 
 

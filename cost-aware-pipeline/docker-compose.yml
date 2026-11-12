@@ -11,7 +11,12 @@ x-app-service: &app-service
 services:
   migrate:
     <<: *app-service
-    build: .
+    build:
+      context: .
+      args:
+        # R4: pass the source commit, e.g. `GIT_SHA=$(git rev-parse HEAD) docker compose up --build`
+        # (PowerShell: `$env:GIT_SHA = git rev-parse HEAD`). Unset means "unknown", never guessed.
+        GIT_SHA: ${GIT_SHA:-unknown}
     command: alembic upgrade head
     restart: "no"
     depends_on:

@@ -41,6 +41,7 @@ from .evaluation_report import (
     case_content_hash,
     dataset_content_hash,
     legacy_case_record,
+    not_executed_record,
 )
 from scientific_rag.llm_gateway import create_chat_model, model_for
 from scientific_rag.costing import calculate_cost
@@ -778,18 +779,26 @@ async def evaluation_ui_status(request: Request, evaluation_run_id: str, session
 
 
 def _evaluation_case_records(results: list[EvaluationResult], cases: dict) -> list[dict]:
-    """Per-case records; results stored before R4 are inferred and marked as such."""
+    """One record per dataset case (R4 report v2).
+
+    The population is the dataset, not the result rows: a case without a result
+    row was never executed and is reported as ``not_executed``. Results stored
+    before R4 are inferred and marked as such.
+    """
+    by_case = {item.evaluation_case_id: item for item in results}
     records = []
-    for item in results:
-        case = cases.get(item.evaluation_case_id)
-        if case is None:
+    for case in sorted(cases.values(), key=lambda item: str(item.id)):
+        case_hash = case_content_hash(question=case.question, reference_answer=case.reference_answer,
+                                      reference_context=case.reference_context, reference_claims=case.reference_claims,
+                                      provenance=case.provenance)
+        item = by_case.get(case.id)
+        if item is None:
+            records.append(not_executed_record(case_id=str(case.id), case_hash=case_hash,
+                                               case_provenance=case.provenance))
             continue
         records.append(legacy_case_record(
-            case_id=str(case.id),
-            case_hash=case_content_hash(question=case.question, reference_answer=case.reference_answer,
-                                        reference_context=case.reference_context, reference_claims=case.reference_claims,
-                                        provenance=case.provenance),
-            case_provenance=case.provenance, status=item.status, judge_scores=item.judge_scores, error=item.error,
+            case_id=str(case.id), case_hash=case_hash, case_provenance=case.provenance,
+            status=item.status, judge_scores=item.judge_scores, error=item.error,
         ))
     return records
 
@@ -798,7 +807,8 @@ def _evaluation_report(run: EvaluationRun, dataset_name: str, results: list[Eval
     """Stored R4 report, or one rebuilt offline from per-case records for older runs."""
     records = _evaluation_case_records(results, cases)
     stored = (run.metrics or {}).get("report")
-    if isinstance(stored, dict) and stored.get("schema"):
+    if isinstance(stored, dict) and stored.get("schema") \
+            and (stored.get("population") or {}).get("total_cases") == len(records):
         return stored, records
     provenance = (run.metrics or {}).get("provenance") or {
         "legacy_run": True, "mode": (run.metrics or {}).get("mode"),

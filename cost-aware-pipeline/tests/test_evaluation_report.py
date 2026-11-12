@@ -24,9 +24,11 @@ from app.evaluation_report import (
     infer_case_provenance,
     legacy_case_record,
     normalize_case_provenance,
+    not_executed_record,
     render_csv,
     render_json,
     render_markdown,
+    resolve_git_provenance,
     resolve_git_sha,
     sanitize_error,
     split_scores,
@@ -274,7 +276,8 @@ class HistoricalCompatibilityTests(unittest.TestCase):
         report = build_evaluation_report({"legacy_run": True}, legacy)
         self.assertEqual(report["population"]["total_cases"], 5)
         self.assertEqual(report["population"]["inferred_from_legacy"], 5)
-        self.assertEqual(report["population"]["outcomes"]["missing_assessment"], 1)
+        self.assertEqual(report["population"]["outcomes"]["research_interrupted"], 1)  # "running" never finished
+        self.assertEqual(report["population"]["answered"], 2)
         self.assertEqual({group["engine"] for group in report["quality"]["groups"]}, {"ragas", "unknown"})
         self.assertTrue(all(record["case_provenance"] == "legacy_human_unverified" for record in legacy))
         current = _record(1, "judged", judge=RAGAS, scores=_scores(0.5))
@@ -303,19 +306,71 @@ class HistoricalCompatibilityTests(unittest.TestCase):
 
 class CostVisibilityTests(unittest.TestCase):
     def test_costs_and_provider_failures_are_reported(self) -> None:
-        usage = {"ragas": {"judge": {"attempts": 2, "failures": 1}, "total_cost_usd": 0.002},
-                 "fallback": {"judge": {"attempts": 1, "failures": 0}, "total_cost_usd": None}}
+        usage = {"ragas": {"judge": {"attempts": 2, "failures": 1, "uncertain_calls": 1, "cost_status": "partial_lower_bound",
+                                     "cost_usd": None, "known_cost_lower_bound_usd": 0.002}},
+                 "fallback": {"judge": {"attempts": 1, "failures": 0, "cost_status": "complete", "cost_usd": 0.004}}}
         record = _record(1, "judged", judge={**FALLBACK, "usage": usage}, scores=_scores(0.5),
                          research={"cost_usd": 0.01, "cost_complete": True, "provider_failures": {"groq": 2}})
         failed = _record(2, "research_failed", research={"cost_usd": None, "provider_failures": {"openrouter": 1}})
         costs = build_evaluation_report(PROVENANCE, [record, failed])["costs"]
         self.assertEqual(costs["research_cost_known_usd"], 0.01)
         self.assertEqual(costs["research_cases_without_cost"], 1)
-        self.assertEqual(costs["judge_cost_known_usd_by_engine"], {"ragas": 0.002})
+        self.assertEqual(costs["judge_cost_known_usd_by_engine"], {"fallback": 0.004})
+        self.assertEqual(costs["judge_cost_lower_bound_usd_by_engine"], {"ragas": 0.002})
         self.assertEqual(costs["judge_usage_records_without_cost"], 1)
+        self.assertEqual(costs["judge_cost_status_counts"], {"complete": 1, "partial_lower_bound": 1})
+        self.assertFalse(costs["judge_cost_complete"])
+        self.assertEqual(costs["judge_uncertain_calls"], 1)
         self.assertEqual(costs["judge_attempts"], 3)
         self.assertEqual(costs["judge_failures"], 1)
         self.assertEqual(costs["research_provider_failures"], {"groq": 2, "openrouter": 1})
+
+
+    def test_legacy_usage_without_status_is_unverified_not_known(self) -> None:
+        legacy = {"ragas": {"judge": {"attempts": 1, "failures": 0, "usage_actual": True, "cost_usd": 0.0},
+                            "total_cost_usd": 0.0}}
+        costs = build_evaluation_report(PROVENANCE, [_record(1, "judged", judge={**RAGAS, "usage": legacy},
+                                                             scores=_scores(0.5))])["costs"]
+        self.assertEqual(costs["judge_cost_known_usd_by_engine"], {})
+        self.assertEqual(costs["judge_cost_status_counts"], {"unverified_legacy": 1})
+
+
+class PopulationCompletenessTests(unittest.TestCase):
+    def test_never_executed_and_interrupted_cases_stay_in_the_population(self) -> None:
+        records = [_record(1, "judged", judge=RAGAS, scores=_scores(0.5)),
+                   _record(2, "missing_assessment"), _record(3, "research_interrupted"),
+                   not_executed_record(case_id="case-04", case_hash="4" * 64, case_provenance="synthetic")]
+        report = build_evaluation_report(PROVENANCE, records)
+        population = report["population"]
+        self.assertEqual(population["total_cases"], 4)
+        self.assertEqual(population["not_completed"], 2)
+        self.assertEqual(population["answered"], 2)  # judged + missing assessment only
+        self.assertEqual(report["completion"]["not_completed_rate"]["numerator"], 2)
+        self.assertEqual(records[3]["scores"], {})
+        self.assertTrue(any("never executed or were interrupted" in warning for warning in report["warnings"]))
+        self.assertEqual(report["schema"], "scientific-rag-evaluation-report/v2")
+
+    def test_legacy_statuses_map_to_distinct_outcomes(self) -> None:
+        expected = {"running": "research_interrupted", "queued": "not_executed", "completed": "missing_assessment",
+                    "failed": "research_failed", "judge_failed": "judge_failed", "judged": "judged"}
+        for status, category in expected.items():
+            with self.subTest(status=status):
+                record = legacy_case_record(case_id="x", case_hash="0", case_provenance=None, status=status,
+                                            judge_scores=_scores(0.5) if status == "judged" else {}, error=None)
+                self.assertEqual(record["outcome"]["category"], category)
+
+    def test_unknown_git_sha_is_warned_and_known_sha_is_not(self) -> None:
+        self.assertTrue(any("code attribution is unavailable" in warning
+                            for warning in build_evaluation_report({"git_sha": "unknown"}, [])["warnings"]))
+        self.assertFalse(any("code attribution" in warning
+                             for warning in build_evaluation_report(PROVENANCE, [])["warnings"]))
+
+    def test_git_sha_source_is_recorded_and_ci_env_is_not_substituted(self) -> None:
+        self.assertEqual(resolve_git_provenance({"SCIENTIFIC_RAG_GIT_SHA": "e" * 40}), {"sha": "e" * 40, "source": "build_arg"})
+        with tempfile.TemporaryDirectory() as root:
+            self.assertEqual(resolve_git_provenance({"GITHUB_SHA": "f" * 40}, repo_root=root),
+                             {"sha": "unknown", "source": "unavailable"})
+            self.assertEqual(resolve_git_provenance({"SCIENTIFIC_RAG_GIT_SHA": "abc1234"}, repo_root=root)["sha"], "unknown")
 
 
 if __name__ == "__main__":
