@@ -22,7 +22,7 @@ import json
 import re
 from typing import Any, Callable, Iterable
 
-from .evaluation_report import resolve_git_provenance, sha256_hex, wilson_interval
+from .evaluation_report import canonical_json, resolve_git_provenance, sha256_hex, wilson_interval
 
 DATASET_SCHEMA = "scientific-rag-verifier-dataset/v1"
 PREDICTIONS_SCHEMA = "scientific-rag-verifier-predictions/v1"
@@ -458,7 +458,7 @@ def evaluate(dataset: dict, predictions: dict, *, git_provenance: dict | None = 
                         "source_label_scheme": dataset.get("source_label_scheme"),
                         "label_mapping_version": (dataset.get("label_mapping") or {}).get("mapping_version")},
             "predictor": predictor,
-            "predictions_hash": sha256_hex(predictions.get("predictions") or []),
+            "predictions_hash": predictions_hash(predictions),
             "git_sha": git.get("sha"), "git_sha_source": git.get("source"),
             "label_scheme": LABEL_SCHEME, "simulation_policy": SIMULATION_POLICY,
         },
@@ -476,6 +476,17 @@ def evaluate(dataset: dict, predictions: dict, *, git_provenance: dict | None = 
         "significance": "No significance testing is performed. Compare predictors only on the same dataset hash, "
                         "and treat overlapping intervals as inconclusive.",
     }
+
+
+def predictions_hash(predictions: dict) -> str:
+    """Order-independent hash of the prediction records.
+
+    Records are canonicalized (sorted keys) and sorted by their canonical form before
+    hashing. Nothing is deduplicated: duplicate records stay in the hashed list, so a
+    file with a duplicate hashes differently from one without it.
+    """
+    records = predictions.get("predictions") or []
+    return sha256_hex(sorted((canonical_json(record) for record in records)))
 
 
 def _counts(values: Iterable[str]) -> dict[str, int]:
@@ -518,7 +529,7 @@ def simulate_enforcement(items: list[dict], resolved: dict[str, dict]) -> dict:
         answers.setdefault(item["answer_id"], []).append(item)
     per_answer = []
     totals = {key: 0 for key in (
-        "supported_retained", "unsupported_retained", "critical_contradictions_retained", "supported_removed",
+        "supported_retained", "supported_claims_retained", "supported_limitations_retained", "unsupported_retained", "critical_contradictions_retained", "supported_removed",
         "supported_lost_to_fail_closed", "essential_lost", "claims_removed", "limitations_removed",
         "targets_lost_to_fail_closed")}
     outcomes = {key: 0 for key in ("complete_answer", "partial_answer", "no_supported_claims", "failed_closed")}
@@ -543,6 +554,7 @@ def simulate_enforcement(items: list[dict], resolved: dict[str, dict]) -> dict:
             is_supported = item["expected_verdict"] == "supported"
             if kept and is_supported:
                 totals["supported_retained"] += 1
+                totals["supported_claims_retained" if target.startswith("claims.") else "supported_limitations_retained"] += 1
             if kept and not is_supported:
                 totals["unsupported_retained"] += 1
                 if item["critical"] and item["expected_verdict"] == "contradicted":
@@ -560,6 +572,8 @@ def simulate_enforcement(items: list[dict], resolved: dict[str, dict]) -> dict:
         per_answer.append(row)
     answer_count = len(per_answer)
     expected_supported = sum(item["expected_verdict"] == "supported" for item in items)
+    expected_supported_claims = sum(item["expected_verdict"] == "supported" and item["target"].startswith("claims.")
+                                    for item in items)
     delivered_answers = outcomes["complete_answer"] + outcomes["partial_answer"]
     return {
         "policy": SIMULATION_POLICY,
@@ -568,8 +582,11 @@ def simulate_enforcement(items: list[dict], resolved: dict[str, dict]) -> dict:
         "outcomes": outcomes,
         "oracle_outcomes": oracle_outcomes,
         "totals": totals,
-        "claim_coverage": _rate(totals["supported_retained"], expected_supported,
-                                "expected-supported targets delivered / expected-supported targets"),
+        "claim_coverage": _rate(totals["supported_claims_retained"], expected_supported_claims,
+                                "expected-supported claims (claims.N) delivered / expected-supported claims"),
+        "supported_target_coverage": _rate(totals["supported_retained"], expected_supported,
+                                           "expected-supported targets (claims and limitations) delivered / "
+                                           "expected-supported targets"),
         "answer_coverage": _rate(delivered_answers, answer_count,
                                  "answers delivered with at least one claim / answers"),
         "answers_without_usable_claims": _rate(outcomes["no_supported_claims"] + outcomes["failed_closed"], answer_count,
@@ -665,7 +682,7 @@ def render_markdown(report: dict) -> str:
     lines += [f"| {key} | {value} |" for key, value in simulation["totals"].items()]
     lines += ["", "| Rate | n / N | Rate | 95% Wilson CI |", "|---|---:|---:|---|"]
     lines += [_rate_row(name, simulation[name]) for name in (
-        "claim_coverage", "answer_coverage", "answers_without_usable_claims", "incomplete_answer_rate",
+        "claim_coverage", "supported_target_coverage", "answer_coverage", "answers_without_usable_claims", "incomplete_answer_rate",
         "answers_losing_oracle_support", "unsupported_retention")]
     lines += ["", "## Cost", "", f"- {report['cost']['cost_status']}: {report['cost']['note']}", "", "## Warnings", ""]
     lines += [f"- {warning}" for warning in report["warnings"]] or ["- None."]

@@ -183,6 +183,8 @@ class CompletePredictionTests(unittest.TestCase):
                                                          "no_supported_claims": 0, "failed_closed": 0})
         self.assertEqual(simulation["totals"], {
             "supported_retained": 3,             # A1-c1, A1-l1, A2-c3
+            "supported_claims_retained": 2,      # A1-c1, A2-c3
+            "supported_limitations_retained": 1,  # A1-l1
             "unsupported_retained": 2,           # A2-c1, A2-c2
             "critical_contradictions_retained": 1,  # A2-c1
             "supported_removed": 3,              # A1-c2, A3-c1, A4-c2
@@ -192,7 +194,10 @@ class CompletePredictionTests(unittest.TestCase):
             "limitations_removed": 0,
             "targets_lost_to_fail_closed": 0,
         })
-        self.assertEqual((simulation["claim_coverage"]["numerator"], simulation["claim_coverage"]["denominator"]), (3, 6))
+        # Claims only: 5 expected-supported claims (A1-l1 is a limitation), 2 delivered.
+        self.assertEqual((simulation["claim_coverage"]["numerator"], simulation["claim_coverage"]["denominator"]), (2, 5))
+        self.assertEqual((simulation["supported_target_coverage"]["numerator"],
+                          simulation["supported_target_coverage"]["denominator"]), (3, 6))
         self.assertEqual(simulation["answer_coverage"]["rate"], 0.5)
         self.assertEqual(simulation["answers_without_usable_claims"]["numerator"], 2)
         self.assertEqual(simulation["incomplete_answer_rate"]["numerator"], 1)

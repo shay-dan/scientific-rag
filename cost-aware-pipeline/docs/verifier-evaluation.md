@@ -25,6 +25,9 @@ Outputs:
 - `errors.csv`, listing every misclassified or unassessed item.
 
 Identical inputs give byte-identical outputs, regardless of item or prediction order.
+`predictions_hash` is order-independent: records are canonicalized and sorted before
+hashing, and nothing is deduplicated. A file with a duplicate record therefore hashes
+differently from the same file without it.
 Pass `--git-sha` to pin the recorded commit; otherwise it is resolved as in R4.
 
 ## Dataset contract — `scientific-rag-verifier-dataset/v1`
@@ -146,7 +149,7 @@ The same policy applied to the expected labels gives the `oracle_outcomes`.
 
 Totals:
 
-- supported targets retained;
+- supported targets retained (split into supported claims and supported limitations);
 - unsupported targets retained (and critical contradictions among them);
 - supported targets removed (and how many were lost to fail-closed answers);
 - essential supported targets lost;
@@ -157,7 +160,8 @@ Rates:
 
 | Rate | Definition |
 |---|---|
-| Claim coverage | Expected-supported targets delivered / expected-supported targets. |
+| Claim coverage | Expected-supported claims (`claims.N` only) delivered / expected-supported claims. This is the scientific claim coverage. |
+| Supported-target coverage | Expected-supported targets (claims and limitations) delivered / expected-supported targets. |
 | Answer coverage | Answers delivered with at least one claim / answers. |
 | Answers without usable claims | Answers with no claim delivered / answers. |
 | Incomplete-answer rate | Answers delivered with at least one target removed / answers. |

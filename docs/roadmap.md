@@ -443,6 +443,12 @@ is not evidence of an accurate verifier.
   - equivalence of the simulation with production `apply_semantic_verdicts`;
   - a check that no production module imports the harness;
   - determinism and order-independence.
+- **Review corrections (owner review of PR #12):** reproduced first (`dbbdec4`), then
+  fixed within report v1:
+  - `predictions_hash` is order-independent: records are canonicalized and sorted, and
+    duplicates are kept;
+  - `claim_coverage` counts only `claims.N`; the new `supported_target_coverage` covers
+    claims and limitations.
 - **Unchanged:** no production behavior, verifier mode, `PIPELINE_VERSION`, migration,
   dependency or model call.
 - **Not done (later stages):** real labels and benchmark adapters (R6); calibration and
