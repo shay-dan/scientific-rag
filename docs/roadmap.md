@@ -1,6 +1,6 @@
 # Scientific RAG — engineering roadmap
 
-**Status:** authoritative planning document. Last updated 2026-11-12 (R5 complete; R6 in review — R6A infrastructure).
+**Status:** authoritative planning document. Last updated 2026-11-12 (R6A complete; R6 in review — R6B development integration).
 **Origin:** owner-approved *Master Implementation Plan*, which consolidated an independent
 audit, a reconciled R0–R13 roadmap, a discovery/evidence-acquisition addendum, and the
 historical engineering handover. Changes to this file require owner approval and an entry
@@ -31,7 +31,7 @@ Operating rules for agents are in [`AGENTS.md`](../AGENTS.md). History, complete
 | R3 | Untrusted scientific-content security | **complete** (PR #10, `138f29a`) | R1 (order); before R8, R9-F |
 | R4 | Evaluation integrity and reproducibility | **complete** (PR #11, `359e02c`) | R0 |
 | R5 | Offline semantic-verifier evaluation harness | **complete** (PR #12, `b21bc37`) | R0 |
-| R6 | Human-reviewed evidence packs and labels | in review — **R6A infrastructure only** (branch `agent/r6a-benchmark-infrastructure`); R6B data integration not started | R4, R5; R3 preferred |
+| R6 | Human-reviewed evidence packs and labels | R6A **complete** (PR #13, `60b394a`); R6B in review (branch `agent/r6b-development-integration`; development handoff only, unscored) | R4, R5; R3 preferred |
 | R7 | Deterministic claim checks, graceful degradation | not started | R5, R6 |
 | R9-D | Discovery candidate pool, ranking, backfilling | not started | R6 pilot, R2 |
 | R9-P | PMC scientific-content extraction | conditional | R6 fixtures; R7 preferred |
@@ -468,12 +468,15 @@ is not evidence of an accurate verifier.
 
 ## R6 — Human-reviewed evidence packs, claim labels, discovery relevance labels
 
-**Status:** in review — **R6A (benchmark-integration infrastructure) only**, branch
-`agent/r6a-benchmark-infrastructure`. R6B (integrating the independently built benchmark)
-and the pilot labels are not started and need separate authorization.
+**Status:** R6A (benchmark-integration infrastructure) **complete** (PR #13, merge
+`60b394a`). R6B (development integration of the independent benchmark, v0.3.1) **in
+review**, branch `agent/r6b-development-integration`. Owner-side scoring, the sealed
+holdout, and the production-retriever adapter are not started and need separate
+authorization.
 **Priority:** critical for later scientific work.
-[R6A findings](#r6a-findings-in-review). Contracts and procedures:
-[benchmark-integration.md](../cost-aware-pipeline/docs/benchmark-integration.md).
+[R6A findings](#r6a-findings-complete), [R6B findings](#r6b-findings-in-review).
+Contracts and procedures: [benchmark-integration.md](../cost-aware-pipeline/docs/benchmark-integration.md)
+(R6A) and [benchmark-r6b.md](../cost-aware-pipeline/docs/benchmark-r6b.md) (R6B).
 
 Pilot of about 12 development and 12 holdout questions across medicine, computer science,
 and mathematics/physics where feasible, including unfamiliar terminology, acronyms,
@@ -495,7 +498,7 @@ questions; at least half off the current concept lexicon.
 status, leakage controls, baseline metrics, separate on-/off-lexicon results, and stated
 uncertainty. Expansion is a separate decision.
 
-### R6A findings (in review)
+### R6A findings (complete)
 
 - **Scope:** infrastructure only. The package `app/benchmark/` and its CLIs
   `scripts/benchmark.py` and `scripts/benchmark_holdout_owner.py` are standard-library
@@ -534,15 +537,65 @@ uncertainty. Expansion is a separate decision.
     an allowlist;
   - unknown schemas yield a fixed value, and dynamic keys must come from fixed harness
     vocabularies (reproduced in `dedffd5`).
-- **Remaining before the R6 pilot:**
-  - R6B adapters for the independent benchmark release (owner authorization; no access
-    in R6A);
+- **Remaining before the R6 pilot (at R6A merge):**
+  - R6B adapters for the independent benchmark release (now in review);
   - reviewed label mappings for each imported scheme;
   - curation of the pilot questions and labels;
   - the holdout commitment published by the owner;
   - a separately authorized production-retrieval run adapter;
   - baseline runs and on-/off-lexicon reporting.
-- **Test evidence:** recorded in the R6A PR; finalized in the next authorized stage PR.
+- **Final test evidence (`main` at `60b394a`):** CI and Security CI green. Unit suite in
+  the production image: 610 tests, 0 failures, 51 skipped. PostgreSQL/pgvector + Redis
+  integration: 50/50. Image source provenance, migrations and `/healthz` smoke passed;
+  historical Gradio prototype 13/13. No production code changed.
+- **Limitations:** contracts were designed before the benchmark existed; R6B found the
+  development handoff needs its own label-free input contract (below) rather than R6A
+  gold records.
+
+### R6B findings (in review)
+
+- **Scope:** development handoff v0.3.1 only (owner-supplied archive, SHA-256
+  `73948667…a70f`), offline, unscored. New stdlib modules `app/benchmark/handoff.py`,
+  `protocol.py`, `prediction_export.py`, `owner_scoring.py`; CLI
+  `scripts/benchmark_r6b.py`; `contracts.py` gains the `s2orc:` paper-ID namespace. No
+  production import, migration, dependency, model call, live search, Mining Service or
+  verifier-enforcement change.
+- **Public repository:** handoff text and derived outputs are never committed; tests use
+  synthetic archives built at run time; `.gitignore` excludes `srb_*` archives.
+- **Import:** manifest, per-file SHA-256, byte sizes, record counts, file list and the
+  label-free declaration verified. 2,121 of 2,121 records accepted, 0 rejected
+  (236 open-discovery, 128 fixed-evidence, 1,736 claim inputs; pilot 12 fixed + 9
+  open-discovery); 9 `location_missing` warnings (pilot segments without a section);
+  67 locator-only segments whose text is not redistributed (64 main, 3 pilot). No label
+  field present. Every input is `state: unscored`.
+- **Leakage protocol:** discovery sees only `(input_id, question)`; fixed evidence and
+  claims load only after discovery predictions are frozen and hashed; stage order,
+  tampering and source-identity exposure are refused. Real handoff audit: 0 of 236 (main)
+  and 0 of 9 (pilot) discovery questions contain a pack source identity.
+- **Offline baselines (unscored):** within-pack BM25 retrieval (64 main + 9 pilot
+  completed; 67 not executed, no text); R5 lexical claim verdicts (1,736 + 5 completed);
+  open discovery and answer tasks not executed (live search / model not authorized).
+  Exports are byte-identical on re-run.
+- **Owner interface:** prediction export `scientific-rag-benchmark-predictions/v1` and
+  reference contract `scientific-rag-benchmark-references/v2`; per-population scoring,
+  never pooled; refusal without labels.
+- **Review corrections (owner review of PR #14 at `8209d33`):** reproduced first
+  (`7252079`), then fixed in owner scoring only:
+  - references are bound to the exact label-free handoff (dataset hash and manifest
+    hash), with the full benchmark hash recorded separately;
+  - duplicate or conflicting references, including via the owner `id_map`, are refused;
+  - source labels become verifier verdicts only through declared, reviewed, versioned
+    mappings; review fields are required, and population A (expert source annotations)
+    is not reported as independent human review;
+  - claim-only references report claim-level metrics and mark the whole-answer
+    enforcement simulation unavailable; it runs only with declared, validated answer
+    grouping. R5 is unchanged.
+- **Proposed, not implemented:** a bounded production hybrid-retriever adapter (FTS +
+  pgvector + RRF + MMR on the frozen packs in an isolated schema); embedding calls need
+  cost authorization.
+- **Remaining:** owner scoring of the exports; reviewed label mappings; locator-only text
+  acquisition (authorization); production-retriever adapter; live open discovery (R9-D
+  and paid/search authorization); sealed holdout.
 
 ## R7 — Deterministic claim checks and graceful degradation
 
@@ -724,6 +777,10 @@ load evidence; large synthetic evaluation sets presented as gold data.
 | Date | Decision | Evidence / reason |
 |---|---|---|
 | 2026-11-12 | Mark R5 complete (PR #12, `b21bc37`). | CI and Security CI green on `main`: 562 unit (0 failures, 51 skipped), 50/50 integration, image provenance, migrations, smoke; no production code changed. |
+| 2026-11-12 | Mark R6A complete (PR #13, `60b394a`). | CI and Security CI green on `main`: 610 unit (0 failures, 51 skipped), 50/50 integration, image provenance, migrations, smoke, legacy 13/13; no production code changed. |
+| 2026-11-12 | R6B: import the label-free development handoff through its own unscored input contract (not R6A gold records); enforce discovery-before-fixed-evidence in code; export portable unscored predictions joined on opaque IDs; scoring only by the owner, per population, outside the repository; no handoff text in the public repository. | Owner R6B authorization; handoff README and configs; repository is public. |
+| 2026-11-12 | R6B owner scoring: references bind to the label-free handoff identity; duplicates, conflicts and unreviewed mappings are refused; whole-answer metrics only with declared answer grouping. | Owner review of PR #14. |
+| 2026-11-12 | BM25 is an offline reference baseline only; the production FTS + pgvector + RRF + MMR retriever is benchmarked later through a separately authorized adapter on the same frozen packs. | Owner clarification. |
 | 2026-11-12 | Split R6 into R6A (benchmark-integration infrastructure) and R6B (integrating the independently built benchmark), each separately authorized. | Owner instruction; the independent benchmark is still being labeled and is not available to the implementation agent. |
 | 2026-11-12 | R6A: benchmark data enters only through versioned manifests with per-file hashes and declarative adapters; foreign label schemes need declared, approved mappings; gold eligibility is computed; packs keep distractors; the sealed holdout is evaluated only by the owner outside the repository against a published commitment, with aggregate-only output and a usage log. | Portable contracts without assumptions about the final dataset; protects the holdout from the implementation workspace. |
 | 2026-11-12 | Mark R4 complete (PR #11, `359e02c`). | CI and Security CI green on `main`: 532 unit (0 failures, 51 skipped), 50/50 integration, image provenance, migrations, smoke. Limitations recorded under R4. |

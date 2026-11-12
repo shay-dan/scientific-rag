@@ -49,6 +49,7 @@ PAPER_ID_PATTERNS = {
     "pmcid": re.compile(r"^pmcid:PMC\d{1,9}$"),
     "doi": re.compile(r"^doi:10\.\d{4,9}/\S+$", re.IGNORECASE),
     "arxiv": re.compile(r"^arxiv:(\d{4}\.\d{4,5}(v\d+)?|[a-z\-]+(\.[A-Z]{2})?/\d{7}(v\d+)?)$"),
+    "s2orc": re.compile(r"^s2orc:\d{1,12}$"),   # Semantic Scholar corpus IDs (e.g. SciFact abstracts)
     "other": re.compile(r"^other:[A-Za-z0-9._\-/]+$"),
 }
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\-/]{0,127}$")
@@ -191,7 +192,7 @@ def validate_benchmark(benchmark: Benchmark, *, allow_holdout: bool = False) -> 
         pid = str(paper["paper_id"])
         if not paper_id_valid(pid):
             issues.append(Issue("error", "invalid_paper_id", "paper", pid,
-                                "paper_id must be canonical (pmid:, pmcid:PMC, doi:10., arxiv:, other:)"))
+                                "paper_id must be canonical (pmid:, pmcid:PMC, doi:10., arxiv:, s2orc:, other:)"))
         if paper["provider"] not in PROVIDERS:
             issues.append(Issue("error", "invalid_value", "paper", pid, f"unknown provider {paper['provider']!r}"))
         if paper["source_verification"] not in SOURCE_VERIFICATION:

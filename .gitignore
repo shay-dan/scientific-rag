@@ -28,3 +28,10 @@ backups/
 *.holdout.jsonl
 *.holdout.csv
 holdout-log*.jsonl
+
+# R6B: independent-benchmark handoff archives, extractions and derived exports stay outside
+# the (public) repository.
+srb_*.zip
+srb_*/
+*-srb_*.zip
+r6b-out/
