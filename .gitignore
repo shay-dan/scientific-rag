@@ -22,3 +22,9 @@ logs/
 backups/
 *.log
 
+# R6A: sealed benchmark holdout material and owner logs never enter the repository.
+**/benchmark-holdout/
+**/sealed-holdout/
+*.holdout.jsonl
+*.holdout.csv
+holdout-log*.jsonl

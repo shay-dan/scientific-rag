@@ -1,0 +1,95 @@
+{
+  "allowed_evidence_types": [
+    "abstract",
+    "full_text",
+    "table",
+    "figure_caption"
+  ],
+  "benchmark_id": "r6a-synthetic",
+  "curation": {
+    "curator": "r6a-fixture",
+    "independence": "not independent; written by the implementer for tests",
+    "labeler": "r6a-fixture",
+    "reviewer": "r6a-fixture"
+  },
+  "description": "Hand-written synthetic fixture for R6A arithmetic and control-flow tests. Not a scientific benchmark.",
+  "files": [
+    {
+      "format": "jsonl",
+      "path": "questions.jsonl",
+      "record_type": "question",
+      "sha256": "c626dba3ab0fca56485f46ceebe3a9892ac942bcc3f26d2270f63af600040406"
+    },
+    {
+      "adapter": {
+        "fields": {
+          "family_id": "family",
+          "source_verification": "verification"
+        },
+        "integers": [
+          "year"
+        ],
+        "nested": {
+          "identifiers": {
+            "arxiv": "arxiv",
+            "doi": "doi",
+            "pmcid": "pmcid",
+            "pmid": "pmid"
+          },
+          "source": {
+            "dataset": "source_dataset",
+            "record_id": "source_record"
+          }
+        }
+      },
+      "format": "csv",
+      "path": "papers.csv",
+      "record_type": "paper",
+      "sha256": "dd040308d0045a6372e4f96d1e67086df485a3ef692e359fcee12a29feff9f21"
+    },
+    {
+      "format": "jsonl",
+      "path": "evidence.jsonl",
+      "record_type": "evidence",
+      "sha256": "4aa2247e951a0c34b9493d109e96b4d2dae0f5bcd59d5c39b1a8d8751807d899"
+    },
+    {
+      "format": "jsonl",
+      "path": "claims.jsonl",
+      "record_type": "claim",
+      "sha256": "a84135bd1ca81c22fe9ce3daa0524d58a6e1eb0b6e62e90793aa70c1418dc269"
+    },
+    {
+      "adapter": {
+        "integers": [
+          "grade"
+        ],
+        "nested": {
+          "source": {
+            "dataset": "source_dataset"
+          }
+        }
+      },
+      "format": "csv",
+      "path": "relevance.csv",
+      "record_type": "relevance",
+      "sha256": "bde0706129ac20e51d518b244dc7e4a63da9acc6ba8ee8a8632aac9050f33bd2"
+    },
+    {
+      "format": "jsonl",
+      "path": "label_mappings.jsonl",
+      "record_type": "label_mapping",
+      "sha256": "9dc2915dcf3566af175dede804d85a73ebbc70331045575d062d5c1e711c1638"
+    }
+  ],
+  "holdout": {
+    "commitment": null,
+    "note": "No holdout in a workspace fixture."
+  },
+  "schema": "scientific-rag-benchmark-manifest/v1",
+  "splits": [
+    "development",
+    "validation"
+  ],
+  "version": "1.0.0"
+}

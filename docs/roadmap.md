@@ -1,6 +1,6 @@
 # Scientific RAG — engineering roadmap
 
-**Status:** authoritative planning document. Last updated 2026-11-12 (R4 complete; R5 in review).
+**Status:** authoritative planning document. Last updated 2026-11-12 (R5 complete; R6 in review — R6A infrastructure).
 **Origin:** owner-approved *Master Implementation Plan*, which consolidated an independent
 audit, a reconciled R0–R13 roadmap, a discovery/evidence-acquisition addendum, and the
 historical engineering handover. Changes to this file require owner approval and an entry
@@ -30,8 +30,8 @@ Operating rules for agents are in [`AGENTS.md`](../AGENTS.md). History, complete
 | R2 | Research-job lifecycle, recovery, deduplication | complete (2026-11-11, PR #8) | R0 |
 | R3 | Untrusted scientific-content security | **complete** (PR #10, `138f29a`) | R1 (order); before R8, R9-F |
 | R4 | Evaluation integrity and reproducibility | **complete** (PR #11, `359e02c`) | R0 |
-| R5 | Offline semantic-verifier evaluation harness | in review (branch `agent/r5-verifier-evaluation`) | R0 |
-| R6 | Human-reviewed evidence packs and labels | not started | R4, R5; R3 preferred |
+| R5 | Offline semantic-verifier evaluation harness | **complete** (PR #12, `b21bc37`) | R0 |
+| R6 | Human-reviewed evidence packs and labels | in review — **R6A infrastructure only** (branch `agent/r6a-benchmark-infrastructure`); R6B data integration not started | R4, R5; R3 preferred |
 | R7 | Deterministic claim checks, graceful degradation | not started | R5, R6 |
 | R9-D | Discovery candidate pool, ranking, backfilling | not started | R6 pilot, R2 |
 | R9-P | PMC scientific-content extraction | conditional | R6 fixtures; R7 preferred |
@@ -404,9 +404,9 @@ and failure context.
 
 ## R5 — Offline semantic-verifier evaluation harness
 
-**Status:** in review (branch `agent/r5-verifier-evaluation`; not complete until merged
-with green CI and Security CI on `main`). **Priority:** high. No live LLM calls.
-[Findings](#r5-findings-in-review). Protocol and metric definitions:
+**Status:** complete. Merged as PR #12, merge commit `b21bc37` (implementation `23e4fd7`),
+2026-11-12, with CI and Security CI green on `main`. **Priority:** high. No live LLM calls.
+[Findings](#r5-findings). Protocol and metric definitions:
 [verifier-evaluation.md](../cost-aware-pipeline/docs/verifier-evaluation.md).
 
 Versioned claim/evidence contract (claim ID, passage, source ID, expected and predicted
@@ -421,7 +421,7 @@ misclassifications, deterministic regression tests, protocol document.
 **Acceptance:** correct, reproducible results on hand-verified fixtures. A working harness
 is not evidence of an accurate verifier.
 
-### R5 findings (in review)
+### R5 findings
 
 - **Built:** `app/verifier_evaluation.py`, standard-library only, not imported by any
   production module.
@@ -453,11 +453,27 @@ is not evidence of an accurate verifier.
   dependency or model call.
 - **Not done (later stages):** real labels and benchmark adapters (R6); calibration and
   the enforcement decision (R8).
-- **Test evidence:** recorded in the R5 PR; finalized in the next authorized stage PR.
+- **Final test evidence (CI on `main` at `b21bc37`):**
+  - unit: 562 run, 0 failures, 51 skipped, including 24 harness, 2 production-equivalence,
+    4 review and 52 semantic-verifier tests;
+  - integration: 50/50, including 23 semantic-verification integration tests;
+  - image provenance `b21bc37…`; migrations, `/healthz` and legacy 13/13 passed;
+  - Security CI green; no paid calls;
+  - zero lines changed in the verifier, pipeline, services, API or worker.
+- **Known limitations carried forward:**
+  - the fixtures are synthetic and unreviewed, and the baselines are uncalibrated;
+  - the simulation models enforce mode as of pipeline v15;
+  - intervals treat claims within an answer as independent;
+  - model cost is shown only when reported.
 
 ## R6 — Human-reviewed evidence packs, claim labels, discovery relevance labels
 
-**Status:** not started. **Priority:** critical for later scientific work.
+**Status:** in review — **R6A (benchmark-integration infrastructure) only**, branch
+`agent/r6a-benchmark-infrastructure`. R6B (integrating the independently built benchmark)
+and the pilot labels are not started and need separate authorization.
+**Priority:** critical for later scientific work.
+[R6A findings](#r6a-findings-in-review). Contracts and procedures:
+[benchmark-integration.md](../cost-aware-pipeline/docs/benchmark-integration.md).
 
 Pilot of about 12 development and 12 holdout questions across medicine, computer science,
 and mathematics/physics where feasible, including unfamiliar terminology, acronyms,
@@ -478,6 +494,45 @@ questions; at least half off the current concept lexicon.
 **Acceptance:** versioned pilot with relevance and verdict labels, provenance, reviewer
 status, leakage controls, baseline metrics, separate on-/off-lexicon results, and stated
 uncertainty. Expansion is a separate decision.
+
+### R6A findings (in review)
+
+- **Scope:** infrastructure only. The package `app/benchmark/` and its CLIs
+  `scripts/benchmark.py` and `scripts/benchmark_holdout_owner.py` are standard-library
+  only and offline. No production module imports them. There is no migration,
+  dependency, model call or search.
+- **Contracts (all `/v1`):**
+  - manifest with per-file SHA-256 and declarative JSONL/CSV adapters;
+  - question, paper, evidence, claim, relevance and label-mapping records;
+  - evidence pack, retrieval run and report, discovery run and report, synthesis
+    replay, benchmark validation and holdout log.
+- **Validation:** schema versions, required fields, unique IDs and identifier aliases,
+  canonical paper IDs, references, citation identity, verbatim quotes, supported
+  evidence types, source provenance, label mappings, and holdout material refused in
+  the workspace. Gold eligibility is computed (human-reviewed and reviewed/adjudicated)
+  and never promoted.
+- **Split protection:** question, paper and paper-family leakage, and near-duplicate
+  questions and claims (3-shingle Jaccard ≥ 0.8). Packs keep unlabeled distractors and
+  never move labeled material across splits.
+- **Metrics:**
+  - Retrieval: paper and passage Recall@K and Precision@K, graded nDCG@K and
+    Success@K, with `completed` and `all_questions` variants and explicit denominators.
+  - Discovery: five separate stages with loss accounting.
+  - Verifier: claims convert to the R5 dataset, and R5 computes every verifier metric.
+- **Sealed holdout:** an owner-only path outside the repository. A published commitment
+  hash is verified first, outputs are aggregate-only, and every use is logged.
+  `.gitignore` excludes holdout paths.
+- **Fixture:** synthetic (`tests/fixtures/benchmark_r6a`), with hand-calculated
+  retrieval and discovery expectations; not a benchmark.
+- **Remaining before the R6 pilot:**
+  - R6B adapters for the independent benchmark release (owner authorization; no access
+    in R6A);
+  - reviewed label mappings for each imported scheme;
+  - curation of the pilot questions and labels;
+  - the holdout commitment published by the owner;
+  - a separately authorized production-retrieval run adapter;
+  - baseline runs and on-/off-lexicon reporting.
+- **Test evidence:** recorded in the R6A PR; finalized in the next authorized stage PR.
 
 ## R7 — Deterministic claim checks and graceful degradation
 
@@ -658,6 +713,9 @@ load evidence; large synthetic evaluation sets presented as gold data.
 
 | Date | Decision | Evidence / reason |
 |---|---|---|
+| 2026-11-12 | Mark R5 complete (PR #12, `b21bc37`). | CI and Security CI green on `main`: 562 unit (0 failures, 51 skipped), 50/50 integration, image provenance, migrations, smoke; no production code changed. |
+| 2026-11-12 | Split R6 into R6A (benchmark-integration infrastructure) and R6B (integrating the independently built benchmark), each separately authorized. | Owner instruction; the independent benchmark is still being labeled and is not available to the implementation agent. |
+| 2026-11-12 | R6A: benchmark data enters only through versioned manifests with per-file hashes and declarative adapters; foreign label schemes need declared, approved mappings; gold eligibility is computed; packs keep distractors; the sealed holdout is evaluated only by the owner outside the repository against a published commitment, with aggregate-only output and a usage log. | Portable contracts without assumptions about the final dataset; protects the holdout from the implementation workspace. |
 | 2026-11-12 | Mark R4 complete (PR #11, `359e02c`). | CI and Security CI green on `main`: 532 unit (0 failures, 51 skipped), 50/50 integration, image provenance, migrations, smoke. Limitations recorded under R4. |
 | 2026-11-12 | R5: a predictor result that is missing, invalid, duplicated or a provider failure stays a separate outcome; classification metrics are conditional on valid predictions, while coverage, `*_all_items` metrics and the simulation include every item. | Keeps failures visible without polluting the three-class confusion counts. |
 | 2026-11-12 | R5: the enforcement simulation mirrors production enforce (any invalid target fails the whole answer closed; no supported claim fails the run), is checked against `apply_semantic_verdicts`, and lives outside production code. | Measures what enabling enforcement would do without enabling it. |

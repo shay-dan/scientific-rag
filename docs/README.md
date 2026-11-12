@@ -25,6 +25,7 @@ The root README is the project overview. The maintained application's
 - [Untrusted scientific-content security (R3)](../cost-aware-pipeline/docs/untrusted-content-security.md)
 - [Evaluation integrity and reproducibility (R4)](../cost-aware-pipeline/docs/evaluation-integrity.md)
 - [Offline semantic-verifier evaluation (R5)](../cost-aware-pipeline/docs/verifier-evaluation.md)
+- [Benchmark integration infrastructure (R6A)](../cost-aware-pipeline/docs/benchmark-integration.md)
 - API contracts: run the application and open <http://localhost:8000/docs>.
 
 ## Evaluation and experiments

@@ -1,0 +1,10 @@
+question_id,paper_id,evidence_id,grade,label_provenance,reviewer_status,source_dataset,search_strategy
+q1,pmid:10000001,,2,human_reviewed,reviewed,r6a-synthetic,fixture
+q1,pmid:10000002,,1,human_reviewed,reviewed,r6a-synthetic,fixture
+q1,arxiv:2401.00001,,0,human_reviewed,reviewed,r6a-synthetic,fixture
+q2,pmid:10000004,,2,human_reviewed,reviewed,r6a-synthetic,fixture
+q4,pmcid:PMC1000005,,1,model_generated,unreviewed,r6a-synthetic,fixture
+q5,arxiv:2402.00002,,2,human_authored,unreviewed,r6a-synthetic,fixture
+q1,pmid:10000001,E1,2,human_reviewed,reviewed,r6a-synthetic,fixture
+q1,pmid:10000002,E3,1,human_reviewed,reviewed,r6a-synthetic,fixture
+q2,pmid:10000004,E6,2,human_reviewed,reviewed,r6a-synthetic,fixture

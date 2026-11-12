@@ -1,0 +1,36 @@
+{
+  "schema": "scientific-rag-retrieval-run/v1",
+  "run_id": "fixture-run-1",
+  "system": {
+    "name": "fixture",
+    "kind": "import",
+    "version": "1"
+  },
+  "results": [
+    {
+      "question_id": "q1",
+      "status": "ok",
+      "ranked": [
+        "E2",
+        "E4",
+        "E3",
+        "E5"
+      ]
+    },
+    {
+      "question_id": "q2",
+      "status": "ok",
+      "ranked": []
+    },
+    {
+      "question_id": "q3",
+      "status": "ok",
+      "ranked": [
+        {
+          "evidence_id": "E1",
+          "score": 0.4
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,100 @@
+{
+  "schema": "scientific-rag-discovery-run/v1",
+  "run_id": "fixture-discovery-1",
+  "system": {
+    "name": "fixture",
+    "kind": "import"
+  },
+  "results": [
+    {
+      "question_id": "q1",
+      "status": "ok",
+      "stages": {
+        "discovered": [
+          {
+            "paper_id": "pmid:10000001",
+            "provider": "pubmed"
+          },
+          {
+            "paper_id": "pmid:10000002",
+            "provider": "pubmed"
+          },
+          {
+            "paper_id": "arxiv:2401.00001",
+            "provider": "arxiv"
+          },
+          {
+            "paper_id": "pmid:10000007",
+            "provider": "pubmed"
+          }
+        ],
+        "ranked": [
+          "arxiv:2401.00001",
+          "pmid:10000001",
+          "pmid:10000007",
+          "pmid:10000002"
+        ],
+        "screened": [
+          {
+            "paper_id": "arxiv:2401.00001",
+            "decision": "rejected"
+          },
+          {
+            "paper_id": "pmid:10000001",
+            "decision": "accepted"
+          },
+          {
+            "paper_id": "pmid:10000007",
+            "decision": "accepted"
+          },
+          {
+            "paper_id": "pmid:10000002",
+            "decision": "failed"
+          }
+        ],
+        "accepted": [
+          "pmid:10000001",
+          "pmid:10000007"
+        ],
+        "retrieved_evidence": [
+          "E1",
+          "E2"
+        ]
+      }
+    },
+    {
+      "question_id": "q2",
+      "status": "ok",
+      "stages": {
+        "discovered": [],
+        "ranked": [],
+        "screened": [],
+        "accepted": [],
+        "retrieved_evidence": []
+      }
+    },
+    {
+      "question_id": "q3",
+      "status": "ok",
+      "stages": {
+        "discovered": [
+          {
+            "paper_id": "arxiv:2401.00001",
+            "provider": "arxiv"
+          }
+        ],
+        "ranked": [
+          "arxiv:2401.00001"
+        ],
+        "screened": [
+          {
+            "paper_id": "arxiv:2401.00001",
+            "decision": "rejected"
+          }
+        ],
+        "accepted": [],
+        "retrieved_evidence": "not_observed"
+      }
+    }
+  ]
+}
