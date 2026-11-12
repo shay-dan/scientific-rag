@@ -1,6 +1,6 @@
 # Scientific RAG — engineering roadmap
 
-**Status:** authoritative planning document. Last updated 2026-11-12 (R3 complete; R4 in review).
+**Status:** authoritative planning document. Last updated 2026-11-12 (R4 complete; R5 in review).
 **Origin:** owner-approved *Master Implementation Plan*, which consolidated an independent
 audit, a reconciled R0–R13 roadmap, a discovery/evidence-acquisition addendum, and the
 historical engineering handover. Changes to this file require owner approval and an entry
@@ -29,8 +29,8 @@ Operating rules for agents are in [`AGENTS.md`](../AGENTS.md). History, complete
 | R1 | Authentication and startup security hardening | complete (2026-11-11, PR #6) | R0 |
 | R2 | Research-job lifecycle, recovery, deduplication | complete (2026-11-11, PR #8) | R0 |
 | R3 | Untrusted scientific-content security | **complete** (PR #10, `138f29a`) | R1 (order); before R8, R9-F |
-| R4 | Evaluation integrity and reproducibility | in review (branch `agent/r4-evaluation-integrity`) | R0 |
-| R5 | Offline semantic-verifier evaluation harness | not started | R0 |
+| R4 | Evaluation integrity and reproducibility | **complete** (PR #11, `359e02c`) | R0 |
+| R5 | Offline semantic-verifier evaluation harness | in review (branch `agent/r5-verifier-evaluation`) | R0 |
 | R6 | Human-reviewed evidence packs and labels | not started | R4, R5; R3 preferred |
 | R7 | Deterministic claim checks, graceful degradation | not started | R5, R6 |
 | R9-D | Discovery candidate pool, ranking, backfilling | not started | R6 pilot, R2 |
@@ -318,8 +318,8 @@ No dedicated security agent without evidence.
 
 ## R4 — Evaluation integrity and reproducibility
 
-**Status:** in review (branch `agent/r4-evaluation-integrity`; not complete until merged
-with green CI and Security CI on `main`). **Priority:** high. [Findings](#r4-findings-in-review).
+**Status:** complete. Merged as PR #11, merge commit `359e02c` (implementation `b74f4b4`),
+2026-11-12, with CI and Security CI green on `main`. **Priority:** high. [Findings](#r4-findings).
 Contract: [evaluation-integrity.md](../cost-aware-pipeline/docs/evaluation-integrity.md).
 
 - **Provenance:** dataset version and hash, Git SHA, generator, judge, provider, fallback
@@ -338,7 +338,7 @@ reproducible; provenance from actual inputs; metrics carry denominators.
 **Acceptance:** every headline metric has definition, evaluator identity, sample count,
 and failure context.
 
-### R4 findings (in review)
+### R4 findings
 
 - **Pre-fix defects reproduced by failing tests** (`6b8f63b` integration, `478aa00` unit):
   - the worker reported `failed_cases: 5` for 3 abstentions plus 2 failures, with no
@@ -386,11 +386,28 @@ and failure context.
     `GITHUB_SHA` is not substituted, and unknown SHAs produce a report warning.
 - **Not done:** the dataset schema has no version column, so runs identify datasets by
   content hash (`dataset.version` is `null`); adding one needs an approved migration.
-- **Test evidence:** recorded in the R4 PR; finalized in the next authorized stage PR.
+- **Final test evidence (CI on `main` at `359e02c`):**
+  - unit: 532 run, 0 failures, 51 skipped (the integration tests in the unit step, plus
+    one workflow-file check that has no workflows in the image);
+  - PostgreSQL/pgvector and Redis integration: 50/50;
+  - image source provenance recorded `359e02c…` from the build argument;
+  - migrations to `20261111_0002`, `/healthz` and legacy 13/13 passed;
+  - Security CI green; no paid calls.
+- **Known limitations carried forward:**
+  - no dataset version column (the dataset is identified by content hash);
+  - a build from a tree with uncommitted changes records only the base commit; PR CI
+    builds record the test merge commit;
+  - generator provenance is only as complete as the gateway traces;
+  - costs are lower bounds when usage is missing, and pre-R4 usage is unverified;
+  - offline regeneration needs the UI export;
+  - no significance testing, and the intervals assume exchangeable cases.
 
 ## R5 — Offline semantic-verifier evaluation harness
 
-**Status:** not started. **Priority:** high. No live LLM calls.
+**Status:** in review (branch `agent/r5-verifier-evaluation`; not complete until merged
+with green CI and Security CI on `main`). **Priority:** high. No live LLM calls.
+[Findings](#r5-findings-in-review). Protocol and metric definitions:
+[verifier-evaluation.md](../cost-aware-pipeline/docs/verifier-evaluation.md).
 
 Versioned claim/evidence contract (claim ID, passage, source ID, expected and predicted
 verdict, rationale/provenance, model and failure metadata, error category, evidence type)
@@ -403,6 +420,34 @@ deterministic baselines. Outputs: versioned JSON, Markdown summary, CSV
 misclassifications, deterministic regression tests, protocol document.
 **Acceptance:** correct, reproducible results on hand-verified fixtures. A working harness
 is not evidence of an accurate verifier.
+
+### R5 findings (in review)
+
+- **Built:** `app/verifier_evaluation.py`, standard-library only, not imported by any
+  production module.
+  - Versioned contracts: dataset, predictions and report (all `/v1`).
+  - Every item stays in the population. Missing, invalid, duplicate and provider-failure
+    outcomes are separate from the three verdict classes.
+  - Metrics: a confusion matrix with a `no_valid_prediction` column; per-class
+    precision, recall and F1, conditional and over all items; macro-F1; balanced
+    accuracy; the three safety rates; coverage rates; per error category and evidence
+    type; Wilson intervals.
+  - A whole-answer enforcement simulation (`production_enforce_v1`) with oracle
+    comparison.
+  - Baselines `structural_only` and `lexical_numeric`; import from future
+    shadow/enforce audits.
+  - Deterministic JSON, Markdown and errors CSV; CLI `scripts/evaluate_verifier.py`.
+- **Tests:**
+  - hand-calculated synthetic fixtures (10 items, 4 answers, synthetic and unreviewed)
+    covering every required case;
+  - equivalence of the simulation with production `apply_semantic_verdicts`;
+  - a check that no production module imports the harness;
+  - determinism and order-independence.
+- **Unchanged:** no production behavior, verifier mode, `PIPELINE_VERSION`, migration,
+  dependency or model call.
+- **Not done (later stages):** real labels and benchmark adapters (R6); calibration and
+  the enforcement decision (R8).
+- **Test evidence:** recorded in the R5 PR; finalized in the next authorized stage PR.
 
 ## R6 — Human-reviewed evidence packs, claim labels, discovery relevance labels
 
@@ -607,6 +652,10 @@ load evidence; large synthetic evaluation sets presented as gold data.
 
 | Date | Decision | Evidence / reason |
 |---|---|---|
+| 2026-11-12 | Mark R4 complete (PR #11, `359e02c`). | CI and Security CI green on `main`: 532 unit (0 failures, 51 skipped), 50/50 integration, image provenance, migrations, smoke. Limitations recorded under R4. |
+| 2026-11-12 | R5: a predictor result that is missing, invalid, duplicated or a provider failure stays a separate outcome; classification metrics are conditional on valid predictions, while coverage, `*_all_items` metrics and the simulation include every item. | Keeps failures visible without polluting the three-class confusion counts. |
+| 2026-11-12 | R5: the enforcement simulation mirrors production enforce (any invalid target fails the whole answer closed; no supported claim fails the run), is checked against `apply_semantic_verdicts`, and lives outside production code. | Measures what enabling enforcement would do without enabling it. |
+| 2026-11-12 | R5: external datasets must use verifier verdict labels; a foreign label scheme needs a declared, reviewed, versioned mapping, and nothing is translated implicitly (for example PubMedQA yes/no/maybe). | Owner instruction; prepares R6 without assuming label semantics. |
 | 2026-11-12 | Mark R3 complete (PR #10, `138f29a`). | CI and Security CI green on `main`: 477 unit (0 failures, 44 skipped), 44/44 integration, migrations, smoke. Known limitations recorded under R3. |
 | 2026-11-12 | Adopt the permanent pre-merge safety rule (`AGENTS.md`): every required verification must succeed before any merge command runs; never chain a check into a merge that can still execute. | Owner instruction after the R3 merge, where a failed documentation check was chained before the merge command. |
 | 2026-11-12 | R4: report evaluations from per-case records with one outcome per case; separate completion from quality; never average across evaluator engines, judge models or rubric versions; version judge prompts; record provenance in run metrics without a migration. | Reproduced defects (`6b8f63b`, `478aa00`); smallest change that keeps `/v1` and stored results compatible. |
