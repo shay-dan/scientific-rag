@@ -1,0 +1,7 @@
+paper_id,title,provider,verification,pmid,doi,arxiv,pmcid,family,year,source_dataset,source_record
+pmid:10000001,Drug A in adults with hypertension: a randomised trial,pubmed,verified,10000001,,,,F1,2021,r6a-synthetic,P1
+pmid:10000002,Drug A meta-analysis of blood pressure outcomes,pubmed,verified,10000002,10.5555/r6a.0002,,,F1,2023,r6a-synthetic,P2
+arxiv:2401.00001,Cuffless blood pressure estimation from wearable signals,arxiv,verified,,,2401.00001,,F3,2024,r6a-synthetic,P3
+pmid:10000004,Exercise training and VO2max in older adults,pubmed,verified,10000004,,,,F4,2020,r6a-synthetic,P4
+pmcid:PMC1000005,Vitamin D supplementation and fractures: full report,pmc,unverified,,,,PMC1000005,F5,2019,r6a-synthetic,P5
+arxiv:2402.00002,Transformers for clinical question answering,arxiv,verified,,,2402.00002,,F6,2024,r6a-synthetic,P6

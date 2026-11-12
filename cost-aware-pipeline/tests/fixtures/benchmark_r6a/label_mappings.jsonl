@@ -1,0 +1,1 @@
+{"mapping_id": "M1", "method": "rule", "notes": "Toy scheme for tests only.", "reviewed_by": "fixture-reviewer", "rules": {"no": "contradicted", "unclear": "exclude", "yes": "supported"}, "source_scheme": "toy_yes_no_unclear", "status": "approved", "target_scheme": "verifier_verdict_v1", "version": "1"}
