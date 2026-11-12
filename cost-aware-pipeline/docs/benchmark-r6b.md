@@ -156,36 +156,74 @@ parent/child retrieval); see the adapter proposal below.
 ## Owner-side scoring contract (`owner_scoring.py`)
 
 Run by the benchmark owner outside the repository; the repository ships only the code and
-synthetic round-trip tests.
+synthetic tests.
 
-References `scientific-rag-benchmark-references/v1`:
+References `scientific-rag-benchmark-references/v2`:
 
 ```json
-{"schema": "scientific-rag-benchmark-references/v1", "dataset_version": "0.3.1",
+{"schema": "scientific-rag-benchmark-references/v2", "dataset_version": "0.3.1",
+ "handoff":   {"dataset_hash": "<label-free handoff hash>", "manifest_sha256": "<sha256>"},
+ "benchmark": {"benchmark_hash": "<full labelled benchmark hash>"},
+ "label_mappings": [{"mapping_id": "scifact-claims", "source_label_scheme": "scifact_v1",
+                     "target_scheme": "verifier_verdict_v1", "mapping_version": "2026-11-01",
+                     "reviewed_by": "<reviewer>", "review_status": "reviewed",
+                     "rules": {"SUPPORT": "supported", "CONTRADICT": "contradicted", "NOINFO": "insufficient_evidence"}}],
+ "answers": {"<answer_id>": {"targets": ["claims.1", "claims.2"]}},
  "records": [{"input_id": "<opaque id or owner key>", "task": "<task>", "population": "A",
-              "label_provenance": "human_reviewed", "reviewer_status": "reviewed",
-              "reference": {"…": "task-specific"}}]}
+              "label_provenance": "human_authored", "reviewer_status": "unreviewed",
+              "reference": {"…": "task-specific"},
+              "answer": {"answer_id": "<answer_id>", "target": "claims.1", "critical": false, "essential": true}}]}
 ```
+
+`answers` and per-record `answer` are optional and apply to claims only.
 
 | Task | `reference` | Scored as |
 |---|---|---|
-| `claim_verification` | `verdict` in verifier verdicts, already mapped by a reviewed mapping | R5 `evaluate` |
-| `fixed_evidence_retrieval` | `relevant_evidence {evidence_id: grade}` | Recall/Precision/nDCG@K (R6A metric code) |
-| `open_discovery` | `relevant_papers {paper_id: grade}` (pooled) | **pooled Recall@K only**; unjudged candidates are never hits and are not dropped |
+| `claim_verification` | `{"label_scheme": "verifier_verdict_v1", "verdict"}`, or `{"source_label_scheme", "source_label", "label_mapping"}` | R5 `evaluate`, one report per label source |
+| `fixed_evidence_retrieval` | `relevant_evidence {evidence_id: grade 0–2}` | Recall/Precision/nDCG@K (R6A metric code) |
+| `open_discovery` | `relevant_papers {paper_id: grade 0–2}` (pooled) | **pooled Recall@K only**; unjudged candidates are never hits and are not dropped |
 | `fixed_evidence_answer` | `expected_decision` | accuracy over completed and over all inputs |
 
-Rules:
+Validation (all refusals; nothing is resolved by picking one):
 
-- Scores are per scoring population (A–F) and **never pooled**. Only population A is
-  flagged `expert_labelled`.
-- The owner may pass an `id_map` (`input_id` → owner key); the map stays with the owner.
-- Refused: references not following the contract or matching no exported prediction
-  (`NoReferenceLabels`), a dataset-version mismatch, or a population outside A–F. The CLI
-  `score` command refuses without `--references`.
-- Exported predictions without a reference are counted as `unscorable_predictions`.
-- SciFact Class A versus derived Class B, and any PubMedQA, QASPER or Evidence-Inference
-  label, enter only through the owner's reviewed mapping to verifier verdicts or answer
-  decisions. The harness never translates them.
+- **Handoff identity.** `handoff.dataset_hash` and `handoff.manifest_sha256` must equal the
+  export's. References for another handoff with the same `dataset_version` are refused.
+  `benchmark.benchmark_hash` (the full labelled benchmark) is required, recorded in the
+  scores, and must differ from both handoff hashes. Unbound v1 references are refused.
+- **Duplicates and conflicts.** Two references for one `(task, input_id)`, or two
+  references that resolve to one prediction through the owner `id_map`, are refused.
+  The `id_map` must be one-to-one.
+- **Label mappings.** A native verdict needs `label_scheme: verifier_verdict_v1` and no
+  source-label fields. A source label (for example SciFact, PubMedQA, Evidence Inference)
+  becomes a verifier verdict only through a declared mapping with `mapping_id`,
+  `source_label_scheme`, `target_scheme: verifier_verdict_v1`, `mapping_version`,
+  `reviewed_by`, `review_status` reviewed or adjudicated, and a rule for that label.
+  Mapping identity and version appear in the R5 report.
+- **Review status.** `label_provenance` and `reviewer_status` are required per record and
+  never defaulted; `human_reviewed` needs `reviewed` or `adjudicated`. Population A is
+  reported as `expert_labelled_source`. It does not make a label independently
+  human-reviewed: `independently_human_reviewed` counts only records explicitly marked
+  `human_reviewed` and reviewed/adjudicated.
+- **Answer grouping.** Either no claim has an `answer`, or every claim does. Every declared
+  answer needs distinct valid targets including at least one `claims.N`, and the claim
+  references must cover exactly the declared targets of each answer, in one population and
+  one label source.
+
+Scoring:
+
+- Per scoring population (A–F), **never pooled**.
+- References without an exported prediction count as `missing`
+  (`references_without_prediction`); predictions without a reference are counted as
+  `unscorable_predictions`.
+- **Claim-only references** (no answer grouping) report the three-class confusion matrix,
+  per-class precision, recall and F1, coverage and claim-level safety rates. The R5
+  whole-answer enforcement simulation is replaced by
+  `{"status": "unavailable", "reason": …}` and the answer count is `null`: each claim is
+  placed in a placeholder answer only to satisfy the R5 dataset contract, and no
+  answer-level number is reported from it.
+- **Declared answer grouping** enables the real R5 simulation (`status: available`) with
+  the declared answer IDs, targets and critical/essential flags. R5's production-
+  equivalence logic and production enforcement are unchanged.
 
 ## Commands (outside the repository)
 

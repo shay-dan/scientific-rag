@@ -448,9 +448,14 @@ class BaselineExportTests(TempCase):
 
 
 class OwnerScoringTests(TempCase):
+    REVIEW = {"label_provenance": "human_authored", "reviewer_status": "unreviewed"}
+    NATIVE = {"label_scheme": "verifier_verdict_v1"}
+
     def references(self, export, records):
-        return {"schema": REFERENCE_SCHEMA, "dataset_version": export["run"]["dataset"]["dataset_version"],
-                "records": records}
+        dataset = export["run"]["dataset"]
+        return {"schema": REFERENCE_SCHEMA, "dataset_version": dataset["dataset_version"],
+                "handoff": {"dataset_hash": dataset["dataset_hash"], "manifest_sha256": dataset["manifest_sha256"]},
+                "benchmark": {"benchmark_hash": "b" * 64}, "records": records}
 
     def test_refuses_without_reference_labels(self):
         export = self.export_for()
@@ -458,15 +463,15 @@ class OwnerScoringTests(TempCase):
             score_export(export, self.references(export, []))
         with self.assertRaises(NoReferenceLabels):
             score_export(export, {"schema": "something-else"})
-        unrelated = [{"input_id": "fc-unknown", "task": "claim_verification", "population": "A",
-                      "reference": {"verdict": "supported"}}]
+        unrelated = [{"input_id": "fc-unknown", "task": "claim_verification", "population": "A", **self.REVIEW,
+                      "reference": {**self.NATIVE, "verdict": "supported"}}]
         with self.assertRaises(NoReferenceLabels):
             score_export(export, self.references(export, unrelated))
 
     def test_refuses_dataset_version_mismatch_and_invalid_population(self):
         export = self.export_for()
         refs = self.references(export, [{"input_id": _id("fc", 1), "task": "claim_verification", "population": "A",
-                                         "reference": {"verdict": "supported"}}])
+                                         **self.REVIEW, "reference": {**self.NATIVE, "verdict": "supported"}}])
         with self.assertRaises(ValueError):
             score_export(export, dict(refs, dataset_version="other"))
         refs["records"][0]["population"] = "pooled"
@@ -481,18 +486,20 @@ class OwnerScoringTests(TempCase):
              "reference": {"relevant_evidence": {f"{_id('fq', 1)}#0": 2}}},
             {"input_id": _id("fc", 1), "task": "claim_verification", "population": "B",
              "label_provenance": "human_authored", "reviewer_status": "unreviewed",
-             "reference": {"verdict": "supported"}},
-            {"input_id": _id("fq", 1), "task": "fixed_evidence_answer", "population": "C",
+             "reference": {**self.NATIVE, "verdict": "supported"}},
+            {"input_id": _id("fq", 1), "task": "fixed_evidence_answer", "population": "C", **self.REVIEW,
              "reference": {"expected_decision": "yes"}},
         ])
         scores = score_export(export, refs)
         self.assertEqual(set(scores["by_population"]), {"A", "B", "C"})
-        self.assertTrue(scores["by_population"]["A"]["expert_labelled"])
-        self.assertFalse(scores["by_population"]["B"]["expert_labelled"])
+        self.assertTrue(scores["by_population"]["A"]["expert_labelled_source"])
+        self.assertFalse(scores["by_population"]["B"]["expert_labelled_source"])
+        self.assertEqual(scores["by_population"]["A"]["independently_human_reviewed"], {"records": 1, "of": 1})
         retrieval = scores["by_population"]["A"]["tasks"]["fixed_evidence_retrieval"]["completed"]["by_k"]["1"]
         self.assertEqual(retrieval, {"recall": 1.0, "precision": 1.0, "ndcg": 1.0})
-        claims = scores["by_population"]["B"]["tasks"]["claim_verification"]["r5_report"]
-        self.assertEqual(claims["counts"]["correct"] if "counts" in claims else 1, 1)
+        claims = scores["by_population"]["B"]["tasks"]["claim_verification"]["by_label_source"]["native"]["r5_report"]
+        self.assertEqual(claims["confusion_matrix"]["counts"]["supported"]["supported"], 1)
+        self.assertEqual(claims["enforcement_simulation"]["status"], "unavailable")
         answers = scores["by_population"]["C"]["tasks"]["fixed_evidence_answer"]
         self.assertEqual((answers["completed"], answers["accuracy_completed"], answers["accuracy_all_inputs"]),
                          (0, None, 0.0))
@@ -502,7 +509,7 @@ class OwnerScoringTests(TempCase):
     def test_owner_id_map_join(self):
         export = self.export_for()
         refs = self.references(export, [{"input_id": "owner-key-1", "task": "claim_verification", "population": "A",
-                                         "reference": {"verdict": "contradicted"}}])
+                                         **self.REVIEW, "reference": {**self.NATIVE, "verdict": "contradicted"}}])
         scores = score_export(export, refs, id_map={_id("fc", 2): "owner-key-1"})
         self.assertIn("claim_verification", scores["by_population"]["A"]["tasks"])
 
@@ -517,11 +524,10 @@ class OwnerScoringTests(TempCase):
         export = build_export(records=records, protocol={}, import_report=report, run_id="d", git=GIT,
                               predictor=PREDICTOR)
         refs = self.references(export, [{"input_id": _id("od", 1), "task": "open_discovery", "population": "D",
-                                         "reference": {"relevant_papers": {"pmid:1": 2, "pmid:3": 1},
-                                                       "judged_papers": ["pmid:1", "pmid:2", "pmid:3"]}}])
+                                         **self.REVIEW, "reference": {"relevant_papers": {"pmid:1": 2, "pmid:3": 1}}}])
         by_k = score_export(export, refs)["by_population"]["D"]["tasks"]["open_discovery"]["completed"]["by_k"]
         # Ranking is scored as returned (no condensing): top-1 is unjudged pmid:9 -> 0 of 2 pooled relevant;
-        # top-3 adds pmid:1 (relevant) and pmid:2 (judged irrelevant) -> 1 of 2.
+        # top-3 adds pmid:1 (relevant) and pmid:2 (not in the pool) -> 1 of 2.
         self.assertEqual(by_k["1"], {"pooled_recall": 0.0})
         self.assertEqual(by_k["3"], {"pooled_recall": 0.5})
 

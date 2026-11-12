@@ -577,8 +577,19 @@ uncertainty. Expansion is a separate decision.
   open discovery and answer tasks not executed (live search / model not authorized).
   Exports are byte-identical on re-run.
 - **Owner interface:** prediction export `scientific-rag-benchmark-predictions/v1` and
-  reference contract `scientific-rag-benchmark-references/v1`; per-population scoring,
-  never pooled, only population A expert-labelled; refusal without labels.
+  reference contract `scientific-rag-benchmark-references/v2`; per-population scoring,
+  never pooled; refusal without labels.
+- **Review corrections (owner review of PR #14 at `8209d33`):** reproduced first
+  (`7252079`), then fixed in owner scoring only:
+  - references are bound to the exact label-free handoff (dataset hash and manifest
+    hash), with the full benchmark hash recorded separately;
+  - duplicate or conflicting references, including via the owner `id_map`, are refused;
+  - source labels become verifier verdicts only through declared, reviewed, versioned
+    mappings; review fields are required, and population A (expert source annotations)
+    is not reported as independent human review;
+  - claim-only references report claim-level metrics and mark the whole-answer
+    enforcement simulation unavailable; it runs only with declared, validated answer
+    grouping. R5 is unchanged.
 - **Proposed, not implemented:** a bounded production hybrid-retriever adapter (FTS +
   pgvector + RRF + MMR on the frozen packs in an isolated schema); embedding calls need
   cost authorization.
@@ -768,6 +779,7 @@ load evidence; large synthetic evaluation sets presented as gold data.
 | 2026-11-12 | Mark R5 complete (PR #12, `b21bc37`). | CI and Security CI green on `main`: 562 unit (0 failures, 51 skipped), 50/50 integration, image provenance, migrations, smoke; no production code changed. |
 | 2026-11-12 | Mark R6A complete (PR #13, `60b394a`). | CI and Security CI green on `main`: 610 unit (0 failures, 51 skipped), 50/50 integration, image provenance, migrations, smoke, legacy 13/13; no production code changed. |
 | 2026-11-12 | R6B: import the label-free development handoff through its own unscored input contract (not R6A gold records); enforce discovery-before-fixed-evidence in code; export portable unscored predictions joined on opaque IDs; scoring only by the owner, per population, outside the repository; no handoff text in the public repository. | Owner R6B authorization; handoff README and configs; repository is public. |
+| 2026-11-12 | R6B owner scoring: references bind to the label-free handoff identity; duplicates, conflicts and unreviewed mappings are refused; whole-answer metrics only with declared answer grouping. | Owner review of PR #14. |
 | 2026-11-12 | BM25 is an offline reference baseline only; the production FTS + pgvector + RRF + MMR retriever is benchmarked later through a separately authorized adapter on the same frozen packs. | Owner clarification. |
 | 2026-11-12 | Split R6 into R6A (benchmark-integration infrastructure) and R6B (integrating the independently built benchmark), each separately authorized. | Owner instruction; the independent benchmark is still being labeled and is not available to the implementation agent. |
 | 2026-11-12 | R6A: benchmark data enters only through versioned manifests with per-file hashes and declarative adapters; foreign label schemes need declared, approved mappings; gold eligibility is computed; packs keep distractors; the sealed holdout is evaluated only by the owner outside the repository against a published commitment, with aggregate-only output and a usage log. | Portable contracts without assumptions about the final dataset; protects the holdout from the implementation workspace. |

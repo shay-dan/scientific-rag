@@ -61,6 +61,11 @@ class ReferenceIdentityTests(ReviewCase):
         with self.assertRaisesRegex(ValueError, "handoff"):
             score_export(self.export, refs)
 
+    def test_unbound_v1_references_are_refused(self):
+        refs = self.references([claim_ref(FC1, "supported")], schema="scientific-rag-benchmark-references/v1")
+        with self.assertRaisesRegex(ValueError, "v1"):
+            score_export(self.export, refs)
+
     def test_handoff_binding_is_required(self):
         refs = self.references([claim_ref(FC1, "supported")])
         del refs["handoff"]
