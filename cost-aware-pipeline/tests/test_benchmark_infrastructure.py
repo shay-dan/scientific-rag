@@ -395,7 +395,7 @@ class HoldoutTests(unittest.TestCase):
                                    "warnings": ["free text"]})
         self.assertEqual(stripped, {"schema": "scientific-rag-retrieval-report/v1", "population": {"questions": 4}})
         self.assertEqual(aggregate_only({"schema": "something-else/v1", "secret": "x"}),
-                         {"schema": "something-else/v1", "note": "unknown report schema"})
+                         {"schema": "unknown", "note": "unknown report schema"})
 
     def test_repository_contains_no_holdout_questions(self) -> None:
         for path in (project_root / "tests" / "fixtures").rglob("*.jsonl"):

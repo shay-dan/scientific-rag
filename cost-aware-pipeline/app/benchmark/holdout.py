@@ -54,37 +54,82 @@ def check_location(holdout_dir: Path, repo_root: Path) -> None:
 
 # --- allowlist output -----------------------------------------------------------------------
 # Leaf kinds: "num" (int/float/bool/None), "id" (short identifier string), "ids" (list of ids),
-# "nums" (list of numbers). A dict spec maps allowed keys to specs; "*" allows any
-# identifier-like key with the given spec. Anything not allowed is dropped.
+# "nums" (list of numbers). A dict spec maps allowed keys to specs. Dynamic keys are allowed
+# only through ``Keys``: a fixed vocabulary of harness-defined names (verdicts, outcomes,
+# metric names, evidence types, approved error categories) or a digit-only K. Report-supplied
+# keys outside the vocabulary are dropped, so no content can be encoded in a key.
+from ..verifier_evaluation import NO_VALID, PREDICTION_OUTCOMES, VERDICTS
+from .contracts import EVIDENCE_TYPES, LABEL_PROVENANCE, REVIEWER_STATUS
+
 _ID = re.compile(r"^[A-Za-z0-9_.:+@/\-]{1,96}$")
+_K = re.compile(r"^[1-9][0-9]{0,3}$")
+
+
+class Keys:
+    """Dict spec whose keys must come from a fixed vocabulary (or match a strict pattern)."""
+
+    def __init__(self, allowed, spec):
+        self.allowed, self.spec = allowed, spec
+
+    def permits(self, key) -> bool:
+        if not isinstance(key, str):
+            return False
+        return bool(self.allowed.match(key)) if isinstance(self.allowed, re.Pattern) else key in self.allowed
+
+
+# Error categories are curator-defined; only this approved vocabulary is reported from a
+# holdout. Others are withheld (their items still count in every other aggregate).
+APPROVED_ERROR_CATEGORIES = frozenset({
+    "none", "numerical", "causal", "population", "negation", "scope", "contradiction", "dosage",
+    "temporal", "entity", "comparison", "hedging", "citation", "other",
+})
 _RATE = {"numerator": "num", "denominator": "num", "rate": "num", "ci95_wilson": "nums"}
 _MEAN = {"n": "num", "mean": "num", "ci95_bootstrap": "nums", **_RATE}
 _CLASS = {key: "num" for key in ("true_positives", "predicted", "support_assessed", "support_all", "precision",
                                  "recall", "recall_all_items", "f1", "f1_all_items")}
+_COVERAGE = ("assessed_rate", "missing_assessment_rate", "invalid_output_rate", "duplicate_assessment_rate",
+             "provider_failure_rate")
+_ANSWER_OUTCOMES = ("complete_answer", "partial_answer", "no_supported_claims", "failed_closed")
+_SIM_TOTALS = ("supported_retained", "supported_claims_retained", "supported_limitations_retained",
+               "unsupported_retained", "critical_contradictions_retained", "supported_removed",
+               "supported_lost_to_fail_closed", "essential_lost", "claims_removed", "limitations_removed",
+               "targets_lost_to_fail_closed")
+_SIM_RATES = ("claim_coverage", "supported_target_coverage", "answer_coverage", "answers_without_usable_claims",
+              "incomplete_answer_rate", "answers_losing_oracle_support", "unsupported_retention")
+_RESULT_STATUS = ("ok", "missing", "failed", "duplicate")
+_RETRIEVAL_METRICS = ("paper_recall", "paper_precision", "paper_ndcg", "passage_recall", "passage_precision",
+                      "paper_success")
 VERIFIER_ALLOWLIST = {
     "schema": "id",
     "provenance": {
         "dataset": {"dataset_id": "id", "version": "id", "content_hash": "id", "items": "num", "answers": "num",
-                    "label_provenance": {"*": "num"}, "reviewer_status": {"*": "num"},
+                    "label_provenance": Keys(frozenset(LABEL_PROVENANCE), "num"),
+                    "reviewer_status": Keys(frozenset(REVIEWER_STATUS), "num"),
                     "label_mapping_version": "id"},
         "predictor": {"name": "id", "kind": "id", "version": "id", "provider": "id", "model": "id"},
         "predictions_hash": "id", "git_sha": "id", "git_sha_source": "id", "label_scheme": "id",
         "simulation_policy": "id",
     },
-    "population": {"items": "num", "outcomes": {"*": "num"}, "unknown_item_predictions": "num",
-                   "unattributed_predictions": "num", "prediction_records": "num"},
-    "coverage": {"*": _RATE},
-    "confusion_matrix": {"columns": "ids", "counts": {"*": {"*": "num"}}},
-    "classes": {"*": _CLASS},
+    "population": {"items": "num", "outcomes": Keys(frozenset(PREDICTION_OUTCOMES), "num"),
+                   "unknown_item_predictions": "num", "unattributed_predictions": "num", "prediction_records": "num"},
+    "coverage": {name: _RATE for name in _COVERAGE},
+    "confusion_matrix": {"columns": "ids",
+                         "counts": Keys(frozenset(VERDICTS), Keys(frozenset((*VERDICTS, NO_VALID)), "num"))},
+    "classes": Keys(frozenset(VERDICTS), _CLASS),
     "summary": {"accuracy_assessed": _RATE, "macro_f1": "num", "macro_f1_all_items": "num",
                 "balanced_accuracy": "num", "balanced_accuracy_all_items": "num", "classes_in_macro": "ids",
                 "classes_in_macro_all_items": "ids", "classes_without_expected_items": "ids"},
-    "safety": {"*": "num", "unsupported_false_acceptance": _RATE, "critical_contradiction_acceptance": _RATE,
-               "supported_false_rejection": _RATE},
-    "by_error_category": {"*": {"items": "num", "assessed": "num", "accuracy": _RATE, "predicted_supported": _RATE}},
-    "by_evidence_type": {"*": {"items": "num", "accuracy": _RATE}},
-    "enforcement_simulation": {"policy": "id", "answers": "num", "outcomes": {"*": "num"},
-                               "oracle_outcomes": {"*": "num"}, "totals": {"*": "num"}, "*": _RATE},
+    "safety": {"unsupported_false_acceptance": _RATE, "critical_contradiction_acceptance": _RATE,
+               "supported_false_rejection": _RATE, "non_supported_without_valid_prediction": "num",
+               "supported_without_valid_prediction": "num"},
+    "by_error_category": Keys(APPROVED_ERROR_CATEGORIES,
+                              {"items": "num", "assessed": "num", "accuracy": _RATE, "predicted_supported": _RATE}),
+    "by_evidence_type": Keys(frozenset((*EVIDENCE_TYPES, "mixed", "unspecified")), {"items": "num", "accuracy": _RATE}),
+    "enforcement_simulation": {"policy": "id", "answers": "num",
+                               "outcomes": Keys(frozenset(_ANSWER_OUTCOMES), "num"),
+                               "oracle_outcomes": Keys(frozenset(_ANSWER_OUTCOMES), "num"),
+                               "totals": Keys(frozenset(_SIM_TOTALS), "num"),
+                               **{name: _RATE for name in _SIM_RATES}},
     "cost": {"cost_status": "id", "cost_usd": "num", "known_cost_lower_bound_usd": "num"},
 }
 RETRIEVAL_ALLOWLIST = {
@@ -92,12 +137,15 @@ RETRIEVAL_ALLOWLIST = {
     "provenance": {"benchmark_id": "id", "benchmark_version": "id", "pack_id": "id", "pack_hash": "id",
                    "pack_identity": "id", "run_id": "id", "run_hash": "id", "seed": "num", "ks": "nums",
                    "system": {"name": "id", "version": "id", "kind": "id"}},
-    "population": {"questions": "num", "evaluable": "num", "result_status": {"*": "num"},
+    "population": {"questions": "num", "evaluable": "num", "result_status": Keys(frozenset(_RESULT_STATUS), "num"),
                    "unknown_result_questions": "num", "unknown_ranked_evidence": "num"},
-    "aggregates": {"*": {"questions": "num", "by_k": {"*": {"*": _MEAN}}}},
+    "aggregates": Keys(frozenset(("completed", "all_questions")),
+                       {"questions": "num", "by_k": Keys(_K, Keys(frozenset(_RETRIEVAL_METRICS), _MEAN))}),
 }
 ALLOWLISTS = {"scientific-rag-verifier-report/v1": VERIFIER_ALLOWLIST,
               "scientific-rag-retrieval-report/v1": RETRIEVAL_ALLOWLIST}
+UNKNOWN_SCHEMA = {"schema": "unknown", "note": "unknown report schema"}
+_DROP = object()
 
 
 def _allow(value, spec):
@@ -108,16 +156,21 @@ def _allow(value, spec):
     if spec in ("ids", "nums"):
         if not isinstance(value, list):
             return _DROP
-        kept = [item for item in (_allow(item, spec[:-1] if spec == "nums" else "id") for item in value)]
+        kept = [_allow(item, "num" if spec == "nums" else "id") for item in value]
         return _DROP if any(item is _DROP for item in kept) else kept
-    if isinstance(spec, dict):
+    if isinstance(spec, (dict, Keys)):
         if not isinstance(value, dict):
             return _DROP
         out = {}
         for key, item in value.items():
-            sub = spec.get(key, spec.get("*") if isinstance(key, str) and _ID.match(key) else None)
-            if sub is None:
-                continue
+            if isinstance(spec, Keys):
+                if not spec.permits(key):
+                    continue
+                sub = spec.spec
+            else:
+                sub = spec.get(key) if isinstance(key, str) else None
+                if sub is None:
+                    continue
             filtered = _allow(item, sub)
             if filtered is not _DROP:
                 out[key] = filtered
@@ -125,18 +178,17 @@ def _allow(value, spec):
     return _DROP
 
 
-_DROP = object()
-
-
 def aggregate_only(report: dict) -> dict:
     """Owner-safe summary built from the allowlist for the report's schema.
 
-    Unknown report schemas yield only the schema name. Fields not on the
-    allowlist, free-text strings and per-item rows are never copied.
+    An unrecognized schema yields a fixed value; the report's own schema string is
+    never echoed. Fields and keys not on the allowlist, free-text strings and per-item
+    rows are never copied.
     """
-    spec = ALLOWLISTS.get(report.get("schema")) if isinstance(report, dict) else None
+    schema = report.get("schema") if isinstance(report, dict) else None
+    spec = ALLOWLISTS.get(schema) if isinstance(schema, str) else None
     if spec is None:
-        return {"schema": report.get("schema") if isinstance(report, dict) else None, "note": "unknown report schema"}
+        return dict(UNKNOWN_SCHEMA)
     return _allow(report, spec)
 
 

@@ -531,7 +531,9 @@ uncertainty. Expansion is a separate decision.
   - retrieval scoring requires a matching `pack_id` and `content_hash`
     (`PackIdentityError` otherwise);
   - the owner holdout path fully validates before scoring and builds its output from
-    an allowlist.
+    an allowlist;
+  - unknown schemas yield a fixed value, and dynamic keys must come from fixed harness
+    vocabularies (reproduced in `dedffd5`).
 - **Remaining before the R6 pilot:**
   - R6B adapters for the independent benchmark release (owner authorization; no access
     in R6A);

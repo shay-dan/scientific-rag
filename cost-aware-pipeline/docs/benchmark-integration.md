@@ -206,7 +206,16 @@ The holdout never enters the repository or an implementation agent's workspace:
    - Every other field is dropped, as is any string value that isn't a short
      identifier, wherever it appears. A new per-item field added to a report therefore
      cannot leak.
-   - Unknown report schemas yield only their schema name.
+   - Dynamic dictionary keys must come from fixed harness vocabularies: verdicts,
+     prediction and answer outcomes, metric and rate names, evidence types, K values,
+     and an approved error-category list. Report-supplied keys outside these are
+     dropped, so no content can be encoded in a key. Error categories outside the
+     approved list are withheld from the per-category breakdown, but their items still
+     count in every other aggregate.
+   - An unrecognized report schema yields only `{"schema": "unknown"}`; the report's own
+     schema string is never echoed.
+   - Identifier-shaped values (for example dataset, run and pack IDs) are kept; holdout
+     curators must not put content in identifiers.
 
    It appends a log entry for every scored use, recording the time, evaluator, run
    label, commitment, benchmark version, git provenance and summary hash.
