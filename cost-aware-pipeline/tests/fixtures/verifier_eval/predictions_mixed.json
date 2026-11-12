@@ -1,0 +1,86 @@
+{
+  "schema": "scientific-rag-verifier-predictions/v1",
+  "predictor": {
+    "name": "fixture-model",
+    "kind": "model",
+    "version": "fixture-1",
+    "provider": "fixture",
+    "model": "fixture-verifier",
+    "usage": {
+      "cost_status": "partial_lower_bound",
+      "cost_usd": null,
+      "known_cost_lower_bound_usd": 0.0012
+    }
+  },
+  "predictions": [
+    {
+      "item_id": "A1-c1",
+      "status": "assessed",
+      "verdict": "supported",
+      "rationale": "fixture"
+    },
+    {
+      "item_id": "A1-c2",
+      "status": "assessed",
+      "verdict": "insufficient_evidence",
+      "rationale": "fixture"
+    },
+    {
+      "item_id": "A1-l1",
+      "status": "assessed",
+      "verdict": "maybe",
+      "rationale": "invalid label"
+    },
+    {
+      "item_id": "A2-c1",
+      "status": "assessed",
+      "verdict": "supported",
+      "rationale": "fixture"
+    },
+    {
+      "item_id": "A2-c2",
+      "status": "assessed",
+      "verdict": "supported",
+      "rationale": "fixture"
+    },
+    {
+      "item_id": "A3-c1",
+      "status": "provider_failure",
+      "error_type": "TimeoutError"
+    },
+    {
+      "item_id": "A3-c2",
+      "status": "assessed",
+      "verdict": "insufficient_evidence",
+      "rationale": "fixture"
+    },
+    {
+      "item_id": "A4-c1",
+      "status": "assessed",
+      "verdict": "contradicted",
+      "rationale": "fixture"
+    },
+    {
+      "item_id": "A4-c2",
+      "status": "assessed",
+      "verdict": "supported",
+      "rationale": "fixture"
+    },
+    {
+      "item_id": "A4-c2",
+      "status": "assessed",
+      "verdict": "contradicted",
+      "rationale": "fixture"
+    },
+    {
+      "item_id": "ghost",
+      "status": "assessed",
+      "verdict": "supported",
+      "rationale": "fixture"
+    },
+    {
+      "status": "assessed",
+      "verdict": "supported"
+    }
+  ]
+}

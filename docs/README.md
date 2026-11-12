@@ -24,6 +24,7 @@ The root README is the project overview. The maintained application's
 - [Research job lifecycle and recovery (R2)](../cost-aware-pipeline/docs/research-job-lifecycle.md)
 - [Untrusted scientific-content security (R3)](../cost-aware-pipeline/docs/untrusted-content-security.md)
 - [Evaluation integrity and reproducibility (R4)](../cost-aware-pipeline/docs/evaluation-integrity.md)
+- [Offline semantic-verifier evaluation (R5)](../cost-aware-pipeline/docs/verifier-evaluation.md)
 - API contracts: run the application and open <http://localhost:8000/docs>.
 
 ## Evaluation and experiments
