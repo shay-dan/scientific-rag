@@ -64,6 +64,8 @@ class UsageCompletenessReproductionTests(unittest.TestCase):
 
 
 class GitShaProvenanceReproductionTests(unittest.TestCase):
+    @unittest.skipUnless((repo_root / ".github" / "workflows").is_dir(),
+                         "workflow files are not in the test image; CI verifies the built image SHA directly")
     def test_ci_builds_pass_the_source_sha(self) -> None:
         for workflow in ("ci.yml", "security.yml"):
             text = (repo_root / ".github" / "workflows" / workflow).read_text(encoding="utf-8")
