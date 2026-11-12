@@ -50,6 +50,9 @@ recommend closing or revising the stage instead of writing redundant code.
 - Branch names: `agent/<stage>-<topic>` (for example `agent/r1-auth-hardening`).
 - Never force-push, rewrite history, delete unrelated files, disable CI, or merge
   without explicit owner approval.
+- **Pre-merge safety:** every required verification command must complete successfully
+  before any merge action is invoked. If a command fails, stop. Never chain a check into
+  a merge command that can still execute (for example with `;`).
 
 ## Supported environment
 

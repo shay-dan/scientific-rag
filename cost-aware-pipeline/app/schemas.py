@@ -4,6 +4,8 @@ from datetime import datetime
 from enum import Enum
 from uuid import UUID
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -74,6 +76,9 @@ class EvaluationCaseInput(BaseModel):
     reference_answer: str = Field(min_length=3)
     reference_context: str | None = None
     reference_claims: list[str] = Field(default_factory=list, max_length=50)
+    # R4: declared case provenance. Never defaulted to a human label; unreviewed or
+    # model-generated material must not be stored as human-reviewed.
+    provenance: Literal["human_reviewed", "human_authored", "synthetic", "model_generated", "unspecified"] = "unspecified"
 
 
 class EvaluationDatasetInput(BaseModel):

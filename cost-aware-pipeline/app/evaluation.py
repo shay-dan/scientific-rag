@@ -21,11 +21,18 @@ RAGAS_JUDGE_MAX_OUTPUT_TOKENS = 8192
 
 @dataclass
 class EvaluationUsageTracker:
-    """Collect judge usage exactly when providers expose it, and label estimates."""
+    """Collect judge usage exactly when providers expose it, and label estimates.
+
+    R4: usage completeness is explicit. A response without usage metadata, a failed
+    call (the provider may still have billed it) or an unfinished call makes the
+    judge cost unknown or a lower bound; it is never reported as confirmed zero.
+    """
 
     judge_attempts: int = 0
     judge_successes: int = 0
     judge_failures: int = 0
+    judge_responses_with_usage: int = 0
+    judge_responses_without_usage: int = 0
     judge_input_tokens: int = 0
     judge_output_tokens: int = 0
     judge_reasoning_tokens: int = 0
@@ -42,7 +49,9 @@ class EvaluationUsageTracker:
         self.judge_successes += 1
         usage = getattr(response, "usage", None)
         if usage is None:
+            self.judge_responses_without_usage += 1
             return
+        self.judge_responses_with_usage += 1
         self.judge_input_tokens += int(getattr(usage, "prompt_tokens", 0) or 0)
         self.judge_output_tokens += int(getattr(usage, "completion_tokens", 0) or 0)
         details = getattr(usage, "completion_tokens_details", None)
@@ -52,7 +61,9 @@ class EvaluationUsageTracker:
         self.judge_successes += 1
         usage = getattr(response, "usage_metadata", None)
         if usage is None:
+            self.judge_responses_without_usage += 1
             return
+        self.judge_responses_with_usage += 1
         self.judge_input_tokens += int(getattr(usage, "prompt_token_count", 0) or 0)
         candidates = int(getattr(usage, "candidates_token_count", 0) or 0)
         reasoning = int(getattr(usage, "thoughts_token_count", 0) or 0)
@@ -63,10 +74,26 @@ class EvaluationUsageTracker:
         self.embedding_calls += 1
         self.embedding_input_tokens_estimated += estimate_text_tokens(texts)
 
+    def judge_cost_status(self) -> tuple[str, int]:
+        """(status, uncertain call count); status is no_calls, complete, partial_lower_bound or unknown."""
+        unfinished = max(self.judge_attempts - self.judge_successes - self.judge_failures, 0)
+        uncertain = self.judge_failures + self.judge_responses_without_usage + unfinished
+        if self.judge_attempts == 0:
+            return "no_calls", 0
+        if uncertain == 0:
+            return "complete", 0
+        return ("partial_lower_bound" if self.judge_responses_with_usage else "unknown"), uncertain
+
     def summary(self, *, judge_model: str, embedding_model: str) -> dict:
-        judge_cost, judge_rate_source = calculate_cost(
+        status, uncertain = self.judge_cost_status()
+        known_cost, judge_rate_source = calculate_cost(
             "gemini", judge_model, self.judge_input_tokens, self.judge_output_tokens
         )
+        if status == "no_calls":
+            known_cost = 0.0
+        elif known_cost is None and status in {"complete", "partial_lower_bound"}:
+            status = "rate_unknown"
+        judge_cost = known_cost if status in {"complete", "no_calls"} else None
         embedding_cost, embedding_rate_source = calculate_cost(
             "gemini", embedding_model, self.embedding_input_tokens_estimated, 0
         )
@@ -80,11 +107,21 @@ class EvaluationUsageTracker:
                 "attempts": self.judge_attempts,
                 "successes": self.judge_successes,
                 "failures": self.judge_failures,
+                "responses_with_usage": self.judge_responses_with_usage,
+                "responses_without_usage": self.judge_responses_without_usage,
+                "uncertain_calls": uncertain,
                 "input_tokens": self.judge_input_tokens,
                 "output_tokens": self.judge_output_tokens,
                 "reasoning_tokens": self.judge_reasoning_tokens,
-                "usage_actual": True,
+                # True only when every call made returned provider-reported usage.
+                "usage_actual": status == "complete",
+                "usage_complete": status in {"complete", "no_calls"},
+                "cost_status": status,
+                # Confirmed cost only when usage is complete; otherwise None.
                 "cost_usd": judge_cost,
+                # Cost of the calls that did report usage: a lower bound when incomplete.
+                "known_cost_lower_bound_usd": (round(known_cost, 8) if known_cost is not None
+                                               and self.judge_responses_with_usage else (0.0 if status == "no_calls" else None)),
                 "rate_source": judge_rate_source,
             },
             "embeddings": {
@@ -97,7 +134,11 @@ class EvaluationUsageTracker:
                 "cost_usd": embedding_cost,
                 "rate_source": embedding_rate_source,
             },
+            # Judge cost (confirmed) plus the estimated embedding cost; None when the
+            # judge cost is not confirmed.
             "total_cost_usd": total_cost,
+            "total_cost_status": status if total_cost is not None else (
+                "embedding_rate_unknown" if judge_cost is not None else status),
         }
 
 
@@ -184,6 +225,20 @@ class RetrievalDiagnostics(BaseModel):
     verdicts: list[ExcerptRelevanceVerdict]
 
 
+# Versions of the evaluator prompts in this module. Bump a version whenever its
+# wording changes so results are never compared as if the judge were unchanged.
+# v2 (R4): benchmark-specific topic wording removed; R3 untrusted-data framing kept.
+# Results stored before R4 carry no version and are reported as "pre-r4-unversioned".
+EVALUATION_PROMPT_VERSIONS = {
+    "fallback_judge": "fallback-judge/v2",
+    "reference_context": "reference-context/v2",
+    "reference_claim_diagnostic": "reference-claim-diagnostic/v2",
+    "retrieval_diagnostic": "retrieval-diagnostic/v2",
+}
+RAGAS_RUBRIC_VERSION = "ragas-collections/v1"  # library-defined prompts; pinned via constraints.txt
+EVALUATOR_FALLBACK_CHAIN = ("ragas", "gemini_fallback")
+
+
 # R3: evaluation prompts put instructions first and pass retrieved excerpts, reference
 # excerpts, and candidate answers (all derived from external papers) as untrusted blocks.
 JUDGE_PROMPT = """You are a strict RAG evaluator. Score the candidate answer from 0 to 1.
@@ -206,7 +261,7 @@ REFERENCE_CONTEXT_PROMPT = """You are a strict RAG retrieval evaluator.
 Score semantically, not by exact word overlap.
 Context precision: how directly useful and on-topic the retrieved excerpts are for answering the question in light of the verified reference excerpt.
 Context recall: how well the retrieved excerpts cover the important factual content and approaches in the verified reference excerpt.
-Do not reward unrelated quantum-computing material merely because it shares broad terms. Return scores and a concise rationale.
+Do not reward excerpts that merely share broad terms with the question or reference. Return scores and a concise rationale.
 {untrusted_rule}
 
 Question: {question}
@@ -221,7 +276,7 @@ For every reference claim, return exactly one verdict in the same order:
 - partial: they establish a meaningful part, but at least one material element is missing;
 - unsupported: they do not establish the claim.
 
-List only the one-based excerpt numbers (the index attribute) that actually support the verdict. Be strict about scope: a general CRISPR or cancer statement does not establish a specific use, limitation, population, or clinical conclusion. Keep the rationale concise.
+List only the one-based excerpt numbers (the index attribute) that actually support the verdict. Be strict about scope: a general statement about the topic does not establish a specific use, limitation, population, or conclusion. Keep the rationale concise.
 {untrusted_rule}
 
 Question: {question}
@@ -335,28 +390,54 @@ def _build_ragas_embeddings(
     return RagasNativeGeminiEmbeddings()
 
 
-def summarize_scores(scores: list[dict]) -> dict[str, float | int | None]:
-    """Return reproducible, rounded aggregates for one evaluation run."""
-    return {
-        "scored_cases": len(scores),
-        **{
-            metric: round(sum(float(score[metric]) for score in scores) / len(scores), 4)
-            if scores
-            else None
-            for metric in METRIC_NAMES
-        },
-    }
+def _valid_metric(value) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) and 0 <= number <= 1 else None
+
+
+def summarize_scores(scores: list[dict]) -> dict:
+    """Rounded per-metric means for judged results of a single evaluator engine.
+
+    R4: scores from different engines (e.g. Ragas and the fallback judge) are never
+    averaged together; a mixed set yields ``None`` for every metric plus
+    ``mixed_engines``. Missing or invalid (non-finite, out-of-range) values are
+    excluded from the mean and counted, never treated as zero. Legacy results
+    without an engine label are grouped as ``unknown``.
+    """
+    engines = sorted({str(score.get("engine") or "unknown") for score in scores})
+    mixed = len(engines) > 1
+    summary: dict = {"scored_cases": len(scores), "engines": engines, "mixed_engines": mixed}
+    for metric in METRIC_NAMES:
+        values = [number for score in scores if (number := _valid_metric(score.get(metric))) is not None]
+        summary[metric] = None if mixed or not values else round(sum(values) / len(values), 4)
+        summary[f"{metric}_n"] = 0 if mixed else len(values)
+    return summary
 
 
 def summarize_context_precision_views(scores: list[dict]) -> dict[str, float | int | None]:
-    """Summarize the strict Ragas and claim-aware precision views separately."""
+    """Summarize the strict Ragas and claim-aware precision views separately.
+
+    Only Ragas-engine results feed the Ragas view (R4): a fallback judge's
+    ``context_precision`` is a different metric and is never mixed in.
+    """
     ragas_values = []
     for score in scores:
-        value = score.get("ragas_context_precision")
+        engine = score.get("engine")
+        # Only the Ragas path writes ragas_context_precision, so an unlabeled legacy
+        # result carrying it is Ragas output; an unlabeled bare context_precision is
+        # ambiguous and excluded.
+        if engine != "ragas" and not (engine is None and "ragas_context_precision" in score):
+            continue
+        value = _valid_metric(score.get("ragas_context_precision"))
         if value is None:
-            value = score.get("context_precision")
+            value = _valid_metric(score.get("context_precision"))
         if value is not None:
-            ragas_values.append(float(value))
+            ragas_values.append(value)
     diagnostics = [score.get("retrieval_diagnostics") for score in scores if score.get("retrieval_diagnostics")]
 
     def average(values: list[float]) -> float | None:
@@ -364,6 +445,7 @@ def summarize_context_precision_views(scores: list[dict]) -> dict[str, float | i
 
     return {
         "ragas_context_precision": average(ragas_values),
+        "ragas_scored_cases": len(ragas_values),
         "claim_aware_strict_precision": average([
             float(item["strict_ranked_precision"])
             for item in diagnostics
@@ -376,6 +458,40 @@ def summarize_context_precision_views(scores: list[dict]) -> dict[str, float | i
         ]),
         "claim_aware_scored_cases": len(diagnostics),
     }
+
+
+async def score_with_fallback_judge(
+    *,
+    client,
+    question: str,
+    reference_answer: str,
+    reference_context: str | None,
+    retrieved_contexts: list[str],
+    answer: str,
+    judge_model: str,
+    usage_tracker: EvaluationUsageTracker | None = None,
+) -> dict:
+    """Score one result with the single-call fallback judge, tracking its usage (R4)."""
+    prompt = build_judge_prompt(question=question, reference_answer=reference_answer,
+                                reference_context=reference_context or "Not supplied",
+                                retrieved_contexts=list(retrieved_contexts), answer=answer or "")
+    if usage_tracker is not None:
+        usage_tracker.begin_judge_call()
+    try:
+        response = await asyncio.to_thread(
+            lambda: client.models.generate_content(
+                model=judge_model,
+                contents=prompt,
+                config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=JudgeScore),
+            )
+        )
+    except Exception:
+        if usage_tracker is not None:
+            usage_tracker.fail_judge_call()
+        raise
+    if usage_tracker is not None:
+        usage_tracker.record_google_response(response)
+    return JudgeScore.model_validate(response.parsed).model_dump()
 
 
 async def score_reference_context_semantically(

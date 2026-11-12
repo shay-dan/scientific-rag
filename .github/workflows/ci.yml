@@ -60,7 +60,14 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build the production image
-        run: docker build --tag scientific-rag-ci:local cost-aware-pipeline
+        # R4: record the commit actually checked out (for pull requests, the test merge commit).
+        run: docker build --build-arg GIT_SHA="$(git rev-parse HEAD)" --tag scientific-rag-ci:local cost-aware-pipeline
+
+      - name: Verify image source provenance
+        run: >-
+          docker run --rm scientific-rag-ci:local
+          python -c "import sys; from app.evaluation_report import resolve_git_provenance as r; p = r(); print(p); sys.exit(0 if p == {'sha': sys.argv[1], 'source': 'build_arg'} else 1)"
+          "$(git rev-parse HEAD)"
 
       - name: Compile application and tests in the production image
         run: >-

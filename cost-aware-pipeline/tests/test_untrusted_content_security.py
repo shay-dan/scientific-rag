@@ -459,7 +459,8 @@ class PromptInventoryTests(unittest.TestCase):
         self.assertEqual(pipeline.count("render_evidence_block("), 1)       # production synthesis context
         self.assertNotIn("--- [{document.metadata['citation_id']}", pipeline)
         self.assertEqual(evaluation.count("retrieved_context=render_excerpts("), 4)
-        self.assertIn("build_judge_prompt(", worker)
+        self.assertIn("score_with_fallback_judge(", worker)          # R4: fallback judge moved into evaluation.py
+        self.assertIn("prompt = build_judge_prompt(", evaluation)
         comparison = (project_root / "app" / "comparison_judge.py").read_text(encoding="utf-8")
         self.assertIn('render_untrusted("EVIDENCE"', comparison)
         self.assertNotIn("JUDGE_PROMPT.format(", worker)

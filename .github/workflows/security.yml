@@ -48,7 +48,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build production image
-        run: docker build -t scientific-rag-security:local cost-aware-pipeline
+        run: docker build --build-arg GIT_SHA="$(git rev-parse HEAD)" -t scientific-rag-security:local cost-aware-pipeline
       - name: Scan image
         uses: aquasecurity/trivy-action@v0.36.0
         with:

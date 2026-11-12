@@ -1,6 +1,6 @@
 # Scientific RAG — engineering roadmap
 
-**Status:** authoritative planning document. Last updated 2026-11-11 (R3 in review).
+**Status:** authoritative planning document. Last updated 2026-11-12 (R3 complete; R4 in review).
 **Origin:** owner-approved *Master Implementation Plan*, which consolidated an independent
 audit, a reconciled R0–R13 roadmap, a discovery/evidence-acquisition addendum, and the
 historical engineering handover. Changes to this file require owner approval and an entry
@@ -28,8 +28,8 @@ Operating rules for agents are in [`AGENTS.md`](../AGENTS.md). History, complete
 | R0-D | Permanent engineering documentation | complete (2026-11-11, PR #5) | R0 |
 | R1 | Authentication and startup security hardening | complete (2026-11-11, PR #6) | R0 |
 | R2 | Research-job lifecycle, recovery, deduplication | complete (2026-11-11, PR #8) | R0 |
-| R3 | Untrusted scientific-content security | in review (branch `agent/r3-untrusted-content`) | R1 (order); before R8, R9-F |
-| R4 | Evaluation integrity and reproducibility | not started | R0 |
+| R3 | Untrusted scientific-content security | **complete** (PR #10, `138f29a`) | R1 (order); before R8, R9-F |
+| R4 | Evaluation integrity and reproducibility | in review (branch `agent/r4-evaluation-integrity`) | R0 |
 | R5 | Offline semantic-verifier evaluation harness | not started | R0 |
 | R6 | Human-reviewed evidence packs and labels | not started | R4, R5; R3 preferred |
 | R7 | Deterministic claim checks, graceful degradation | not started | R5, R6 |
@@ -212,8 +212,9 @@ successful results; no silently lost reservations; compatible behavior.
 
 ## R3 — Untrusted scientific-content security
 
-**Status:** in review (branch `agent/r3-untrusted-content`; not complete until merged with
-green CI and Security CI on `main`). **Priority:** high. [Findings](#r3-findings-in-review).
+**Status:** complete. Merged as PR #10, merge commit `138f29a` (implementation `ebed4ec`),
+2026-11-11, with CI and Security CI green on `main`. **Priority:** high.
+[Findings](#r3-findings).
 Design, inventory and limits:
 [untrusted-content-security.md](../cost-aware-pipeline/docs/untrusted-content-security.md).
 
@@ -228,7 +229,7 @@ whether a warning sentence exists.
 mitigated before affected functionality is enabled. Paid live probes need approval.
 No dedicated security agent without evidence.
 
-### R3 findings (in review)
+### R3 findings
 
 - **Trust-boundary inventory:**
   - External content reaches models in these places:
@@ -301,12 +302,25 @@ No dedicated security agent without evidence.
     - The paper corpus is reused.
     - The first new request per question, caller and mode costs one normal run.
     - Rolling back the code makes v14 answers reusable again.
-- **Test evidence:** recorded in the R3 PR, and finalized in the next authorized stage PR
-  after merge.
+- **Final test evidence (CI on `main` at `138f29a`):**
+  - unit: 477 run, 0 failures, 44 skipped (the integration tests in the unit step);
+  - PostgreSQL/pgvector and Redis integration: 44/44, including the off/shadow/enforce
+    cache-separation tests;
+  - migrations to `20261111_0002` and `/healthz` passed; legacy prototype 13/13;
+  - Security CI green; no paid calls.
+- **Known limitations carried forward:**
+  - instruction detection is a narrow heuristic; homoglyph and paraphrased injections
+    can evade it;
+  - real-model obedience to the data rule is untested (needs an approved paid probe);
+  - misinformation phrased as an ordinary finding is not caught (R5–R8);
+  - Ragas library prompts are not controllable;
+  - in papers about prompt injection, the sentence quoting the attack is not citable.
 
 ## R4 — Evaluation integrity and reproducibility
 
-**Status:** not started. **Priority:** high.
+**Status:** in review (branch `agent/r4-evaluation-integrity`; not complete until merged
+with green CI and Security CI on `main`). **Priority:** high. [Findings](#r4-findings-in-review).
+Contract: [evaluation-integrity.md](../cost-aware-pipeline/docs/evaluation-integrity.md).
 
 - **Provenance:** dataset version and hash, Git SHA, generator, judge, provider, fallback
   chain, prompt/contract version, timestamp, evaluation engine.
@@ -323,6 +337,56 @@ Tests on synthetic datasets: failures stay visible; engines not combined; aggreg
 reproducible; provenance from actual inputs; metrics carry denominators.
 **Acceptance:** every headline metric has definition, evaluator identity, sample count,
 and failure context.
+
+### R4 findings (in review)
+
+- **Pre-fix defects reproduced by failing tests** (`6b8f63b` integration, `478aa00` unit):
+  - the worker reported `failed_cases: 5` for 3 abstentions plus 2 failures, with no
+    outcome breakdown; timeouts were indistinguishable from other failures;
+  - Ragas and fallback-judge scores were averaged into one headline
+    (`faithfulness: 0.68` from 4 × 0.8 and 1 × 0.2);
+  - the Ragas precision view fell back to the fallback judge's `context_precision`;
+  - a missing metric crashed aggregation and NaN propagated into means;
+  - the dataset API and two loader scripts stored `provenance="human"` regardless of
+    input (model-generated silver data included);
+  - runs recorded no git SHA, dataset hash, pipeline, judge or prompt provenance, and
+    fallback-judge usage was not tracked;
+  - two judge prompts carried benchmark-specific wording ("quantum-computing",
+    "CRISPR or cancer").
+  - Not reproduced: failed cases were not zero-scored by the production path (they were
+    dropped from the population instead). A regression test now guards both.
+- **Implemented** (no migration, dependency, agent, retrieval, lifecycle or verifier change):
+  - `app/evaluation_report.py` (stdlib): case records with one outcome per case from a
+    fixed taxonomy; completion/coverage rates with Wilson intervals; quality metrics per
+    (engine, judge model, rubric version) with seeded bootstrap intervals and sample
+    sizes; no headline when engines are mixed; cost and provider-failure summary;
+    deterministic JSON, Markdown and CSV renderers; legacy-record inference.
+  - Worker: each result stores a `case_record`; run metrics keep legacy keys
+    (engine-aware) and add `outcomes`, `provenance` and `report`. Fallback-judge usage
+    is tracked. Abstention-only runs are `completed`.
+  - Discovery outcomes from existing traces only: `acquisition_unavailable`,
+    `screening_failed`, screening-failure counts and PMC full-text fallbacks; PDF
+    fallback is reported as not applicable.
+  - Declared case provenance (`human_reviewed`, `human_authored`, `synthetic`,
+    `model_generated`, `unspecified`); legacy `human` is reported as unverified.
+  - Prompt versions (`*/v2`) with topic wording removed; R3 framing kept.
+  - Additive API fields (`report`, per-result `outcome`); offline
+    `scripts/build_evaluation_report.py`; image build arg `GIT_SHA`.
+- **Review corrections (owner review of PR #11):** reproduced first (`f8ca9ce` integration,
+  `f354f11` unit), then fixed:
+  - after an interruption the report covered only cases with result rows (5 of 10), and
+    an interrupted case counted as answered. Now the population is the dataset, with
+    outcomes `not_executed` and `research_interrupted` (report contract v2);
+  - a judge response without usage metadata reported `usage_actual=True` and a cost.
+    Now there is an explicit `cost_status` (`no_calls`, `complete`,
+    `partial_lower_bound`, `unknown`, `rate_unknown`), confirmed cost only when complete,
+    and lower bounds otherwise;
+  - CI and Compose did not pass `GIT_SHA`. Now CI builds with the checked-out commit and
+    verifies it in the image, Compose passes `GIT_SHA`, `git_sha_source` is recorded,
+    `GITHUB_SHA` is not substituted, and unknown SHAs produce a report warning.
+- **Not done:** the dataset schema has no version column, so runs identify datasets by
+  content hash (`dataset.version` is `null`); adding one needs an approved migration.
+- **Test evidence:** recorded in the R4 PR; finalized in the next authorized stage PR.
 
 ## R5 — Offline semantic-verifier evaluation harness
 
@@ -543,6 +607,10 @@ load evidence; large synthetic evaluation sets presented as gold data.
 
 | Date | Decision | Evidence / reason |
 |---|---|---|
+| 2026-11-12 | Mark R3 complete (PR #10, `138f29a`). | CI and Security CI green on `main`: 477 unit (0 failures, 44 skipped), 44/44 integration, migrations, smoke. Known limitations recorded under R3. |
+| 2026-11-12 | Adopt the permanent pre-merge safety rule (`AGENTS.md`): every required verification must succeed before any merge command runs; never chain a check into a merge that can still execute. | Owner instruction after the R3 merge, where a failed documentation check was chained before the merge command. |
+| 2026-11-12 | R4: report evaluations from per-case records with one outcome per case; separate completion from quality; never average across evaluator engines, judge models or rubric versions; version judge prompts; record provenance in run metrics without a migration. | Reproduced defects (`6b8f63b`, `478aa00`); smallest change that keeps `/v1` and stored results compatible. |
+| 2026-11-12 | R4: abstention-only evaluation runs are `completed`, not `completed_with_errors`. | An abstention is a valid pipeline outcome, not an error; failures still yield `completed_with_errors`. |
 | 2026-11-11 | Adopt the Master Implementation Plan (R0–R13) as the authoritative roadmap; supersedes the historical handover's Stage 0S–6 sequence. | Owner instruction; independent audit and reconciliation completed before handover. |
 | 2026-11-11 | Add a Dockerfile-only `zlib1g` upgrade as an authorized R0 baseline correction (PR #4). | Security CI failed on `main` from base-image CVEs; reproduced on re-run; fix verified in PR and `main` CI. |
 | 2026-11-11 | Mark R0 complete. | CI and Security CI green on `6c905fb`; local execution limits recorded above. |

@@ -35,6 +35,14 @@ from .services import ResearchService, effective_pipeline_version, to_response
 from .cost_policy import budget_for
 from .cost_control import CostBudgetExceeded
 from .evaluation import METRIC_NAMES, summarize_context_precision_views, summarize_scores
+from .evaluation_report import (
+    CASE_PROVENANCE,
+    build_evaluation_report,
+    case_content_hash,
+    dataset_content_hash,
+    legacy_case_record,
+    not_executed_record,
+)
 from scientific_rag.llm_gateway import create_chat_model, model_for
 from scientific_rag.costing import calculate_cost
 
@@ -357,8 +365,9 @@ async def ops_evaluation_dashboard(request: Request, session: AsyncSession = Dep
                "faithfulness": metrics.get("faithfulness"), "answer_relevancy": metrics.get("answer_relevancy"), "context_precision": metrics.get("context_precision"), "context_recall": metrics.get("context_recall")}
         rows.append(row)
         if run.status in {"completed", "completed_with_errors"}:
-            groups.setdefault((mode, ", ".join(providers) or "unknown", ", ".join(versions) or "legacy/unknown"), []).append(row)
-    comparisons = [{"mode": key[0], "provider": key[1], "retrieval": key[2], "runs": len(items),
+            engines = ", ".join(metrics.get("engines") or ["unknown"])
+            groups.setdefault((mode, ", ".join(providers) or "unknown", ", ".join(versions) or "legacy/unknown", engines), []).append(row)
+    comparisons = [{"mode": key[0], "provider": key[1], "retrieval": key[2], "judge_engines": key[3], "runs": len(items),
         **{metric: round(sum(float(item[metric]) for item in items if item[metric] is not None) / max(sum(1 for item in items if item[metric] is not None), 1), 4) if any(item[metric] is not None for item in items) else None
            for metric in ("faithfulness", "answer_relevancy", "context_precision", "context_recall")}} for key, items in groups.items()]
     regression = []
@@ -668,10 +677,13 @@ async def evaluation_ui_submit(
     reference_context: Annotated[str, Form()] = "",
     reference_claims: Annotated[str, Form()] = "",
     mode: Annotated[str, Form()] = "fast",
+    provenance: Annotated[str, Form()] = "unspecified",
     session: AsyncSession = Depends(get_session),
 ):
     try:
         principal = _ui_admin(request)
+        if provenance not in CASE_PROVENANCE:
+            raise ValueError("Unknown case provenance")
         selected_mode = ResearchMode(mode)
         if selected_mode is ResearchMode.deep and not get_settings().enable_deep_research:
             raise ValueError("Deep research is disabled")
@@ -684,7 +696,7 @@ async def evaluation_ui_submit(
             reference_answer=reference_answer,
             reference_context=reference_context or None,
             reference_claims=[line.strip() for line in reference_claims.splitlines() if line.strip()],
-            provenance="human",
+            provenance=provenance,
         ))
         run = EvaluationRun(dataset_id=dataset.id, status="queued", metrics={"mode": selected_mode.value})
         session.add(run)
@@ -766,6 +778,48 @@ async def evaluation_ui_status(request: Request, evaluation_run_id: str, session
     })
 
 
+def _evaluation_case_records(results: list[EvaluationResult], cases: dict) -> list[dict]:
+    """One record per dataset case (R4 report v2).
+
+    The population is the dataset, not the result rows: a case without a result
+    row was never executed and is reported as ``not_executed``. Results stored
+    before R4 are inferred and marked as such.
+    """
+    by_case = {item.evaluation_case_id: item for item in results}
+    records = []
+    for case in sorted(cases.values(), key=lambda item: str(item.id)):
+        case_hash = case_content_hash(question=case.question, reference_answer=case.reference_answer,
+                                      reference_context=case.reference_context, reference_claims=case.reference_claims,
+                                      provenance=case.provenance)
+        item = by_case.get(case.id)
+        if item is None:
+            records.append(not_executed_record(case_id=str(case.id), case_hash=case_hash,
+                                               case_provenance=case.provenance))
+            continue
+        records.append(legacy_case_record(
+            case_id=str(case.id), case_hash=case_hash, case_provenance=case.provenance,
+            status=item.status, judge_scores=item.judge_scores, error=item.error,
+        ))
+    return records
+
+
+def _evaluation_report(run: EvaluationRun, dataset_name: str, results: list[EvaluationResult], cases: dict) -> tuple[dict, list[dict]]:
+    """Stored R4 report, or one rebuilt offline from per-case records for older runs."""
+    records = _evaluation_case_records(results, cases)
+    stored = (run.metrics or {}).get("report")
+    if isinstance(stored, dict) and stored.get("schema") \
+            and (stored.get("population") or {}).get("total_cases") == len(records):
+        return stored, records
+    provenance = (run.metrics or {}).get("provenance") or {
+        "legacy_run": True, "mode": (run.metrics or {}).get("mode"),
+        "dataset": {"id": str(run.dataset_id), "name": dataset_name, "version": None,
+                    "content_hash": dataset_content_hash(record["case_hash"] for record in records),
+                    "case_count": len(cases)},
+        "note": "Run predates R4 provenance recording; git SHA, judge and prompt versions were not stored.",
+    }
+    return build_evaluation_report(provenance, records), records
+
+
 @app.get("/ui/evaluations/{evaluation_run_id}/export", include_in_schema=False)
 async def export_evaluation_run(request: Request, evaluation_run_id: str, session: AsyncSession = Depends(get_session)):
     _ui_admin(request)
@@ -777,6 +831,7 @@ async def export_evaluation_run(request: Request, evaluation_run_id: str, sessio
     cases = {item.id: item for item in (await session.execute(select(EvaluationCase).where(EvaluationCase.dataset_id == run.dataset_id))).scalars()}
     scored = [item.judge_scores for item in results if item.status == "judged"]
     completed_at = run.completed_at or datetime.now(timezone.utc)
+    report, records = _evaluation_report(run, dataset.name, results, cases)
     return JSONResponse({
         "id": str(run.id),
         "dataset_name": dataset.name,
@@ -796,6 +851,7 @@ async def export_evaluation_run(request: Request, evaluation_run_id: str, sessio
             "scores": item.judge_scores,
             "error": item.error,
         } for item in results],
+        "report": {**report, "cases": records},
     })
 
 
@@ -997,7 +1053,7 @@ async def create_evaluation_dataset(request: Request, payload: EvaluationDataset
     dataset = EvaluationDataset(name=payload.name, created_by=principal.name)
     session.add(dataset)
     await session.flush()
-    session.add_all([EvaluationCase(dataset_id=dataset.id, question=item.question, reference_answer=item.reference_answer, reference_context=item.reference_context, reference_claims=item.reference_claims, provenance="human") for item in payload.cases])
+    session.add_all([EvaluationCase(dataset_id=dataset.id, question=item.question, reference_answer=item.reference_answer, reference_context=item.reference_context, reference_claims=item.reference_claims, provenance=item.provenance) for item in payload.cases])
     await session.commit()
     return {"dataset_id": str(dataset.id), "case_count": len(payload.cases)}
 
@@ -1042,7 +1098,11 @@ async def get_evaluation_run(request: Request, evaluation_run_id: str, session: 
     scored = [item.judge_scores for item in results if item.status == "judged"]
     averages = {name: summarize_scores(scored)[name] for name in METRIC_NAMES}
     cases = {item.id: item for item in (await session.execute(select(EvaluationCase).where(EvaluationCase.dataset_id == run.dataset_id))).scalars()}
+    dataset = await session.get(EvaluationDataset, run.dataset_id)
+    report, records = _evaluation_report(run, dataset.name if dataset else "unknown", results, cases)
+    outcome_by_case = {record["case_id"]: record["outcome"]["category"] for record in records}
     return {
         "id": str(run.id), "status": run.status, "mode": run.metrics.get("mode", "fast"), "case_count": len(results), "scored_count": len(scored), "averages": averages, "context_precision_views": summarize_context_precision_views(scored),
-        "results": [{"case_id": str(item.evaluation_case_id), "question": cases[item.evaluation_case_id].question, "status": item.status, "scores": item.judge_scores, "rationale": item.judge_scores.get("rationale"), "error": item.error} for item in results],
+        "results": [{"case_id": str(item.evaluation_case_id), "question": cases[item.evaluation_case_id].question, "status": item.status, "outcome": outcome_by_case.get(str(item.evaluation_case_id)), "scores": item.judge_scores, "rationale": item.judge_scores.get("rationale"), "error": item.error} for item in results],
+        "report": report,
     }

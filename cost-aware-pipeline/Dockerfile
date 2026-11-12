@@ -5,6 +5,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app/src
 
 WORKDIR /app
+# R4: commit recorded in evaluation provenance (docker build --build-arg GIT_SHA=$(git rev-parse HEAD)).
+ARG GIT_SHA=unknown
+ENV SCIENTIFIC_RAG_GIT_SHA=${GIT_SHA}
 # The upstream python:3.11-slim image still ships zlib1g 1:1.3.dfsg+really1.3.1-1+b1
 # (CVE-2026-85091, CVE-2026-76844). Upgrade only that package to the Debian
 # security fix; remove this step once the base image includes +deb13u1 or later.

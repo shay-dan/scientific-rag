@@ -11,6 +11,7 @@ from pathlib import Path
 from arq import create_pool
 from arq.connections import RedisSettings
 
+from app.evaluation_report import infer_case_provenance
 from app.config import get_settings
 from app.db import close_database, session_factory
 from app.models import EvaluationCase, EvaluationDataset, EvaluationRun
@@ -42,7 +43,7 @@ async def queue_matrix(dataset_path: Path, modes: list[str], case_index: int | N
                         reference_answer=case["reference_answer"],
                         reference_context=case.get("reference_context"),
                         reference_claims=case.get("reference_claims", []),
-                        provenance="human",
+                        provenance=infer_case_provenance(case, payload),
                     )
                     for case in cases
                 ])
