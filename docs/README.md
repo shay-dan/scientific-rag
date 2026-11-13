@@ -28,6 +28,7 @@ The root README is the project overview. The maintained application's
 - [Benchmark integration infrastructure (R6A)](../cost-aware-pipeline/docs/benchmark-integration.md)
 - [Independent benchmark development integration (R6B)](../cost-aware-pipeline/docs/benchmark-r6b.md)
 - [Production-system evaluation adapters (R6C)](../cost-aware-pipeline/docs/benchmark-r6c.md)
+- [Optional provider-enforced output-token limits (R6D)](../cost-aware-pipeline/docs/output-token-limits-r6d.md)
 - API contracts: run the application and open <http://localhost:8000/docs>.
 
 ## Evaluation and experiments

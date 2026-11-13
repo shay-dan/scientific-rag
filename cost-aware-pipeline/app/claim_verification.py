@@ -570,11 +570,14 @@ async def verify_claims(
     *,
     question: str,
     max_gateway_invocations: int = SEMANTIC_VERIFICATION_MAX_GATEWAY_INVOCATIONS,
+    max_output_tokens: int | None = None,
 ) -> ClaimVerificationBatch:
     """Verify claim/evidence pairs sequentially through the existing gateway.
 
     Production integration remains fail-closed in enforce mode and is bounded by
-    the supplied gateway-invocation limit.
+    the supplied gateway-invocation limit. ``max_output_tokens`` (R6D) is optional
+    and unset in production; when given it is passed to the gateway, which enforces
+    it on the provider request or refuses the call.
     """
     input_tuple = tuple(inputs)
     if not input_tuple:
@@ -592,6 +595,7 @@ async def verify_claims(
             f"{max_gateway_invocations}"
         )
     all_assessments: list[ClaimAssessment] = []
+    gateway_options = {} if max_output_tokens is None else {"max_output_tokens": max_output_tokens}
     for group, prompt in planned:
         targets = tuple(item.target for item in group)
         try:
@@ -600,6 +604,7 @@ async def verify_claims(
                 temperature=0,
                 prompt=prompt,
                 response_schema=ClaimVerificationBatch,
+                **gateway_options,
             )
         except Exception as error:
             raise ClaimVerificationError(

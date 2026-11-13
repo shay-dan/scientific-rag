@@ -99,9 +99,9 @@ Chunking is parent 2,500/500 and child 500/75; RRF k = 60; MMR λ = 0.5; FTS con
 - `verifier-dry-run` plans every call with the production planner. It reports prompt
   sizes and a token estimate: the production 4-characters-per-token rule plus a
   200-token output estimate. It also reports a **planning cost bound** (3 characters per
-  token plus a 2,000-token output reservation per call) for each route. Finally it
-  inspects the production chat model for each route and reports whether a provider-side
-  output limit is enforced.
+  token plus the output limit, 2,000 tokens by default, per call) for each route. Finally
+  it reports whether the gateway can enforce the limit on that route and whether a live
+  run would be eligible after authorization.
 - `retrieval-dry-run` splits each pack with the production splitters. It reports chunk
   and embedding-request counts, the production embedding-token estimate and cost, and the
   reserved cost (3 characters per token).
@@ -123,18 +123,19 @@ The run is refused before any call when:
 - `max_calls` is not a positive integer (booleans, fractions, NaN and Infinity are
   refused);
 - `max_cost_usd` is not a finite positive number;
+- for the verifier, `max_output_tokens` is not a positive integer, or the gateway cannot
+  enforce it for the authorized provider (R6D);
 - the model has no known price, so the budget could not be enforced;
 - for the verifier, the gateway route is not pinned to the single authorized provider and
   model (`LLM_PROVIDER_ORDER_GATEKEEPER=<provider>`);
 - the planned calls exceed `max_calls` (unless `allow_partial` is true).
 
-**The verifier output limit is not provider-enforced, so live verifier execution is
-refused.** The production gateway builds `ChatOpenAI` and `ChatGoogleGenerativeAI`
-without any output-token limit, and offers no configuration for one. The 2,000-token
-reservation is therefore a planning assumption, not a spending ceiling. `run_replay`
-inspects the production chat model, and refuses unless a limit of at most 2,000 tokens is
-enforced. Enabling the verifier needs a separately approved, opt-in gateway setting that
-leaves normal production behavior unchanged.
+**Verifier output limit (R6D).** The verifier authorization must also carry
+`max_output_tokens`. The adapter passes it through the production verifier to the
+gateway, which sets it on the provider request and refuses any request without it. Groq
+and OpenRouter are supported; Gemini is refused. The limit is a planning bound on output,
+not an absolute billing guarantee. See
+[output-token-limits-r6d.md](output-token-limits-r6d.md).
 
 **Budget accounting (R4).** Every record states its cost status:
 
@@ -151,7 +152,8 @@ leaves normal production behavior unchanged.
 - **Calls:** gateway retries and fallbacks count against `max_calls`. Retrieval charges
   each started pack its reserved requests even when production recorded fewer, because
   production counts embedding requests only after they succeed.
-- **Stops:** the verifier stops after unmeasured usage or an unauthorized model.
+- **Stops:** the verifier stops after unmeasured usage, an unauthorized model, an
+  unenforced output limit, or reported output above the limit.
 - **Run summary:** reports complete, estimated, lower-bound, uncertain-reserved and
   charged amounts separately.
 

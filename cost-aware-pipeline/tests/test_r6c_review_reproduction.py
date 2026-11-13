@@ -37,7 +37,6 @@ from tests.test_r6c_production_adapters import (  # noqa: E402
     FC1, ROUTE, FakeGateway, FakeResult, FakeService, authorization, fixed_items,
 )
 
-ENFORCED = {"enforced": True, "limit": verifier.OUTPUT_TOKEN_CEILING_PER_CALL, "source": "test double"}
 BAD_BUDGETS = {"max_cost_usd": [float("nan"), float("inf"), -float("inf"), 0, -1, True, "1"],
                "max_calls": [float("nan"), float("inf"), 1.5, True, 0, -1, "3"]}
 
@@ -105,8 +104,7 @@ class FiniteBudgetTests(unittest.TestCase):
         gateway = FakeGateway()
         with patch.object(claim_verification, "ainvoke_structured", gateway), self.assertRaises(verifier.AuthorizationError):
             asyncio.run(verifier.run_replay(self.fixed, authorization=authorization(self.report, max_cost_usd=float("nan")),
-                                            dataset_hash=self.report["handoff"]["dataset_hash"], route=ROUTE,
-                                            output_limit=ENFORCED))
+                                            dataset_hash=self.report["handoff"]["dataset_hash"], route=ROUTE))
         self.assertEqual(gateway.prompts, [])
 
     def test_retrieval_execution_refuses_non_finite_budgets_before_the_database(self):
@@ -171,33 +169,42 @@ class ProviderCallBudgetTests(unittest.TestCase):
         self.assertEqual(budget["budget_charged_usd"], budget["uncertain_reserved_usd"])
 
     def test_verifier_live_execution_requires_a_provider_enforced_output_limit(self):
+        """Since R6D the gateway can enforce a limit; a run without an authorized, enforceable one is refused."""
         fixed, report = fixed_items()
-        gateway = FakeGateway()
-        with patch.object(claim_verification, "ainvoke_structured", gateway):
-            with self.assertRaisesRegex(verifier.AuthorizationError, "output"):
-                asyncio.run(verifier.run_replay(fixed, authorization=authorization(report),
-                                                dataset_hash=report["handoff"]["dataset_hash"], route=ROUTE))
-        self.assertEqual(gateway.prompts, [])
+        gemini = {"role": "gatekeeper", "provider_order": ["gemini"], "models": {"gemini": "gemini-3.5-flash-lite"}}
+        cases = ((ROUTE, authorization(report, max_output_tokens=None)),
+                 (gemini, authorization(report, provider="gemini", model="gemini-3.5-flash-lite")))
+        for route, auth in cases:
+            gateway = FakeGateway()
+            with patch.object(claim_verification, "ainvoke_structured", gateway):
+                with self.assertRaisesRegex(verifier.AuthorizationError, "output"):
+                    asyncio.run(verifier.run_replay(fixed, authorization=auth, route=route,
+                                                    dataset_hash=report["handoff"]["dataset_hash"]))
+            self.assertEqual(gateway.prompts, [])
 
-    def test_production_route_has_no_enforced_output_limit(self):
-        status = verifier.output_limit_status("groq", "openai/gpt-oss-120b")
-        self.assertFalse(status["enforced"])
-        self.assertIsNone(status["limit"])
+    def test_default_production_model_has_no_output_limit(self):
+        """Unchanged by R6D: without an explicit limit the production chat model sets none."""
+        from scientific_rag import llm_gateway
+        with patch.dict(os.environ, {"GROQ_API_KEY": "placeholder"}):
+            chat = llm_gateway.create_chat_model("groq", "gatekeeper", 0)
+        self.assertIsNone(getattr(chat, "max_tokens", None))
+        self.assertFalse(verifier.output_limit_status("gemini", 2000)["enforced"])
+        self.assertTrue(verifier.output_limit_status("groq", 2000)["enforced"])
 
     def test_dry_run_does_not_call_the_planning_bound_a_hard_ceiling(self):
         fixed, _ = fixed_items()
         plan = verifier.dry_run(fixed, route=ROUTE)
-        self.assertFalse(plan["output_limit"]["enforced"])
         self.assertNotIn("cost_ceiling_usd_any_route", plan)
         self.assertIsNotNone(plan["planning_cost_bound_usd_any_route"])
-        self.assertIn("not a hard", plan["planning_cost_bound_note"])
+        self.assertIn("not an absolute billing guarantee", plan["planning_cost_bound_note"])
+        gemini = {"role": "gatekeeper", "provider_order": ["gemini"], "models": {"gemini": "gemini-3.5-flash-lite"}}
+        self.assertFalse(verifier.dry_run(fixed, route=gemini)["output_limit"]["enforced"])
 
     def test_unmeasured_verifier_usage_charges_the_reservation(self):
         fixed, report = fixed_items()
         with patch.object(claim_verification, "ainvoke_structured", FakeGateway(usage=None)):
             records, run = asyncio.run(verifier.run_replay(fixed, authorization=authorization(report),
-                                                           dataset_hash=report["handoff"]["dataset_hash"], route=ROUTE,
-                                                           output_limit=ENFORCED))
+                                                           dataset_hash=report["handoff"]["dataset_hash"], route=ROUTE))
         first = verifier.plan(next(i for i in fixed if i["input_id"] == FC1))
         reserved = verifier.call_cost_ceiling(first["prompt_chars"], "groq", "openai/gpt-oss-120b")
         self.assertEqual(records[0]["usage"]["cost_status"], "incomplete")
