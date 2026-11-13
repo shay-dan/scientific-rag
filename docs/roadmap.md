@@ -1,6 +1,6 @@
 # Scientific RAG — engineering roadmap
 
-**Status:** authoritative planning document. Last updated 2026-11-12 (R6A complete; R6 in review — R6B development integration).
+**Status:** authoritative planning document. Last updated 2026-11-13 (R6B complete; R6 in review — R6C production-system evaluation adapters).
 **Origin:** owner-approved *Master Implementation Plan*, which consolidated an independent
 audit, a reconciled R0–R13 roadmap, a discovery/evidence-acquisition addendum, and the
 historical engineering handover. Changes to this file require owner approval and an entry
@@ -31,7 +31,7 @@ Operating rules for agents are in [`AGENTS.md`](../AGENTS.md). History, complete
 | R3 | Untrusted scientific-content security | **complete** (PR #10, `138f29a`) | R1 (order); before R8, R9-F |
 | R4 | Evaluation integrity and reproducibility | **complete** (PR #11, `359e02c`) | R0 |
 | R5 | Offline semantic-verifier evaluation harness | **complete** (PR #12, `b21bc37`) | R0 |
-| R6 | Human-reviewed evidence packs and labels | R6A **complete** (PR #13, `60b394a`); R6B in review (branch `agent/r6b-development-integration`; development handoff only, unscored) | R4, R5; R3 preferred |
+| R6 | Human-reviewed evidence packs and labels | R6A **complete** (PR #13, `60b394a`); R6B **complete** (PR #14, `e6bf0ee`); R6C in review (branch `agent/r6c-production-system-evaluation`; opt-in adapters, no paid calls run) | R4, R5; R3 preferred |
 | R7 | Deterministic claim checks, graceful degradation | not started | R5, R6 |
 | R9-D | Discovery candidate pool, ranking, backfilling | not started | R6 pilot, R2 |
 | R9-P | PMC scientific-content extraction | conditional | R6 fixtures; R7 preferred |
@@ -469,14 +469,17 @@ is not evidence of an accurate verifier.
 ## R6 — Human-reviewed evidence packs, claim labels, discovery relevance labels
 
 **Status:** R6A (benchmark-integration infrastructure) **complete** (PR #13, merge
-`60b394a`). R6B (development integration of the independent benchmark, v0.3.1) **in
-review**, branch `agent/r6b-development-integration`. Owner-side scoring, the sealed
-holdout, and the production-retriever adapter are not started and need separate
-authorization.
+`60b394a`). R6B (development integration of the independent benchmark, v0.3.1)
+**complete** (PR #14, merge `e6bf0ee`). R6C (opt-in evaluation adapters for the
+production semantic verifier and hybrid retriever) **in review**, branch
+`agent/r6c-production-system-evaluation`. Paid adapter execution, the sealed holdout
+and live discovery are not started and need separate authorization.
 **Priority:** critical for later scientific work.
-[R6A findings](#r6a-findings-complete), [R6B findings](#r6b-findings-in-review).
+[R6A findings](#r6a-findings-complete), [R6B findings](#r6b-findings-complete),
+[R6C findings](#r6c-findings-in-review).
 Contracts and procedures: [benchmark-integration.md](../cost-aware-pipeline/docs/benchmark-integration.md)
-(R6A) and [benchmark-r6b.md](../cost-aware-pipeline/docs/benchmark-r6b.md) (R6B).
+(R6A), [benchmark-r6b.md](../cost-aware-pipeline/docs/benchmark-r6b.md) (R6B) and
+[benchmark-r6c.md](../cost-aware-pipeline/docs/benchmark-r6c.md) (R6C).
 
 Pilot of about 12 development and 12 holdout questions across medicine, computer science,
 and mathematics/physics where feasible, including unfamiliar terminology, acronyms,
@@ -552,7 +555,7 @@ uncertainty. Expansion is a separate decision.
   development handoff needs its own label-free input contract (below) rather than R6A
   gold records.
 
-### R6B findings (in review)
+### R6B findings (complete)
 
 - **Scope:** development handoff v0.3.1 only (owner-supplied archive, SHA-256
   `73948667…a70f`), offline, unscored. New stdlib modules `app/benchmark/handoff.py`,
@@ -590,12 +593,58 @@ uncertainty. Expansion is a separate decision.
   - claim-only references report claim-level metrics and mark the whole-answer
     enforcement simulation unavailable; it runs only with declared, validated answer
     grouping. R5 is unchanged.
-- **Proposed, not implemented:** a bounded production hybrid-retriever adapter (FTS +
-  pgvector + RRF + MMR on the frozen packs in an isolated schema); embedding calls need
-  cost authorization.
-- **Remaining:** owner scoring of the exports; reviewed label mappings; locator-only text
-  acquisition (authorization); production-retriever adapter; live open discovery (R9-D
-  and paid/search authorization); sealed holdout.
+- **Proposed in R6B:** a bounded production hybrid-retriever adapter (implemented in R6C,
+  below).
+- **Final status:** merged as `e6bf0ee` (PR #14; commits `8209d33`, `7252079`,
+  `fbe4725`). CI and Security CI green on `main`: unit suite in the production image 672
+  tests, 0 failures, 51 skipped; PostgreSQL/pgvector + Redis integration 50/50; image
+  source provenance (`e6bf0ee`), migrations and `/healthz` passed; historical Gradio
+  prototype 13/13. No production code changed.
+- **Owner-side result after merge (reported by the benchmark team; not reproducible here,
+  labels are not in this workspace):** the frozen deterministic **lexical baseline** on 352
+  expert-source SciFact Class A development pairs: accuracy 30.7%, macro-F1 0.407 over the
+  two represented reference classes, supported false rejection 71.8%, contradiction false
+  acceptance 30.6%; curated 342-pair accuracy effectively unchanged. These are lexical
+  baseline results, **not** production semantic-verifier results.
+- **Limitations:** all repository-side results are unscored; whole-answer metrics need
+  owner answer grouping; export hashes are integrity checks, not signatures; open
+  discovery, answer tasks and the 67 locator-only segments were not executed.
+
+### R6C findings (in review)
+
+- **Scope:** owner-assigned follow-on to R6B. Two independent, opt-in adapters on the
+  label-free v0.3.1 development inputs, exporting unscored predictions (R6B export
+  contract, one task per export): the production semantic verifier
+  (`production_verifier_replay.py`, reusing `verify_claims` and its planner, isolation and
+  guard) and the production hybrid retriever (`production_retrieval_replay.py`, reusing
+  `PostgresVectorService` with the `enhanced` strategy). The BM25 reference stays separate.
+  CLI `scripts/benchmark_r6c.py`; contract in
+  [benchmark-r6c.md](../cost-aware-pipeline/docs/benchmark-r6c.md).
+- **No behavior change:** production code is unchanged and does not import the adapters.
+  Verdicts only; `apply_semantic_verdicts` is never called and the off/shadow/enforce
+  setting is never read or changed. No parameter tuning, migration or dependency change.
+  `prediction_export._record` gains an optional `usage` argument (default unchanged).
+- **Isolation:** retrieval runs only on a dedicated evaluation database (not the application
+  database, at the migration head, holding only adapter-created runs). Each pack is
+  ingested in its own transaction and run scope and rolled back. Results from outside the
+  pack are `invalid`. `corpus_sha256` binds the corpus to the embedding, chunking and pipeline
+  version.
+- **Paid-call controls:** dry runs make no provider, network or database call. Execution
+  is refused without an owner authorization file. The authorization names the adapter,
+  the handoff hash, one pinned provider and model with a known price, `max_calls` and
+  `max_cost_usd`. A call or pack starts only if its conservative ceiling fits; retries
+  count against the call ceiling; the run stops on unmeasurable usage or an unauthorized
+  model.
+- **Dry-run estimate for v0.3.1 (outside the repository):**
+  - Verifier: 1,736 development claims plus 5 pilot claims, all within the prompt bound.
+    About 1.53M input tokens.
+  - Full development set with the default gateway route `groq:openai/gpt-oss-120b`: about
+    $0.44 estimated, $2.39 ceiling.
+  - With `gemini-3.5-flash-lite`: about $1.33 estimated, $9.29 ceiling.
+  - Proposed first pilot: 50 claims (first 50 by opaque ID), ceiling about $0.07 on the
+    Groq route.
+  - Retrieval embeddings: 64 development packs plus 9 pilot packs with text, under $0.01.
+- **Not executed:** no paid call has been made; awaiting owner authorization.
 
 ## R7 — Deterministic claim checks and graceful degradation
 
@@ -779,6 +828,8 @@ load evidence; large synthetic evaluation sets presented as gold data.
 | 2026-11-12 | Mark R5 complete (PR #12, `b21bc37`). | CI and Security CI green on `main`: 562 unit (0 failures, 51 skipped), 50/50 integration, image provenance, migrations, smoke; no production code changed. |
 | 2026-11-12 | Mark R6A complete (PR #13, `60b394a`). | CI and Security CI green on `main`: 610 unit (0 failures, 51 skipped), 50/50 integration, image provenance, migrations, smoke, legacy 13/13; no production code changed. |
 | 2026-11-12 | R6B: import the label-free development handoff through its own unscored input contract (not R6A gold records); enforce discovery-before-fixed-evidence in code; export portable unscored predictions joined on opaque IDs; scoring only by the owner, per population, outside the repository; no handoff text in the public repository. | Owner R6B authorization; handoff README and configs; repository is public. |
+| 2026-11-13 | Mark R6B complete (PR #14, `e6bf0ee`). | CI and Security CI green on `main`: 672 unit (0 failures, 51 skipped), 50/50 integration, provenance, migrations, smoke, legacy 13/13; no production code changed. |
+| 2026-11-13 | R6C: evaluate the production verifier and hybrid retriever through opt-in replay adapters that reuse production code unchanged, export by opaque ID for owner scoring, keep verifier and retrieval exports separate, and run paid calls only under an explicit, ceiling-enforcing owner authorization. | Owner R6C assignment; R6B owner-side lexical-baseline results. |
 | 2026-11-12 | R6B owner scoring: references bind to the label-free handoff identity; duplicates, conflicts and unreviewed mappings are refused; whole-answer metrics only with declared answer grouping. | Owner review of PR #14. |
 | 2026-11-12 | BM25 is an offline reference baseline only; the production FTS + pgvector + RRF + MMR retriever is benchmarked later through a separately authorized adapter on the same frozen packs. | Owner clarification. |
 | 2026-11-12 | Split R6 into R6A (benchmark-integration infrastructure) and R6B (integrating the independently built benchmark), each separately authorized. | Owner instruction; the independent benchmark is still being labeled and is not available to the implementation agent. |

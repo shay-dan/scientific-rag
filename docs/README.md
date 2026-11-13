@@ -27,6 +27,7 @@ The root README is the project overview. The maintained application's
 - [Offline semantic-verifier evaluation (R5)](../cost-aware-pipeline/docs/verifier-evaluation.md)
 - [Benchmark integration infrastructure (R6A)](../cost-aware-pipeline/docs/benchmark-integration.md)
 - [Independent benchmark development integration (R6B)](../cost-aware-pipeline/docs/benchmark-r6b.md)
+- [Production-system evaluation adapters (R6C)](../cost-aware-pipeline/docs/benchmark-r6c.md)
 - API contracts: run the application and open <http://localhost:8000/docs>.
 
 ## Evaluation and experiments
