@@ -1,6 +1,6 @@
 # Scientific RAG — engineering roadmap
 
-**Status:** authoritative planning document. Last updated 2026-11-13 (R6B complete; R6 in review — R6C production-system evaluation adapters).
+**Status:** authoritative planning document. Last updated 2026-11-13 (R6C complete; R6 in review — R6D optional output-token limits).
 **Origin:** owner-approved *Master Implementation Plan*, which consolidated an independent
 audit, a reconciled R0–R13 roadmap, a discovery/evidence-acquisition addendum, and the
 historical engineering handover. Changes to this file require owner approval and an entry
@@ -31,7 +31,7 @@ Operating rules for agents are in [`AGENTS.md`](../AGENTS.md). History, complete
 | R3 | Untrusted scientific-content security | **complete** (PR #10, `138f29a`) | R1 (order); before R8, R9-F |
 | R4 | Evaluation integrity and reproducibility | **complete** (PR #11, `359e02c`) | R0 |
 | R5 | Offline semantic-verifier evaluation harness | **complete** (PR #12, `b21bc37`) | R0 |
-| R6 | Human-reviewed evidence packs and labels | R6A **complete** (PR #13, `60b394a`); R6B **complete** (PR #14, `e6bf0ee`); R6C in review (branch `agent/r6c-production-system-evaluation`; opt-in adapters, no paid calls run) | R4, R5; R3 preferred |
+| R6 | Human-reviewed evidence packs and labels | R6A **complete** (PR #13, `60b394a`); R6B **complete** (PR #14, `e6bf0ee`); R6C **complete** (PR #15, `693b7a5`); R6D in review (branch `agent/r6d-output-token-limits`; optional gateway output limit, no live calls run) | R4, R5; R3 preferred |
 | R7 | Deterministic claim checks, graceful degradation | not started | R5, R6 |
 | R9-D | Discovery candidate pool, ranking, backfilling | not started | R6 pilot, R2 |
 | R9-P | PMC scientific-content extraction | conditional | R6 fixtures; R7 preferred |
@@ -471,15 +471,17 @@ is not evidence of an accurate verifier.
 **Status:** R6A (benchmark-integration infrastructure) **complete** (PR #13, merge
 `60b394a`). R6B (development integration of the independent benchmark, v0.3.1)
 **complete** (PR #14, merge `e6bf0ee`). R6C (opt-in evaluation adapters for the
-production semantic verifier and hybrid retriever) **in review**, branch
-`agent/r6c-production-system-evaluation`. Paid adapter execution, the sealed holdout
-and live discovery are not started and need separate authorization.
+production semantic verifier and hybrid retriever) **complete** (PR #15, merge
+`693b7a5`). R6D (optional provider-enforced output-token limits in the gateway) **in
+review**, branch `agent/r6d-output-token-limits`. Paid adapter execution, the sealed
+holdout and live discovery are not started and need separate authorization.
 **Priority:** critical for later scientific work.
 [R6A findings](#r6a-findings-complete), [R6B findings](#r6b-findings-complete),
-[R6C findings](#r6c-findings-in-review).
+[R6C findings](#r6c-findings-complete), [R6D findings](#r6d-findings-in-review).
 Contracts and procedures: [benchmark-integration.md](../cost-aware-pipeline/docs/benchmark-integration.md)
 (R6A), [benchmark-r6b.md](../cost-aware-pipeline/docs/benchmark-r6b.md) (R6B) and
-[benchmark-r6c.md](../cost-aware-pipeline/docs/benchmark-r6c.md) (R6C).
+[benchmark-r6c.md](../cost-aware-pipeline/docs/benchmark-r6c.md) (R6C) and
+[output-token-limits-r6d.md](../cost-aware-pipeline/docs/output-token-limits-r6d.md) (R6D).
 
 Pilot of about 12 development and 12 holdout questions across medicine, computer science,
 and mathematics/physics where feasible, including unfamiliar terminology, acronyms,
@@ -610,7 +612,7 @@ uncertainty. Expansion is a separate decision.
   owner answer grouping; export hashes are integrity checks, not signatures; open
   discovery, answer tasks and the 67 locator-only segments were not executed.
 
-### R6C findings (in review)
+### R6C findings (complete)
 
 - **Scope:** owner-assigned follow-on to R6B. Two independent, opt-in adapters on the
   label-free v0.3.1 development inputs, exporting unscored predictions (R6B export
@@ -663,7 +665,41 @@ uncertainty. Expansion is a separate decision.
     different physical databases; a missing or unreachable application identity refuses
     the run.
 - **Not executed:** no paid call has been made. Retrieval embeddings await owner
-  authorization; the verifier also needs an approved provider-side output limit.
+  authorization; the verifier also needed an approved provider-side output limit (R6D).
+- **Final status:** merged as `693b7a5` (PR #15; commits `24d537a`, `d97957f`, `b56c05b`,
+  `70725dd`). CI and Security CI green on `main`: unit suite in the production image 724
+  tests, 0 failures, 58 skipped; PostgreSQL/pgvector + Redis integration 57/57; image
+  source provenance (`693b7a5`), migrations and `/healthz` passed; historical Gradio
+  prototype 13/13. No production code changed.
+- **Limitations:** verifier inputs differ from production use (whole evidence as quote,
+  neutral question, one claim per call, pinned provider); single-pack retrieval tests
+  ranking within a pack only; embedding costs are estimates; the 67 locator-only segments
+  are not executed.
+
+### R6D findings (in review)
+
+- **Scope:** an optional, per-request `max_output_tokens` through the gateway
+  (`create_chat_model`, `ainvoke`, `ainvoke_structured`) and an optional pass-through on
+  `verify_claims`. Omitted by every production caller, so default requests, fallback,
+  verifier modes, prompts and the pipeline version are unchanged. Contract in
+  [output-token-limits-r6d.md](../cost-aware-pipeline/docs/output-token-limits-r6d.md).
+- **Providers:** Groq and OpenRouter supported; the outbound request carries
+  `max_completion_tokens`, verified from the request body with a mocked transport. Gemini
+  is refused for bounded requests (its outbound request is not verified).
+- **Enforcement:** a guard on the bounded model's own HTTP clients refuses any request
+  without exactly the limit, or asking for several completions; no SDK retries or
+  redirects; a bounded call is refused if any configured provider is unsupported, so it
+  cannot fall back unbounded.
+- **R6C verifier adapter:** the authorization must carry `max_output_tokens`; it reaches
+  the gateway and sizes the reservation. A reserve-then-settle ledger charges every
+  attempted call; failures, missing or partial usage and cancellation keep the reservation
+  charged. Exports and owner scoring are unchanged.
+- **Tests first:** on the unchanged code the new tests failed (capability absent) and the
+  default-behavior tests passed (`35bf3a5`).
+- **Limits of the guarantee:** the limit bounds requested output, not billing. Provider
+  honoring of the limit, reasoning-token counting, prices and unreported usage cannot be
+  verified offline.
+- **Not executed:** no live or paid provider call has been made.
 
 ## R7 — Deterministic claim checks and graceful degradation
 
@@ -848,6 +884,8 @@ load evidence; large synthetic evaluation sets presented as gold data.
 | 2026-11-12 | Mark R6A complete (PR #13, `60b394a`). | CI and Security CI green on `main`: 610 unit (0 failures, 51 skipped), 50/50 integration, image provenance, migrations, smoke, legacy 13/13; no production code changed. |
 | 2026-11-12 | R6B: import the label-free development handoff through its own unscored input contract (not R6A gold records); enforce discovery-before-fixed-evidence in code; export portable unscored predictions joined on opaque IDs; scoring only by the owner, per population, outside the repository; no handoff text in the public repository. | Owner R6B authorization; handoff README and configs; repository is public. |
 | 2026-11-13 | Mark R6B complete (PR #14, `e6bf0ee`). | CI and Security CI green on `main`: 672 unit (0 failures, 51 skipped), 50/50 integration, provenance, migrations, smoke, legacy 13/13; no production code changed. |
+| 2026-11-13 | Mark R6C complete (PR #15, `693b7a5`). | CI and Security CI green on `main`: 724 unit (0 failures, 58 skipped), 57/57 integration, provenance, migrations, smoke, legacy 13/13; no production code changed. |
+| 2026-11-13 | R6D: add an optional per-request output-token limit to the gateway, enforced on the outbound provider request and refused where it cannot be verified; default requests unchanged; Gemini unsupported for bounded requests. | Owner R6D authorization; R6C refusal of live verifier execution without an enforceable limit. |
 | 2026-11-13 | R6C: evaluate the production verifier and hybrid retriever through opt-in replay adapters that reuse production code unchanged, export by opaque ID for owner scoring, keep verifier and retrieval exports separate, and run paid calls only under an explicit, ceiling-enforcing owner authorization. | Owner R6C assignment; R6B owner-side lexical-baseline results. |
 | 2026-11-12 | R6B owner scoring: references bind to the label-free handoff identity; duplicates, conflicts and unreviewed mappings are refused; whole-answer metrics only with declared answer grouping. | Owner review of PR #14. |
 | 2026-11-12 | BM25 is an offline reference baseline only; the production FTS + pgvector + RRF + MMR retriever is benchmarked later through a separately authorized adapter on the same frozen packs. | Owner clarification. |
