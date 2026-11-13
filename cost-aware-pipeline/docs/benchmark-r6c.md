@@ -60,11 +60,21 @@ segments. One production `Document` per segment carries `evidence_id`,
 supplied. `corpus_sha256` binds the evidence IDs and text hashes to the embedding model,
 dimensions, chunking and pipeline version.
 
-**Isolation.**
-1. The database must be dedicated to evaluation:
-   - it differs from the application `DATABASE_URL`;
-   - it is migrated to the current Alembic head with the existing migrations;
-   - it holds no research run that the adapter did not create.
+**Isolation (fail closed).**
+1. The database must be a verified, dedicated evaluation database:
+   - **Application identity.** It comes from the effective application configuration,
+     `Settings().database_url` (environment, `.env` or default), never from the process
+     environment alone. A missing or unparsable identity refuses the run.
+   - **URL comparison, before any connection.** The two URLs are normalized first:
+     driver suffix, `postgres`/`postgresql`, host case, loopback aliases (`localhost`,
+     `127.0.0.1`, `::1`), Unix sockets, default port. They must not name the same server
+     and database.
+   - **Physical check.** Both databases are queried for name, OID and server start time,
+     and these must show different physical databases. If the application database
+     cannot be reached, isolation is unverifiable and the run is refused.
+   - **Migration head.** The database must be at the current Alembic head, using the
+     existing migrations.
+   - **Research runs.** It must hold no research run that the adapter did not create.
 2. Each pack is ingested in its own transaction under its own research run, with
    production run scoping enabled, and is **rolled back** after retrieval. Nothing
    persists, and no pack can see another.
@@ -86,19 +96,20 @@ Chunking is parent 2,500/500 and child 500/75; RRF k = 60; MMR λ = 0.5; FTS con
 
 ## Dry runs (no provider, network or database call)
 
-- `verifier-dry-run` plans every call with the production planner. It reports:
-  - prompt sizes;
-  - token estimates: the production 4-characters-per-token rule plus a 200-token output
-    estimate;
-  - a ceiling: 3 characters per token plus 2,000 output tokens per call, allowing for
-    reasoning tokens billed as output;
-  - the configured gateway route and its cost per route.
+- `verifier-dry-run` plans every call with the production planner. It reports prompt
+  sizes and a token estimate: the production 4-characters-per-token rule plus a
+  200-token output estimate. It also reports a **planning cost bound** (3 characters per
+  token plus a 2,000-token output reservation per call) for each route. Finally it
+  inspects the production chat model for each route and reports whether a provider-side
+  output limit is enforced.
 - `retrieval-dry-run` splits each pack with the production splitters. It reports chunk
-  and embedding-request counts and the production embedding-token estimate and cost.
+  and embedding-request counts, the production embedding-token estimate and cost, and the
+  reserved cost (3 characters per token).
 
 ## Paid execution needs an explicit authorization
 
-`verifier-run` and `retrieval-run` refuse to run without `--authorization FILE`:
+`verifier-run` and `retrieval-run` refuse to run without `--authorization FILE`, parsed as
+**strict JSON** (`NaN`, `Infinity` and `-Infinity` are refused):
 
 ```json
 {"schema": "scientific-rag-paid-evaluation-authorization/v1", "authorization_id": "…",
@@ -109,16 +120,40 @@ Chunking is parent 2,500/500 and child 500/75; RRF k = 60; MMR λ = 0.5; FTS con
 
 The run is refused before any call when:
 - the schema, adapter or handoff hash does not match;
-- either ceiling is not positive;
-- the model has no known price, so the ceiling could not be enforced;
+- `max_calls` is not a positive integer (booleans, fractions, NaN and Infinity are
+  refused);
+- `max_cost_usd` is not a finite positive number;
+- the model has no known price, so the budget could not be enforced;
 - for the verifier, the gateway route is not pinned to the single authorized provider and
   model (`LLM_PROVIDER_ORDER_GATEKEEPER=<provider>`);
 - the planned calls exceed `max_calls` (unless `allow_partial` is true).
 
-During a run:
-- A call or pack starts only if its conservative ceiling fits in the remaining budget.
-- Gateway retries and fallbacks count against `max_calls`.
-- The run stops when usage cannot be measured.
+**The verifier output limit is not provider-enforced, so live verifier execution is
+refused.** The production gateway builds `ChatOpenAI` and `ChatGoogleGenerativeAI`
+without any output-token limit, and offers no configuration for one. The 2,000-token
+reservation is therefore a planning assumption, not a spending ceiling. `run_replay`
+inspects the production chat model, and refuses unless a limit of at most 2,000 tokens is
+enforced. Enabling the verifier needs a separately approved, opt-in gateway setting that
+leaves normal production behavior unchanged.
+
+**Budget accounting (R4).** Every record states its cost status:
+
+| Status | Meaning | Charged against the budget |
+|---|---|---|
+| `complete` | measured provider usage (verifier) | measured cost |
+| `estimated` | production estimate; Gemini embeddings return no usage | the full reservation |
+| `incomplete` | failed or unmeasured requests; any known lower bound is recorded | the full reservation |
+
+- **Before each call or pack:** its full allowance is reserved. For the verifier that is
+  one gateway attempt and the planning bound. For retrieval it is every production
+  embedding request (one per parent plus the query) and the conservative cost. It starts
+  only if the reservation fits in what remains.
+- **Calls:** gateway retries and fallbacks count against `max_calls`. Retrieval charges
+  each started pack its reserved requests even when production recorded fewer, because
+  production counts embedding requests only after they succeed.
+- **Stops:** the verifier stops after unmeasured usage or an unauthorized model.
+- **Run summary:** reports complete, estimated, lower-bound, uncertain-reserved and
+  charged amounts separately.
 
 Pilot selection is label-blind: `--limit N` takes the first N inputs by opaque ID, or
 `--input-ids FILE` takes a listed subset.
@@ -139,6 +174,13 @@ Pilot selection is label-blind: `--limit N` takes the first N inputs by opaque I
   For retrieval they cover configuration, corpus identity, rollback, foreign results,
   failure accounting, the database guards and production chunk counting. They also
   cover CLI refusals and that production code does not import the adapters.
+- **`tests/test_r6c_review_reproduction.py`** (review of `d97957f`). Each test
+  reproduced a defect before the fix:
+  - non-finite and non-integer budgets, and NaN in authorization JSON;
+  - failed embedding requests escaping the call budget, and failed spend counted as zero;
+  - verifier execution without a provider-enforced output limit;
+  - an application database from `.env`, equivalent URL spellings, aliases, missing and
+    unverifiable identities.
 - **`tests/integration/test_r6c_hybrid_retrieval_integration.py`** (PostgreSQL/pgvector).
   It creates and migrates a dedicated database, then runs the unchanged production
   retriever. A deterministic local embedder stands in for the provider only. It covers:
@@ -146,7 +188,8 @@ Pilot selection is label-blind: `--limit N` takes the first N inputs by opaque I
   - parent expansion;
   - nothing persisting after a run;
   - reproducible rankings and corpus identity;
-  - refusal of foreign runs and of the application database;
+  - refusal of foreign runs and of the application database, including equivalent
+    spellings and an unreachable or missing application identity;
   - failure accounting;
   - the cost ceiling.
 

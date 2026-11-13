@@ -38,6 +38,9 @@ from tests.test_benchmark_r6b import _id, default_files, make_handoff  # noqa: E
 
 FC1, FC2 = _id("fc", 1), _id("fc", 2)
 ROUTE = {"role": "gatekeeper", "provider_order": ["groq"], "models": {"groq": "openai/gpt-oss-120b"}}
+# Stand-in for a provider-enforced output limit, which production does not set today: it lets these
+# tests exercise the execution path; live execution without one is refused (test_r6c_review_reproduction).
+ENFORCED_LIMIT = {"enforced": True, "limit": 2000, "source": "test stand-in"}
 
 
 def fixed_items(files=None, group="eval_inputs"):
@@ -83,7 +86,8 @@ class FakeGateway:
 def replay(items, report, gateway, **auth):
     with patch.object(claim_verification, "ainvoke_structured", gateway):
         return asyncio.run(verifier.run_replay(items, authorization=authorization(report, **auth),
-                                               dataset_hash=report["handoff"]["dataset_hash"], route=ROUTE))
+                                               dataset_hash=report["handoff"]["dataset_hash"], route=ROUTE,
+                                               output_limit=ENFORCED_LIMIT))
 
 
 class VerifierMappingTests(unittest.TestCase):
@@ -139,15 +143,15 @@ class VerifierDryRunTests(unittest.TestCase):
         self.assertEqual(first["estimated_input_tokens"], expected)
         prompts = [len(build_semantic_verification_prompt([verifier.verification_input(i)[0]], verifier.REPLAY_QUESTION))
                    for i in verifier.claim_inputs(fixed)]
-        input_ceiling = sum(-(-chars // 3) for chars in prompts)
-        ceiling = first["cost_ceiling_by_route"]["groq:openai/gpt-oss-120b"]["cost_ceiling_usd"]
-        self.assertAlmostEqual(ceiling, round(input_ceiling * 0.15e-6 + 2 * verifier.OUTPUT_TOKEN_CEILING_PER_CALL * 0.60e-6, 8))
-        self.assertEqual(first["cost_ceiling_usd_any_route"], ceiling)
+        input_reserve = sum(-(-chars // 3) for chars in prompts)
+        bound = first["planning_cost_by_route"]["groq:openai/gpt-oss-120b"]["planning_cost_bound_usd"]
+        self.assertAlmostEqual(bound, round(input_reserve * 0.15e-6 + 2 * verifier.OUTPUT_TOKEN_CEILING_PER_CALL * 0.60e-6, 8))
+        self.assertEqual(first["planning_cost_bound_usd_any_route"], bound)
 
     def test_unpriced_route_has_no_cost_ceiling(self):
         fixed, _ = fixed_items()
         route = {"role": "gatekeeper", "provider_order": ["groq"], "models": {"groq": "unpriced-model"}}
-        self.assertIsNone(verifier.dry_run(fixed, route=route)["cost_ceiling_usd_any_route"])
+        self.assertIsNone(verifier.dry_run(fixed, route=route)["planning_cost_bound_usd_any_route"])
 
 
 class VerifierAuthorizationTests(unittest.TestCase):
@@ -183,10 +187,12 @@ class VerifierExecutionTests(unittest.TestCase):
         by_id = {r["input_id"]: r for r in records}
         self.assertEqual(by_id[FC1]["prediction"]["verdict"], "supported")
         self.assertEqual(by_id[FC2]["prediction"]["verdict"], "contradicted")
-        self.assertEqual(by_id[FC1]["usage"]["cost_status"], "measured")
+        self.assertEqual(by_id[FC1]["usage"]["cost_status"], "complete")
         self.assertEqual(by_id[FC1]["usage"]["provider_models"], ["groq:openai/gpt-oss-120b"])
-        self.assertEqual((run["provider_calls"], run["stopped"]), (2, None))
-        self.assertAlmostEqual(run["estimated_cost_usd"], 2 * (1000 * 0.15e-6 + 50 * 0.60e-6))
+        self.assertEqual((run["budget"]["provider_calls_charged"], run["stopped"]), (2, None))
+        self.assertAlmostEqual(run["budget"]["cost_complete_usd"], 2 * (1000 * 0.15e-6 + 50 * 0.60e-6))
+        self.assertEqual(run["budget"]["budget_charged_usd"], run["budget"]["cost_complete_usd"])
+        self.assertEqual(run["budget"]["uncertain_reserved_usd"], 0.0)
         planned = verifier.plan(by_id_item(fixed, FC1))
         self.assertIn(build_semantic_verification_prompt([planned["input"]], verifier.REPLAY_QUESTION), gateway.prompts)
 
@@ -198,7 +204,7 @@ class VerifierExecutionTests(unittest.TestCase):
         records, run = replay(fixed, report, FakeGateway(), max_cost_usd=per_call + 0.00001)
         self.assertEqual([r["status"] for r in records], ["completed", "not_executed"])
         self.assertEqual(records[1]["reason"], verifier.CEILING_REASON)
-        self.assertLessEqual(run["estimated_cost_usd"], per_call + 0.00001)
+        self.assertLessEqual(run["budget"]["budget_charged_usd"], per_call + 0.00001)
         records, _ = replay(fixed, report, FakeGateway(), max_cost_usd=per_call / 2)
         self.assertEqual([r["status"] for r in records], ["not_executed", "not_executed"])
         records, _ = replay(fixed, report, FakeGateway(), max_calls=1, allow_partial=True)
@@ -209,7 +215,7 @@ class VerifierExecutionTests(unittest.TestCase):
         gateway = FakeGateway(usage=None)
         records, run = replay(fixed, report, gateway)
         self.assertEqual(len(gateway.prompts), 1)
-        self.assertEqual(records[0]["usage"]["cost_status"], "usage_incomplete")
+        self.assertEqual(records[0]["usage"]["cost_status"], "incomplete")
         self.assertEqual(records[1]["reason"], verifier.USAGE_REASON)
 
     def test_unauthorized_model_is_invalid_and_stops(self):
@@ -298,6 +304,16 @@ class FakeSession:
         self.rolled_back += 1
 
 
+class IsolationSession(FakeSession):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    async def execute(self, statement):
+        if "pg_postmaster_start_time" in str(statement):
+            return FakeResult({"database": "scientific_rag_eval", "database_oid": 2, "server_started": "t0"})
+        return await super().execute(statement)
+
+
 class FakeService:
     """Test double for the vector service; real retrieval runs in the integration tests."""
 
@@ -364,7 +380,8 @@ class RetrievalAdapterTests(unittest.TestCase):
         self.assertEqual(record["status"], "completed")
         self.assertEqual(record["prediction"]["ranked_evidence_ids"], [f"{_id('fq', 1)}#1", f"{_id('fq', 1)}#0"])
         self.assertEqual(record["prediction"]["corpus_sha256"], retrieval.corpus_identity(self.pack, self.config))
-        self.assertEqual(record["usage"]["provider_calls"], 2)
+        self.assertEqual(record["usage"]["provider_calls_recorded"], 2)
+        self.assertEqual(record["usage"]["cost_status"], "estimated")
         self.assertIsNotNone(record["usage"]["timings_ms"]["retrieve"])
         self.assertEqual(session.rolled_back, 1)
         self.assertEqual(session.added[0].requested_by, retrieval.EVAL_REQUESTER)
@@ -382,7 +399,8 @@ class RetrievalAdapterTests(unittest.TestCase):
     def test_failure_keeps_usage_and_rolls_back(self):
         record, session = self.run_one(fail=True)
         self.assertEqual((record["status"], record["reason"]), ("failed", "retrieval failure (ConnectionError)"))
-        self.assertEqual(record["usage"]["provider_calls"], 1)
+        self.assertEqual(record["usage"]["provider_calls_recorded"], 1)
+        self.assertEqual(record["usage"]["cost_status"], "incomplete")
         self.assertEqual(session.rolled_back, 1)
 
     def test_isolation_guards(self):
@@ -391,12 +409,18 @@ class RetrievalAdapterTests(unittest.TestCase):
             asyncio.run(retrieval.verify_isolated_database(None, evaluation_url=url,
                                                            application_url=url.replace("+asyncpg", "")))
         eval_url = url.replace("scientific_rag", "scientific_rag_eval")
+        app_identity = {"database": "scientific_rag", "database_oid": 1, "server_started": "t0"}
+
+        async def identity():
+            return app_identity
         with self.assertRaisesRegex(retrieval.IsolationError, "migration head"):
-            asyncio.run(retrieval.verify_isolated_database(FakeSession(revision="old"), evaluation_url=eval_url,
-                                                           application_url=url, migration_head="head"))
+            asyncio.run(retrieval.verify_isolated_database(IsolationSession(revision="old"), evaluation_url=eval_url,
+                                                           application_url=url, migration_head="head",
+                                                           application_identity=identity))
         with self.assertRaisesRegex(retrieval.IsolationError, "not created by this adapter"):
-            asyncio.run(retrieval.verify_isolated_database(FakeSession(revision="head", foreign=3), evaluation_url=eval_url,
-                                                           application_url=url, migration_head="head"))
+            asyncio.run(retrieval.verify_isolated_database(IsolationSession(revision="head", foreign=3),
+                                                           evaluation_url=eval_url, application_url=url,
+                                                           migration_head="head", application_identity=identity))
 
     def test_run_refuses_before_touching_the_database_without_authorization(self):
         def no_db():

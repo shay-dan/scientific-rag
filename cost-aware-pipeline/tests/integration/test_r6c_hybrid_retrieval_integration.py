@@ -184,12 +184,19 @@ class ProductionHybridRetrievalIntegrationTests(unittest.TestCase):
             self.assertGreater(trace["vector_count"], 0)      # pgvector ran
             self.assertLessEqual(trace["selected_count"], execution["configuration"]["top_n"])
             self.assertEqual(record["usage"]["cost_status"], "estimated")
-            self.assertGreater(record["usage"]["provider_calls"], 0)
+            self.assertGreater(record["usage"]["provider_calls_recorded"], 0)
         self.assertGreater(first["prediction"]["trace"]["fulltext_count"], 0)   # PostgreSQL FTS ran
         # the long segment becomes several parents and many children; parent expansion returns it once
         self.assertEqual(first["prediction"]["ranked_evidence_ids"].count(f"{_id('fq', 1)}#2"), 1)
         self.assertEqual(by_id[_id("fq", 3)]["status"], "not_executed")
-        self.assertEqual(execution["isolation"]["foreign_research_runs"], 0)
+        isolation = execution["isolation"]
+        self.assertEqual(isolation["foreign_research_runs"], 0)
+        # a dedicated database on the same server: same server start, different database and OID
+        self.assertEqual(isolation["evaluation_database"]["server_started"], isolation["application_database"]["server_started"])
+        self.assertNotEqual(isolation["evaluation_database"]["database"], isolation["application_database"]["database"])
+        budget = execution["budget"]
+        self.assertEqual(budget["uncertain_reserved_usd"], 0.0)
+        self.assertGreaterEqual(budget["budget_charged_usd"], budget["cost_estimated_usd"])
 
     def test_corpus_never_persists_and_runs_are_reproducible(self):
         first, _ = self.run_adapter()
@@ -232,6 +239,31 @@ class ProductionHybridRetrievalIntegrationTests(unittest.TestCase):
         with self.assertRaisesRegex(retrieval.IsolationError, "application database"):
             asyncio.run(go())
 
+    def run_with_application(self, application_url):
+        async def go():
+            engine = create_async_engine(self.async_url)
+            try:
+                return await retrieval.run_retrieval(
+                    self.items, session_factory=async_sessionmaker(engine), settings=self.settings,
+                    authorization=self.authorization(), dataset_hash=self.report["handoff"]["dataset_hash"],
+                    evaluation_url=self.async_url, application_url=application_url,
+                    service_factory=LocalHashEmbeddingService)
+            finally:
+                await engine.dispose()
+        return asyncio.run(go())
+
+    def test_refuses_equivalent_spellings_and_unverifiable_application_databases(self):
+        spelled = self.plain_url.replace("127.0.0.1", "localhost").replace("postgresql://", "postgres://", 1)
+        with self.assertRaisesRegex(retrieval.IsolationError, "application database"):
+            self.run_with_application(spelled)
+        unreachable = urlunsplit(urlsplit(self.application_url)._replace(netloc=urlsplit(self.application_url).netloc
+                                                                        .rsplit(":", 1)[0] + ":1"))
+        with self.assertRaisesRegex(retrieval.IsolationError, "could not be verified"):
+            self.run_with_application(unreachable)
+        with self.assertRaisesRegex(retrieval.IsolationError, "missing"):
+            self.run_with_application(None)
+        self.assertEqual(self.table_counts()["research_runs"], 0)
+
     def test_failures_are_accounted_and_do_not_stop_other_packs(self):
         class Flaky(LocalHashEmbeddingService):
             fail_on_question = "vitamin D associated"
@@ -239,14 +271,15 @@ class ProductionHybridRetrievalIntegrationTests(unittest.TestCase):
         by_id = {record["input_id"]: record for record in records}
         failed = by_id[_id("fq", 2)]
         self.assertEqual((failed["status"], failed["reason"]), ("failed", "retrieval failure (ConnectionError)"))
-        self.assertGreater(failed["usage"]["provider_calls"], 0)   # document embeddings before the query failed
+        self.assertGreater(failed["usage"]["provider_calls_recorded"], 0)   # document embeddings before the query failed
+        self.assertEqual(failed["usage"]["cost_status"], "incomplete")
         self.assertEqual(by_id[_id("fq", 1)]["status"], "completed")
         self.assertEqual(self.table_counts()["research_runs"], 0)
 
     def test_cost_ceiling_prevents_starting_a_pack(self):
         records, execution = self.run_adapter(max_cost_usd=1e-9)
         self.assertTrue(all(record["status"] == "not_executed" for record in records))
-        self.assertEqual(execution["embedding_calls"], 0)
+        self.assertEqual(execution["budget"]["provider_requests_charged"], 0)
 
 
 if __name__ == "__main__":

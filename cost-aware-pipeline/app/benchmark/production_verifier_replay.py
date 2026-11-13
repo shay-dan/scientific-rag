@@ -16,16 +16,25 @@ production prompt treats as untrusted context and never as evidence, carries a f
 neutral sentence (``REPLAY_QUESTION``). Segments whose text is not redistributed are never
 fetched; a claim without text is ``not_executed``.
 
-Paid calls: ``dry_run`` plans every call and estimates tokens and a cost ceiling without
-calling any provider. ``run_replay`` refuses to call a provider unless an explicit
-authorization (``scientific-rag-paid-evaluation-authorization/v1``) names this adapter,
-the handoff, a single pinned provider and model, a call ceiling and a cost ceiling. It
-never starts a call whose conservative cost ceiling would exceed the remaining budget,
-and stops if usage cannot be measured.
+Paid calls: ``dry_run`` plans every call and estimates tokens and a *planning* cost bound
+without calling any provider. ``run_replay`` refuses to call a provider unless:
+- an explicit authorization (``scientific-rag-paid-evaluation-authorization/v1``) names
+  this adapter, the handoff, a single pinned priced provider and model, a positive integer
+  call limit and a finite positive cost limit (parsed strictly: no NaN or Infinity); and
+- the production chat model for that route enforces a provider-side output-token limit no
+  larger than the reserved ``OUTPUT_TOKEN_CEILING_PER_CALL``. The production gateway sets
+  no such limit today, so live verifier execution is refused: without it the per-call
+  reservation is a planning assumption, not a spending ceiling.
+
+Accounting follows R4: a call with complete provider usage is charged its measured cost
+(``complete``); a call without complete usage is charged its full reservation and recorded
+``incomplete`` with any known lower bound, and execution stops. Missing usage is never zero.
 """
 from __future__ import annotations
 
+import json
 import math
+import os
 import time
 from collections import Counter
 from typing import Awaitable, Callable
@@ -58,6 +67,30 @@ USAGE_REASON = "stopped: provider usage was not reported, so the cost ceiling co
 
 class AuthorizationError(PermissionError):
     """A provider call was requested without a matching, explicit authorization."""
+
+
+def _reject_constant(literal: str):
+    raise AuthorizationError(f"authorization contains the non-finite JSON literal {literal}")
+
+
+def parse_authorization(text: str) -> dict:
+    """Strict JSON: NaN, Infinity and -Infinity are refused (Python's parser accepts them)."""
+    try:
+        value = json.loads(text, parse_constant=_reject_constant)
+    except json.JSONDecodeError as error:
+        raise AuthorizationError(f"authorization is not valid JSON ({error.msg})") from None
+    if not isinstance(value, dict):
+        raise AuthorizationError("authorization must be a JSON object")
+    return value
+
+
+def _positive_int(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _positive_finite(value) -> bool:
+    return (isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+            and value > 0)
 
 
 def claim_inputs(fixed_items: list[dict]) -> list[dict]:
@@ -117,6 +150,36 @@ def call_cost_ceiling(prompt_chars: int, provider: str, model: str) -> float | N
     return calculate_cost(provider, model, *call_token_ceiling(prompt_chars))[0]
 
 
+_KEY_VARIABLES = {"groq": "GROQ_API_KEY", "openrouter": "OPENROUTER_API_KEY", "gemini": "GOOGLE_API_KEY"}
+
+
+def output_limit_status(provider: str, model: str, role: str = GATEWAY_ROLE) -> dict:
+    """Inspect the production chat model for this route for a provider-side output-token limit.
+
+    Builds the model exactly as the gateway does (``create_chat_model``); no request is sent.
+    A placeholder key is set only for construction when none is configured, then removed.
+    """
+    from scientific_rag import llm_gateway
+    variable = _KEY_VARIABLES[provider]
+    placeholder = not llm_gateway._key_for(provider)
+    try:
+        if placeholder:
+            os.environ[variable] = "placeholder-for-inspection-only"
+        chat = llm_gateway.create_chat_model(provider, role, 0)
+    except Exception as error:
+        return {"enforced": False, "limit": None, "source": f"could not inspect the model ({type(error).__name__})"}
+    finally:
+        if placeholder:
+            os.environ.pop(variable, None)
+    built = getattr(chat, "model_name", None) or getattr(chat, "model", None)
+    limits = [getattr(chat, name, None) for name in ("max_tokens", "max_completion_tokens", "max_output_tokens")]
+    limits += [(getattr(chat, "model_kwargs", None) or {}).get(name) for name in ("max_tokens", "max_completion_tokens")]
+    limit = next((value for value in limits if isinstance(value, int) and not isinstance(value, bool)), None)
+    enforced = limit is not None and limit <= OUTPUT_TOKEN_CEILING_PER_CALL and str(built).endswith(model)
+    return {"enforced": enforced, "limit": limit, "model": str(built),
+            "source": f"production create_chat_model({provider!r}, {role!r}) attributes"}
+
+
 def gateway_route() -> dict:
     """The configured gateway route for the verifier role (configuration only; no call)."""
     from scientific_rag.llm_gateway import model_for, provider_order
@@ -135,21 +198,24 @@ def configuration() -> dict:
 
 
 def dry_run(items: list[dict], *, route: dict | None = None) -> dict:
-    """Plan every call and estimate tokens and a cost ceiling. Makes no provider call."""
+    """Plan every call; estimate tokens and a planning cost bound. Makes no provider call."""
     from scientific_rag.costing import calculate_cost
     planned = [plan(item) for item in claim_inputs(items)]
     calls = [p for p in planned if p["status"] == "planned"]
     input_tokens = sum(max(1, math.ceil(p["prompt_chars"] / 4)) for p in calls)
-    input_ceiling = sum(call_token_ceiling(p["prompt_chars"])[0] for p in calls)
-    output_ceiling = OUTPUT_TOKEN_CEILING_PER_CALL * len(calls)
+    input_reserve = sum(call_token_ceiling(p["prompt_chars"])[0] for p in calls)
+    output_reserve = OUTPUT_TOKEN_CEILING_PER_CALL * len(calls)
     route = route or gateway_route()
-    costs = {}
+    by_route, limits = {}, {}
     for provider in route["provider_order"]:
         model = route["models"][provider]
-        estimate, source = calculate_cost(provider, model, input_tokens, output_ceiling // 10)
-        ceiling, _ = calculate_cost(provider, model, input_ceiling, output_ceiling)
-        costs[f"{provider}:{model}"] = {"cost_estimate_usd": estimate, "cost_ceiling_usd": ceiling, "rate_source": source}
-    known = [c["cost_ceiling_usd"] for c in costs.values() if c["cost_ceiling_usd"] is not None]
+        estimate, source = calculate_cost(provider, model, input_tokens, output_reserve // 10)
+        bound, _ = calculate_cost(provider, model, input_reserve, output_reserve)
+        limits[provider] = output_limit_status(provider, model)
+        by_route[f"{provider}:{model}"] = {"cost_estimate_usd": estimate, "planning_cost_bound_usd": bound,
+                                           "output_limit_enforced": limits[provider]["enforced"], "rate_source": source}
+    bounds = [entry["planning_cost_bound_usd"] for entry in by_route.values()]
+    enforced = all(status["enforced"] for status in limits.values())
     return {
         "adapter": ADAPTER, "provider_calls_made": 0, "inputs": len(planned),
         "status": dict(sorted(Counter(p["status"] for p in planned).items())),
@@ -158,14 +224,21 @@ def dry_run(items: list[dict], *, route: dict | None = None) -> dict:
         "prompt_chars": {"total": sum(p["prompt_chars"] for p in calls),
                          "max": max((p["prompt_chars"] for p in calls), default=0)},
         "isolation_applied": sum(p["isolation_applied"] for p in calls),
-        "estimated_input_tokens": input_tokens, "input_token_ceiling": input_ceiling,
-        "output_token_ceiling": output_ceiling,
+        "estimated_input_tokens": input_tokens, "reserved_input_tokens": input_reserve,
+        "reserved_output_tokens": output_reserve,
         "token_estimate_method": "estimate: ceil(prompt characters / 4) input (production estimate_text_tokens rule) "
-                                 f"and {OUTPUT_TOKEN_CEILING_PER_CALL // 10} output tokens per call; ceiling: "
+                                 f"and {OUTPUT_TOKEN_CEILING_PER_CALL // 10} output tokens per call; reservation: "
                                  f"ceil(prompt characters / {INPUT_CHARS_PER_TOKEN_CEILING}) input and "
                                  f"{OUTPUT_TOKEN_CEILING_PER_CALL} output tokens per call",
-        "route": route, "cost_ceiling_by_route": costs,
-        "cost_ceiling_usd_any_route": max(known) if len(known) == len(costs) and known else None,
+        "route": route, "planning_cost_by_route": by_route,
+        "planning_cost_bound_usd_any_route": max(bounds) if bounds and None not in bounds else None,
+        "output_limit": limits[route["provider_order"][0]] if limits else None,
+        "planning_cost_bound_note": (
+            f"provider-enforced output limit of at most {OUTPUT_TOKEN_CEILING_PER_CALL} tokens on every route"
+            if enforced else
+            f"assumes at most {OUTPUT_TOKEN_CEILING_PER_CALL} output tokens per call; not a hard spending ceiling, "
+            "because the production chat model enforces no provider-side output limit on this route; "
+            "live verifier execution is refused until one is enforced"),
         "configuration": configuration(),
     }
 
@@ -181,10 +254,10 @@ def check_authorization(authorization: dict, *, adapter: str, dataset_hash: str,
         problems.append(f"adapter {adapter}")
     if authorization.get("handoff_dataset_hash") != dataset_hash:
         problems.append("handoff_dataset_hash of this handoff")
-    for field in ("max_calls", "max_cost_usd"):
-        value = authorization.get(field)
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
-            problems.append(f"positive {field}")
+    if not _positive_int(authorization.get("max_calls")):
+        problems.append("max_calls as a positive integer")
+    if not _positive_finite(authorization.get("max_cost_usd")):
+        problems.append("max_cost_usd as a finite positive number")
     if problems:
         raise AuthorizationError("authorization is missing or does not match: " + ", ".join(problems))
     if route["provider_order"] != [authorization["provider"]]:
@@ -200,33 +273,63 @@ def check_authorization(authorization: dict, *, adapter: str, dataset_hash: str,
     return authorization
 
 
-def _usage(summary: dict) -> dict:
-    models = sorted(summary.get("by_model") or {})
-    return {"cost_status": "measured" if summary.get("token_usage_complete") and summary.get("estimated_cost_usd") is not None
-            else "usage_incomplete",
-            "provider_calls": summary.get("provider_calls", 0), "input_tokens": summary.get("input_tokens"),
-            "output_tokens": summary.get("output_tokens"), "estimated_cost_usd": summary.get("estimated_cost_usd"),
-            "provider_models": models, "failed_attempts": summary.get("failed_attempts", 0)}
+def _known_cost(attempts: list[dict]) -> float:
+    """Sum of costs for attempts that reported usage and have a price: a lower bound."""
+    from scientific_rag.costing import calculate_cost
+    total = 0.0
+    for attempt in attempts:
+        if attempt.get("skipped") or attempt.get("input_tokens") is None or attempt.get("output_tokens") is None:
+            continue
+        cost, _ = calculate_cost(str(attempt["provider"]), str(attempt["model"]), int(attempt["input_tokens"]),
+                                 int(attempt["output_tokens"]))
+        total += cost or 0.0
+    return round(total, 8)
+
+
+def _usage(summary: dict, reserved: float) -> dict:
+    complete = bool(summary.get("token_usage_complete")) and summary.get("estimated_cost_usd") is not None
+    usage = {"cost_status": "complete" if complete else "incomplete",
+             "provider_calls": summary.get("provider_calls", 0), "input_tokens": summary.get("input_tokens"),
+             "output_tokens": summary.get("output_tokens"), "provider_models": sorted(summary.get("by_model") or {}),
+             "failed_attempts": summary.get("failed_attempts", 0), "reserved_cost_usd": reserved}
+    if complete:
+        usage["cost_usd"] = summary["estimated_cost_usd"]
+    else:
+        usage["known_cost_lower_bound_usd"] = _known_cost(summary.get("attempts") or [])
+    return usage
 
 
 async def run_replay(items: list[dict], *, authorization: dict, dataset_hash: str, route: dict | None = None,
+                     output_limit: dict | None = None,
                      verifier: Callable[..., Awaitable] = verify_claims) -> tuple[list[dict], dict]:
-    """Run the production verifier on each claim within the authorized ceilings. Unscored."""
+    """Run the production verifier on each claim within the authorized budget. Unscored.
+
+    ``output_limit`` defaults to inspecting the production chat model; tests may pass a
+    stand-in to exercise the execution path without a provider."""
     from scientific_rag.llm_gateway import begin_trace, end_trace, summarize_trace
     route = route or gateway_route()
     auth = check_authorization(authorization, adapter=ADAPTER, dataset_hash=dataset_hash, route=route)
+    limit = output_limit if output_limit is not None else output_limit_status(auth["provider"], auth["model"])
+    if not limit.get("enforced") or not isinstance(limit.get("limit"), int) or limit["limit"] > OUTPUT_TOKEN_CEILING_PER_CALL:
+        raise AuthorizationError(
+            "live verifier execution refused: the production chat model enforces no provider-side output-token "
+            f"limit of at most {OUTPUT_TOKEN_CEILING_PER_CALL} tokens, so the per-call reservation is not a "
+            f"spending ceiling (found: {limit.get('limit')!r})")
     allowed_model = f"{auth['provider']}:{auth['model']}"
     planned = [plan(item) for item in claim_inputs(items)]
     if sum(p["status"] == "planned" for p in planned) > auth["max_calls"] and not auth.get("allow_partial"):
         raise AuthorizationError("planned calls exceed the authorized max_calls; select a smaller pilot")
-    records, spent, calls, stop_reason = [], 0.0, 0, None
+    budget = {"provider_calls_charged": 0, "cost_complete_usd": 0.0, "known_cost_lower_bound_usd": 0.0,
+              "uncertain_reserved_usd": 0.0, "budget_charged_usd": 0.0}
+    records, stop_reason = [], None
     for entry in planned:
         item = entry["item"]
         if entry["status"] != "planned":
             records.append(_record(item, "claim_verification", entry["status"], reason=entry["reason"]))
             continue
-        next_ceiling = call_cost_ceiling(entry["prompt_chars"], auth["provider"], auth["model"])
-        if stop_reason or calls >= auth["max_calls"] or spent + next_ceiling > auth["max_cost_usd"]:
+        reserved = call_cost_ceiling(entry["prompt_chars"], auth["provider"], auth["model"])
+        if (stop_reason or budget["provider_calls_charged"] + 1 > auth["max_calls"]
+                or budget["budget_charged_usd"] + reserved > auth["max_cost_usd"]):
             records.append(_record(item, "claim_verification", "not_executed", reason=stop_reason or CEILING_REASON))
             continue
         token = begin_trace()
@@ -238,12 +341,15 @@ async def run_replay(items: list[dict], *, authorization: dict, dataset_hash: st
             error = exc
         finally:
             summary = summarize_trace(end_trace(token))
-        elapsed = round((time.perf_counter() - started) * 1000, 1)
-        usage = {**_usage(summary), "latency_ms": elapsed}
-        calls += max(1, usage["provider_calls"])   # gateway retries and fallbacks count against max_calls
-        if usage["cost_status"] == "measured":
-            spent += usage["estimated_cost_usd"]
-        else:
+        usage = {**_usage(summary, reserved), "latency_ms": round((time.perf_counter() - started) * 1000, 1)}
+        budget["provider_calls_charged"] += max(1, usage["provider_calls"])   # retries and fallbacks count
+        if usage["cost_status"] == "complete":
+            budget["cost_complete_usd"] += usage["cost_usd"]
+            budget["budget_charged_usd"] += usage["cost_usd"]
+        else:   # unknown spend consumes the whole reservation; it is never treated as zero
+            budget["uncertain_reserved_usd"] += reserved
+            budget["known_cost_lower_bound_usd"] += usage["known_cost_lower_bound_usd"]
+            budget["budget_charged_usd"] += reserved
             stop_reason = USAGE_REASON
         if any(model != allowed_model for model in usage["provider_models"]):
             records.append(_record(item, "claim_verification", "invalid", usage=usage,
@@ -261,5 +367,6 @@ async def run_replay(items: list[dict], *, authorization: dict, dataset_hash: st
             "instruction_guard_applied": (not isolate_verification_evidence(entry["input"]).safe
                                           and assessment.reason == INSTRUCTION_LIKE_EVIDENCE_REASON)}))
     records.sort(key=lambda record: record["input_id"])
-    return records, {"authorization_id": auth["authorization_id"], "provider_calls": calls,
-                     "estimated_cost_usd": round(spent, 8), "stopped": stop_reason}
+    budget = {key: round(value, 8) if isinstance(value, float) else value for key, value in budget.items()}
+    return records, {"authorization_id": auth["authorization_id"], "budget": budget, "stopped": stop_reason,
+                     "output_limit": limit}

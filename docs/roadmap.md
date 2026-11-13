@@ -639,12 +639,31 @@ uncertainty. Expansion is a separate decision.
   - Verifier: 1,736 development claims plus 5 pilot claims, all within the prompt bound.
     About 1.53M input tokens.
   - Full development set with the default gateway route `groq:openai/gpt-oss-120b`: about
-    $0.44 estimated, $2.39 ceiling.
-  - With `gemini-3.5-flash-lite`: about $1.33 estimated, $9.29 ceiling.
-  - Proposed first pilot: 50 claims (first 50 by opaque ID), ceiling about $0.07 on the
-    Groq route.
+    $0.44 estimated, $2.39 planning bound.
+  - With `gemini-3.5-flash-lite`: about $1.33 estimated, $9.29 planning bound.
+  - Proposed first pilot: 50 claims (first 50 by opaque ID), planning bound about $0.07 on
+    the Groq route.
+  - The planning bounds assume at most 2,000 output tokens per call, which no provider
+    enforces today, so they are not hard ceilings.
   - Retrieval embeddings: 64 development packs plus 9 pilot packs with text, under $0.01.
-- **Not executed:** no paid call has been made; awaiting owner authorization.
+- **Review corrections (owner review of PR #15 at `d97957f`):** reproduced first
+  (`b56c05b`), then fixed in the adapters, CLI, tests and docs only:
+  - authorization budgets: strict JSON, a positive integer `max_calls` and a finite
+    positive `max_cost_usd` are required (NaN and Infinity refused);
+  - every pack's embedding requests and conservative cost are reserved and charged when
+    it starts, because production counts embedding calls only after success; failed or
+    unmeasured spend is `incomplete` and charged its reservation, never zero;
+  - R4 cost statuses (`complete`, `estimated`, `incomplete` with lower bound) are kept
+    separate;
+  - the production gateway enforces no provider-side output-token limit, so the verifier's
+    2,000-token reservation is a planning bound, not a spending ceiling, and live verifier
+    execution is refused until a separately approved opt-in limit exists;
+  - the application database is the effective `Settings().database_url`; equivalent URL
+    spellings are refused; a live identity check (name, OID, server start) must show
+    different physical databases; a missing or unreachable application identity refuses
+    the run.
+- **Not executed:** no paid call has been made. Retrieval embeddings await owner
+  authorization; the verifier also needs an approved provider-side output limit.
 
 ## R7 — Deterministic claim checks and graceful degradation
 

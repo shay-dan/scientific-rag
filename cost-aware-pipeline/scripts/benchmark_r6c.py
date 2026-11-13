@@ -20,7 +20,6 @@ by opaque input ID; ``--input-ids FILE`` takes a listed subset.
 import argparse
 import asyncio
 import json
-import os
 from pathlib import Path
 import sys
 
@@ -82,9 +81,14 @@ def _write(path: Path, payload: dict) -> None:
 
 
 def _authorization(path) -> dict:
+    """Strict parse (no NaN/Infinity); field checks happen in the adapter before any call."""
+    from app.benchmark.production_verifier_replay import AuthorizationError, parse_authorization
     if not path:
         raise SystemExit("refused: paid provider calls need --authorization (explicit owner approval)")
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+    try:
+        return parse_authorization(Path(path).read_text(encoding="utf-8"))
+    except AuthorizationError as exc:
+        raise SystemExit(f"refused: {exc}")
 
 
 def cmd_verifier_dry_run(args) -> int:
@@ -93,7 +97,8 @@ def cmd_verifier_dry_run(args) -> int:
     plan = verifier.dry_run(select(verifier.claim_inputs(fixed), args))
     plan["dataset_hash"] = report["handoff"]["dataset_hash"]
     _write(args.out, plan)
-    print(json.dumps({k: plan[k] for k in ("planned_calls", "estimated_input_tokens", "cost_ceiling_usd_any_route")}))
+    print(json.dumps({k: plan[k] for k in ("planned_calls", "estimated_input_tokens", "planning_cost_bound_usd_any_route",
+                                           "planning_cost_bound_note")}))
     return 0
 
 
@@ -107,6 +112,7 @@ def cmd_verifier_run(args) -> int:
     try:
         records, run = asyncio.run(verifier.run_replay(items, authorization=authorization,
                                                        dataset_hash=report["handoff"]["dataset_hash"], route=route))
+        # run_replay inspects the production chat model and refuses unless an output limit is enforced
     except verifier.AuthorizationError as exc:
         raise SystemExit(f"refused: {exc}")
     predictor = {"name": verifier.ADAPTER, "kind": "production_component", "version": PIPELINE_VERSION,
@@ -128,7 +134,8 @@ def cmd_retrieval_dry_run(args) -> int:
     plan = retrieval.dry_run(select(retrieval.retrieval_items(fixed), args), _settings(), research_mode=args.research_mode)
     plan["dataset_hash"] = report["handoff"]["dataset_hash"]
     _write(args.out, plan)
-    print(json.dumps({k: plan[k] for k in ("child_chunks", "estimated_embedding_tokens", "estimated_cost_usd")}))
+    print(json.dumps({k: plan[k] for k in ("child_chunks", "estimated_embedding_tokens", "estimated_cost_usd",
+                                           "reserved_cost_usd")}))
     return 0
 
 
@@ -140,14 +147,20 @@ def cmd_retrieval_run(args) -> int:
     fixed, report, protocol = fixed_stage(args.handoff, args.group)
     items = select(retrieval.retrieval_items(fixed), args)
     settings = _settings()
+    # the effective application database (env, .env or default), not only the process environment
+    application_url = retrieval.effective_application_database_url(settings)
+    try:   # fail closed before any connection
+        retrieval.check_database_urls(evaluation_url=args.evaluation_database_url, application_url=application_url)
+    except retrieval.IsolationError as exc:
+        raise SystemExit(f"refused: {exc}")
 
     async def run():
-        engine = create_async_engine(args.evaluation_database_url)
+        engine = create_async_engine(retrieval.async_database_url(args.evaluation_database_url))
         try:
             return await retrieval.run_retrieval(
                 items, session_factory=async_sessionmaker(engine, expire_on_commit=False), settings=settings,
                 authorization=authorization, dataset_hash=report["handoff"]["dataset_hash"],
-                evaluation_url=args.evaluation_database_url, application_url=os.getenv("DATABASE_URL"),
+                evaluation_url=args.evaluation_database_url, application_url=application_url,
                 research_mode=args.research_mode)
         finally:
             await engine.dispose()
