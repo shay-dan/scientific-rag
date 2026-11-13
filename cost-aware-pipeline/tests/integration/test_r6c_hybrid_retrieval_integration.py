@@ -145,7 +145,9 @@ class ProductionHybridRetrievalIntegrationTests(unittest.TestCase):
         auth.update(overrides)
         return auth
 
-    def run_adapter(self, items=None, service=LocalHashEmbeddingService, **auth):
+    def run_adapter(self, items=None, service=None, **auth):
+        service = service or LocalHashEmbeddingService
+
         async def go():
             engine = create_async_engine(self.async_url)
             try:
