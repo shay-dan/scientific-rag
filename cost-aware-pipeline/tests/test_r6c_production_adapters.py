@@ -38,9 +38,6 @@ from tests.test_benchmark_r6b import _id, default_files, make_handoff  # noqa: E
 
 FC1, FC2 = _id("fc", 1), _id("fc", 2)
 ROUTE = {"role": "gatekeeper", "provider_order": ["groq"], "models": {"groq": "openai/gpt-oss-120b"}}
-# Stand-in for a provider-enforced output limit, which production does not set today: it lets these
-# tests exercise the execution path; live execution without one is refused (test_r6c_review_reproduction).
-ENFORCED_LIMIT = {"enforced": True, "limit": 2000, "source": "test stand-in"}
 
 
 def fixed_items(files=None, group="eval_inputs"):
@@ -54,7 +51,8 @@ def fixed_items(files=None, group="eval_inputs"):
 def authorization(report, **overrides):
     auth = {"schema": verifier.AUTHORIZATION_SCHEMA, "authorization_id": "test-auth-1", "approved_by": "test",
             "adapter": verifier.ADAPTER, "handoff_dataset_hash": report["handoff"]["dataset_hash"],
-            "provider": "groq", "model": "openai/gpt-oss-120b", "max_calls": 10, "max_cost_usd": 1.0}
+            "provider": "groq", "model": "openai/gpt-oss-120b", "max_calls": 10, "max_cost_usd": 1.0,
+            "max_output_tokens": 2000}   # R6D: required for the verifier; ignored by the retrieval adapter
     auth.update(overrides)
     return auth
 
@@ -64,10 +62,11 @@ class FakeGateway:
 
     def __init__(self, verdicts=None, *, model="openai/gpt-oss-120b", usage=(1000, 50), fail_on=(), bad_target_on=()):
         self.verdicts, self.model, self.usage = verdicts or {}, model, usage
-        self.fail_on, self.bad_target_on, self.prompts = set(fail_on), set(bad_target_on), []
+        self.fail_on, self.bad_target_on, self.prompts, self.output_limits = set(fail_on), set(bad_target_on), [], []
 
-    async def __call__(self, *, role, temperature, prompt, response_schema):
+    async def __call__(self, *, role, temperature, prompt, response_schema, max_output_tokens=None):
         self.prompts.append(prompt)
+        self.output_limits.append(max_output_tokens)
         call = len(self.prompts)
         trace = llm_gateway._trace.get()
         if trace is not None:
@@ -86,8 +85,7 @@ class FakeGateway:
 def replay(items, report, gateway, **auth):
     with patch.object(claim_verification, "ainvoke_structured", gateway):
         return asyncio.run(verifier.run_replay(items, authorization=authorization(report, **auth),
-                                               dataset_hash=report["handoff"]["dataset_hash"], route=ROUTE,
-                                               output_limit=ENFORCED_LIMIT))
+                                               dataset_hash=report["handoff"]["dataset_hash"], route=ROUTE))
 
 
 class VerifierMappingTests(unittest.TestCase):
@@ -188,6 +186,7 @@ class VerifierExecutionTests(unittest.TestCase):
         self.assertEqual(by_id[FC1]["prediction"]["verdict"], "supported")
         self.assertEqual(by_id[FC2]["prediction"]["verdict"], "contradicted")
         self.assertEqual(by_id[FC1]["usage"]["cost_status"], "complete")
+        self.assertEqual(gateway.output_limits, [2000, 2000])   # the authorized limit reaches the gateway
         self.assertEqual(by_id[FC1]["usage"]["provider_models"], ["groq:openai/gpt-oss-120b"])
         self.assertEqual((run["budget"]["provider_calls_charged"], run["stopped"]), (2, None))
         self.assertAlmostEqual(run["budget"]["cost_complete_usd"], 2 * (1000 * 0.15e-6 + 50 * 0.60e-6))

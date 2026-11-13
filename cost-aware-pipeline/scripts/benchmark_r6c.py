@@ -6,9 +6,11 @@ never combined. Inputs come only from the label-free development handoff, throug
 stage protocol (open discovery frozen as not executed before fixed evidence is loaded).
 The handoff and all outputs stay outside the repository.
 
-  verifier-dry-run   plan every production verifier call; estimate tokens and a cost
-                     ceiling for the configured gateway route. No provider call.
-  verifier-run       call the production verifier. Refused without an authorization file.
+  verifier-dry-run   plan every production verifier call; estimate tokens and a planning
+                     cost bound for the configured gateway route, and report whether a live
+                     run would be eligible after authorization. No provider call.
+  verifier-run       call the production verifier with a provider-enforced output-token
+                     limit (R6D). Refused without an authorization file.
   retrieval-dry-run  count production chunks; estimate embedding tokens and cost.
                      No provider or database call.
   retrieval-run      run the production hybrid retriever against a dedicated evaluation
@@ -94,11 +96,11 @@ def _authorization(path) -> dict:
 def cmd_verifier_dry_run(args) -> int:
     from app.benchmark import production_verifier_replay as verifier
     fixed, report, _ = fixed_stage(args.handoff, args.group)
-    plan = verifier.dry_run(select(verifier.claim_inputs(fixed), args))
+    plan = verifier.dry_run(select(verifier.claim_inputs(fixed), args), max_output_tokens=args.max_output_tokens)
     plan["dataset_hash"] = report["handoff"]["dataset_hash"]
     _write(args.out, plan)
     print(json.dumps({k: plan[k] for k in ("planned_calls", "estimated_input_tokens", "planning_cost_bound_usd_any_route",
-                                           "planning_cost_bound_note")}))
+                                           "planning_cost_bound_note", "live_execution")}))
     return 0
 
 
@@ -112,7 +114,7 @@ def cmd_verifier_run(args) -> int:
     try:
         records, run = asyncio.run(verifier.run_replay(items, authorization=authorization,
                                                        dataset_hash=report["handoff"]["dataset_hash"], route=route))
-        # run_replay inspects the production chat model and refuses unless an output limit is enforced
+        # run_replay passes the authorized max_output_tokens to the gateway, which enforces it or refuses
     except verifier.AuthorizationError as exc:
         raise SystemExit(f"refused: {exc}")
     predictor = {"name": verifier.ADAPTER, "kind": "production_component", "version": PIPELINE_VERSION,
@@ -191,6 +193,9 @@ def main(argv=None) -> int:
         p.add_argument("--input-ids")
         if name.startswith("retrieval"):
             p.add_argument("--research-mode", default="standard", choices=("fast", "standard", "deep"))
+        if name == "verifier-dry-run":
+            p.add_argument("--max-output-tokens", type=int, default=2000,
+                           help="output-token limit a live run would request (planning only)")
         if paid:
             p.add_argument("--authorization", help="owner-approved paid-evaluation authorization JSON")
             p.add_argument("--run-id")

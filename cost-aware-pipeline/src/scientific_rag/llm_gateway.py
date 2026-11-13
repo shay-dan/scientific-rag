@@ -11,10 +11,12 @@ import logging
 import os
 import re
 import inspect
+import json
 import time
 from typing import Any, Callable, Iterable
 from uuid import uuid4
 
+import httpx
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_openai import ChatOpenAI
@@ -49,6 +51,117 @@ def _validate_role_output(role: str, result: Any, payload: Any) -> None:
         raise InvalidStructuredResponse("Provider returned an implausibly short research answer")
     if not re.search(r"\[S\d+\]", answer):
         raise InvalidStructuredResponse("Research answer did not cite any supplied source label")
+
+class OutputTokenLimitError(ValueError):
+    """Base class for refusals of an explicitly requested output-token limit (R6D)."""
+
+
+class InvalidOutputTokenLimit(OutputTokenLimitError):
+    """The requested limit is not a strictly positive integer."""
+
+
+class UnsupportedOutputTokenLimit(OutputTokenLimitError):
+    """A configured provider cannot enforce a verified output-token limit."""
+
+
+class OutputTokenLimitNotEnforced(OutputTokenLimitError):
+    """The outbound provider request did not carry the requested limit, or could not be verified."""
+
+
+# R6D: providers whose outbound request is verified to carry an output-token limit, with the
+# request-body parameter names accepted as that limit. Both use the OpenAI-compatible chat
+# completions API through ``ChatOpenAI`` (``max_tokens`` constructor argument). Gemini is not
+# supported for bounded requests: its outbound request is not verified by this gateway.
+OUTPUT_TOKEN_LIMIT_PARAMETERS: dict[str, tuple[str, ...]] = {
+    "groq": ("max_completion_tokens", "max_tokens"),
+    "openrouter": ("max_completion_tokens", "max_tokens"),
+}
+
+
+def validate_max_output_tokens(value: Any) -> int | None:
+    """Return the limit, or None when unspecified. Only a strictly positive int is accepted."""
+    if value is None:
+        return None
+    if type(value) is not int or value <= 0:
+        raise InvalidOutputTokenLimit("max_output_tokens must be a strictly positive integer")
+    return value
+
+
+def output_token_limit_parameters(provider: str) -> tuple[str, ...]:
+    """Outbound parameter names that enforce the limit for a provider; refuses unsupported ones."""
+    names = OUTPUT_TOKEN_LIMIT_PARAMETERS.get(provider)
+    if not names:
+        raise UnsupportedOutputTokenLimit(
+            f"provider {provider!r} has no verified output-token limit; bounded requests are refused")
+    return names
+
+
+def output_token_limit_support() -> dict[str, tuple[str, ...] | None]:
+    return {provider: OUTPUT_TOKEN_LIMIT_PARAMETERS.get(provider) for provider in DEFAULT_PROVIDER_ORDER}
+
+
+class _OutputLimitGuard:
+    """Checks every outbound request of a bounded model, before it is sent."""
+
+    def __init__(self, provider: str, limit: int) -> None:
+        self.provider, self.limit, self.verified_requests = provider, limit, 0
+
+    def check(self, content: bytes) -> None:
+        try:
+            body = json.loads(content)
+        except (ValueError, TypeError):
+            body = None
+        sent = ({name: body[name] for name in OUTPUT_TOKEN_LIMIT_PARAMETERS[self.provider]
+                 if body.get(name) is not None} if isinstance(body, dict) else {})
+        if not sent or any(type(value) is not int or value != self.limit for value in sent.values()):
+            raise OutputTokenLimitNotEnforced(
+                f"outbound {self.provider} request does not carry the requested output-token limit; not sent")
+        if body.get("n") not in (None, 1):   # several completions would multiply the bounded output
+            raise OutputTokenLimitNotEnforced(
+                f"outbound {self.provider} request asks for more than one completion; not sent")
+        self.verified_requests += 1
+
+    def sync_hook(self, request: httpx.Request) -> None:
+        self.check(request.read())
+
+    async def async_hook(self, request: httpx.Request) -> None:
+        self.check(await request.aread())
+
+
+def _outbound_transport() -> httpx.BaseTransport | None:
+    """Transport for bounded-request clients. None selects the normal network transport."""
+    return None
+
+
+def _output_limit_guard(model: Any) -> _OutputLimitGuard:
+    guard = getattr(getattr(model, "http_async_client", None), "output_limit_guard", None)
+    if not isinstance(guard, _OutputLimitGuard):
+        raise OutputTokenLimitNotEnforced("the chat model has no outbound output-token limit guard")
+    return guard
+
+
+def _output_limit_cause(error: BaseException) -> OutputTokenLimitError | None:
+    current: BaseException | None = error
+    visited: set[int] = set()
+    while current is not None and id(current) not in visited:
+        if isinstance(current, OutputTokenLimitError):
+            return current
+        visited.add(id(current))
+        current = current.__cause__ or current.__context__
+    return None
+
+
+async def _close_bounded_clients(model: Any) -> None:
+    for name in ("http_async_client", "http_client"):
+        client = getattr(model, name, None)
+        try:
+            if isinstance(client, httpx.AsyncClient):
+                await client.aclose()
+            elif isinstance(client, httpx.Client):
+                client.close()
+        except Exception as error:   # closing is best effort
+            logger.warning("llm_gateway_bounded_client_close_failed error_type=%s", type(error).__name__)
+
 
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -313,7 +426,17 @@ def primary_route_label(role: str) -> str:
     return "unconfigured"
 
 
-def create_chat_model(provider: str, role: str, temperature: float):
+def create_chat_model(provider: str, role: str, temperature: float, max_output_tokens: int | None = None):
+    """Build the chat model for a provider and role.
+
+    ``max_output_tokens`` (R6D) is optional. When omitted the model is built exactly as
+    before. When given, the provider must support a verified limit: the limit is set as a
+    request parameter, and a guard on the model's own HTTP clients refuses any outbound
+    request that does not carry it.
+    """
+    limit = validate_max_output_tokens(max_output_tokens)
+    if limit is not None:
+        output_token_limit_parameters(provider)
     model = model_for(provider, role)
     timeout = provider_timeout_seconds(provider)
     api_key = _key_for(provider)
@@ -334,6 +457,17 @@ def create_chat_model(provider: str, role: str, temperature: float):
                 "HTTP-Referer": os.getenv("OPENROUTER_SITE_URL", "https://github.com/shay-dan/scientific-rag"),
                 "X-Title": os.getenv("OPENROUTER_APP_NAME", "Scientific RAG"),
             }
+        if limit is not None:
+            guard = _OutputLimitGuard(provider, limit)
+            kwargs["max_tokens"] = limit
+            # Redirects are not followed: a redirected POST would be a second, uncounted request.
+            kwargs["http_client"] = httpx.Client(
+                timeout=timeout, follow_redirects=False, transport=_outbound_transport(),
+                event_hooks={"request": [guard.sync_hook]})
+            kwargs["http_async_client"] = httpx.AsyncClient(
+                timeout=timeout, follow_redirects=False, transport=_outbound_transport(),
+                event_hooks={"request": [guard.async_hook]})
+            kwargs["http_async_client"].output_limit_guard = guard
         return ChatOpenAI(**kwargs)
 
     kwargs = {"model": model, "google_api_key": api_key, "timeout": timeout, "max_retries": 0}
@@ -438,11 +572,21 @@ def create_primary_chat_model(role: str, temperature: float):
     return create_chat_model(provider, role, temperature)
 
 
-async def ainvoke(role: str, temperature: float, chain_builder: Callable[[Any], Any], payload: Any):
-    """Invoke a chain and fail over only for transient/provider-availability errors."""
+async def ainvoke(role: str, temperature: float, chain_builder: Callable[[Any], Any], payload: Any, *,
+                  max_output_tokens: int | None = None):
+    """Invoke a chain and fail over only for transient/provider-availability errors.
+
+    ``max_output_tokens`` (R6D, optional) bounds every provider attempt of this call. It is
+    refused unless every configured provider for the role can enforce it, so a bounded call
+    can never fall back to an unbounded request. Without it, behavior is unchanged.
+    """
+    limit = validate_max_output_tokens(max_output_tokens)
     providers = list(_configured_providers(role))
     if not providers:
         raise ValueError("No LLM provider API key is configured")
+    if limit is not None:
+        for configured in providers:
+            output_token_limit_parameters(configured)
 
     last_error: BaseException | None = None
     call_id = str(uuid4())
@@ -500,12 +644,20 @@ async def ainvoke(role: str, temperature: float, chain_builder: Callable[[Any], 
         started = time.perf_counter()
         usage_handler = _TokenUsageHandler()
         actual_tokens: int | None = None
+        bounded_model = None
         try:
-            chain = chain_builder(create_chat_model(provider, role, temperature))
+            if limit is None:
+                chain = chain_builder(create_chat_model(provider, role, temperature))
+            else:
+                bounded_model = create_chat_model(provider, role, temperature, max_output_tokens=limit)
+                guard = _output_limit_guard(bounded_model)
+                chain = chain_builder(bounded_model)
             result = await asyncio.wait_for(
                 _ainvoke_with_usage(chain, payload, usage_handler),
                 timeout=min(provider_timeout_seconds(provider), max(0.001, deadline - time.monotonic())),
             )
+            if limit is not None and guard.verified_requests < 1:
+                raise OutputTokenLimitNotEnforced("the response did not come from a verified bounded request")
             _validate_role_output(role, result, payload)
             latency_ms = round((time.perf_counter() - started) * 1000, 1)
             input_tokens, output_tokens = _usage_counts(result)
@@ -523,7 +675,8 @@ async def ainvoke(role: str, temperature: float, chain_builder: Callable[[Any], 
         except Exception as error:
             last_error = error
             latency_ms = round((time.perf_counter() - started) * 1000, 1)
-            retryable = is_retryable_error(error)
+            limit_error = _output_limit_cause(error) if limit is not None else None
+            retryable = is_retryable_error(error) and limit_error is None
             status = _status_code(error)
             if status == 429 and cooldowns is not None:
                 delay = _retry_after_seconds(error)
@@ -546,11 +699,15 @@ async def ainvoke(role: str, temperature: float, chain_builder: Callable[[Any], 
                 "llm_gateway_failure provider=%s model=%s role=%s latency_ms=%s status=%s retryable=%s error_type=%s",
                 provider, model, role, latency_ms, status, retryable, type(error).__name__,
             )
+            if limit_error is not None and limit_error is not error:
+                raise limit_error from error
             if not retryable:
                 raise
             if pending:
                 logger.info("llm_gateway_fallback from=%s to=%s role=%s", provider, pending[0], role)
         finally:
+            if bounded_model is not None:
+                await _close_bounded_clients(bounded_model)
             if admission is not None:
                 try:
                     await shared_release(shared_redis, admission, actual_tokens)
@@ -567,7 +724,8 @@ async def ainvoke(role: str, temperature: float, chain_builder: Callable[[Any], 
     raise TimeoutError("LLM gateway call budget exhausted")
 
 
-async def ainvoke_structured(role: str, temperature: float, prompt: str, response_schema: type):
+async def ainvoke_structured(role: str, temperature: float, prompt: str, response_schema: type, *,
+                             max_output_tokens: int | None = None):
     class ValidatedStructuredChain:
         def __init__(self, chain):
             self.chain = chain
@@ -607,6 +765,8 @@ async def ainvoke_structured(role: str, temperature: float, prompt: str, respons
                 raise
             return ValidatedStructuredChain(model.with_structured_output(response_schema))
 
+    if max_output_tokens is not None:
+        return await ainvoke(role, temperature, structured_model, prompt, max_output_tokens=max_output_tokens)
     return await ainvoke(
         role,
         temperature,

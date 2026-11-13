@@ -214,6 +214,89 @@ class OutboundRequestTests(unittest.TestCase):
         self.assertTrue(wire.limits()[0] and all(v == LIMIT for v in wire.limits()[0].values()))
 
 
+class SelfReviewRegressionTests(unittest.TestCase):
+    """Defects found in the adversarial self-review of the guard."""
+
+    def guard(self):
+        return llm_gateway._OutputLimitGuard("groq", LIMIT)
+
+    def test_guard_accepts_only_the_exact_limit(self):
+        for body in ({"max_completion_tokens": LIMIT}, {"max_tokens": LIMIT},
+                     {"max_tokens": LIMIT, "max_completion_tokens": LIMIT, "n": 1}):
+            guard = self.guard()
+            guard.check(json.dumps(body).encode())
+            self.assertEqual(guard.verified_requests, 1)
+        for body in ({}, {"max_tokens": None}, {"max_tokens": LIMIT + 1}, {"max_tokens": float(LIMIT)},
+                     {"max_tokens": True}, {"max_tokens": LIMIT, "max_completion_tokens": LIMIT * 10},
+                     {"max_tokens": str(LIMIT)}, [LIMIT]):
+            guard = self.guard()
+            with self.subTest(body=body), self.assertRaises(llm_gateway.OutputTokenLimitNotEnforced):
+                guard.check(json.dumps(body).encode())
+            self.assertEqual(guard.verified_requests, 0)
+        with self.assertRaises(llm_gateway.OutputTokenLimitNotEnforced):
+            self.guard().check(b"not json")
+
+    def test_multiple_completions_are_refused(self):
+        with self.assertRaises(llm_gateway.OutputTokenLimitNotEnforced):
+            self.guard().check(json.dumps({"max_tokens": LIMIT, "n": 3}).encode())
+
+    def test_bounded_clients_do_not_follow_redirects_or_retry(self):
+        with patch.dict(os.environ, provider_env("groq", GROQ_API_KEY="k")):
+            model = llm_gateway.create_chat_model("groq", "gatekeeper", 0, max_output_tokens=LIMIT)
+        self.assertFalse(model.http_async_client.follow_redirects)
+        self.assertFalse(model.http_client.follow_redirects)
+        self.assertEqual(model.max_retries, 0)
+        asyncio.run(llm_gateway._close_bounded_clients(model))
+
+    def test_redirect_is_not_followed_as_a_second_request(self):
+        calls = []
+
+        def redirecting(request):
+            calls.append(str(request.url))
+            return httpx.Response(307, headers={"location": "https://elsewhere.invalid/v1/chat/completions"})
+        with patch.dict(os.environ, provider_env("groq", GROQ_API_KEY="k")), \
+                patch.object(llm_gateway, "_outbound_transport", lambda: httpx.MockTransport(redirecting)), \
+                self.assertRaises(Exception):
+            asyncio.run(llm_gateway.ainvoke("gatekeeper", 0, lambda model: model, "hello", max_output_tokens=LIMIT))
+        self.assertEqual(len(calls), 1)
+
+    def test_limit_errors_and_logs_carry_no_key_or_prompt(self):
+        wire = Wire()
+        dropping = lambda **kwargs: ChatOpenAI(**{k: v for k, v in kwargs.items() if k != "max_tokens"})
+        with patch.object(llm_gateway, "ChatOpenAI", dropping), self.assertLogs("ResearchAgent.LLMGateway", "INFO") as logs:
+            try:
+                bounded(provider_env("groq", GROQ_API_KEY="secret-key-value"), wire, max_output_tokens=LIMIT)
+            except llm_gateway.OutputTokenLimitNotEnforced as error:
+                text = str(error) + " ".join(logs.output)
+        self.assertNotIn("secret-key-value", text)
+        self.assertNotIn("hello", text)
+
+
+class OfflineCliDryRunTests(unittest.TestCase):
+    def test_offline_dry_run_reports_eligibility_without_any_call(self):
+        """A pinned, supported, priced route is eligible for live execution after authorization."""
+        import subprocess
+        import tempfile
+        from tests.test_benchmark_r6b import make_handoff
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            archive = make_handoff(tmp)
+            env = {**os.environ, **provider_env("groq")}   # no API key configured at all
+            result = subprocess.run(
+                [sys.executable, str(ROOT / "scripts/benchmark_r6c.py"), "verifier-dry-run", str(archive), "--group",
+                 "eval_inputs", "--out", str(tmp / "plan.json"), "--max-output-tokens", "2000"],
+                capture_output=True, text=True, cwd=ROOT, env=env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            plan = json.loads((tmp / "plan.json").read_text())
+        self.assertEqual(plan["provider_calls_made"], 0)
+        live = plan["live_execution"]
+        self.assertEqual((live["eligible_after_authorization"], live["blockers"]), (True, []))
+        self.assertEqual(live["output_limit"]["limit"], 2000)
+        print("R6D offline dry run:", json.dumps({"planned_calls": plan["planned_calls"], "route": plan["route"],
+                                                   "planning_cost_bound_usd": plan["planning_cost_bound_usd_any_route"],
+                                                   "live_execution": live}, sort_keys=True))
+
+
 class ProductionVerifierPassThroughTests(unittest.TestCase):
     ITEM = ClaimVerificationInput(target="claims.1", claim_text="c", source_id="S1", evidence_quote="e",
                                   matched_source_title="t", matched_passage_context="e")
