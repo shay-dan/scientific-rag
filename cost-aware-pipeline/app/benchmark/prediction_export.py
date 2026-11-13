@@ -48,11 +48,13 @@ TEXT_REASON = "evidence text is not redistributed; fetching it is an external do
 ANSWER_ITEM_TYPES = {"abstract_question_answering_yes_no_maybe", "trial_result_inference_intervention_comparator_outcome"}
 
 
-def _record(input_item: dict, task: str, status: str, *, prediction=None, reason=None) -> dict:
+def _record(input_item: dict, task: str, status: str, *, prediction=None, reason=None, usage=None) -> dict:
+    """One export record. ``usage`` defaults to no provider calls (offline baselines); adapters that
+    call a provider pass measured usage, never a zero placeholder."""
     if task not in TASKS or status not in STATUSES:
         raise ValueError(f"invalid task/status {task!r}/{status!r}")
     record = {"input_id": input_item["input_id"], "task": task, "stage": TASKS[task], "status": status,
-              "input_hash": input_item["input_hash"], "usage": dict(NO_USAGE)}
+              "input_hash": input_item["input_hash"], "usage": dict(usage) if usage is not None else dict(NO_USAGE)}
     if prediction is not None:
         record["prediction"] = prediction
     if reason is not None:
