@@ -265,6 +265,12 @@ class FakeResult:
     def scalar(self):
         return self.value
 
+    def mappings(self):
+        return self
+
+    def one(self):
+        return self.value
+
 
 class FakeSession:
     def __init__(self, count=1, revision=None, foreign=0):
