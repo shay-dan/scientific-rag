@@ -22,6 +22,8 @@ Typed refusals, all subclasses of `OutputTokenLimitError`:
 - `UnsupportedOutputTokenLimit`: a configured provider cannot enforce a verified limit.
 - `OutputTokenLimitNotEnforced`: an outbound request did not carry the limit, or a
   response did not come from a verified bounded request.
+- `BoundedRequestLimitExceeded` (a kind of `OutputTokenLimitNotEnforced`): a bounded
+  provider attempt tried to send more than one outbound request.
 
 ## Provider support
 
@@ -42,7 +44,17 @@ A bounded model gets its own HTTP clients with a guard that runs before each req
 sent. The guard refuses the request, and nothing is sent, when:
 
 - the body carries no limit, or a limit that is not exactly the requested integer;
-- the body asks for more than one completion (`n > 1`).
+- the body asks for more than one completion (`n > 1`);
+- the same bounded attempt has already sent a request.
+
+**One outbound request per provider attempt.** The gateway builds one bounded model, with
+its own guard, for each provider attempt, and records and budgets that attempt as one
+call. The guard therefore admits one request. A second one is refused before it is
+transmitted, whether it comes from a chain invoking the model again, a concurrent call, a
+hand-rolled retry after a failed first request, or the model's synchronous client. The
+attempt then fails with the typed refusal, even if the chain swallowed the error. It
+keeps the first request's reported usage and is never retried or routed to another
+provider. Calls without a limit are unaffected.
 
 Other controls for bounded requests:
 
@@ -109,6 +121,9 @@ billing guarantee:
 
 `tests/test_r6d_output_token_limits.py` (no live request; provider HTTP is mocked):
 
+- (`tests/test_r6d_request_count_review.py`) one request per bounded attempt: sequential,
+  concurrent, swallowed and retry-after-failure second requests, no fallback after the
+  refusal, unchanged unbounded calls, and R6C calls charged matching outbound requests;
 - limit validation and the support table;
 - the limit in the outbound request for Groq and OpenRouter, including structured calls;
 - no limit and the original client construction when none is requested;

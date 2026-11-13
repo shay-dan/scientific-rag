@@ -696,6 +696,11 @@ uncertainty. Expansion is a separate decision.
   charged. Exports and owner scoring are unchanged.
 - **Tests first:** on the unchanged code the new tests failed (capability absent) and the
   default-behavior tests passed (`35bf3a5`).
+- **Review correction (owner review of PR #16 at `8010f22`):** reproduced first
+  (`e0390e9`), then fixed in the gateway guard. A bounded provider attempt now sends at
+  most one outbound request; a second one is refused before transmission, fails the
+  attempt with a typed error, and never falls back or retries. Calls charged by the R6C
+  ledger match outbound requests.
 - **Limits of the guarantee:** the limit bounds requested output, not billing. Provider
   honoring of the limit, reasoning-token counting, prices and unreported usage cannot be
   verified offline.

@@ -100,13 +100,37 @@ def output_token_limit_support() -> dict[str, tuple[str, ...] | None]:
     return {provider: OUTPUT_TOKEN_LIMIT_PARAMETERS.get(provider) for provider in DEFAULT_PROVIDER_ORDER}
 
 
+class BoundedRequestLimitExceeded(OutputTokenLimitNotEnforced):
+    """A bounded provider attempt tried to send more than one outbound request."""
+
+
 class _OutputLimitGuard:
-    """Checks every outbound request of a bounded model, before it is sent."""
+    """Checks every outbound request of a bounded model, before it is sent.
+
+    One guard belongs to one bounded model, which the gateway builds for one provider attempt.
+    It admits at most one outbound request: a provider attempt is recorded and budgeted as one
+    call, so a second request (a chain invoking the model again, or a hand-rolled retry, also
+    after a failed first request) is refused before it is transmitted. ``check`` has no await,
+    so concurrent requests cannot both be admitted. The first refusal is kept in ``refusal``
+    so the gateway fails the attempt even if the chain swallowed the error.
+    """
 
     def __init__(self, provider: str, limit: int) -> None:
         self.provider, self.limit, self.verified_requests = provider, limit, 0
+        self.refusal: OutputTokenLimitError | None = None
 
     def check(self, content: bytes) -> None:
+        try:
+            self._check(content)
+        except OutputTokenLimitError as error:
+            if self.refusal is None:
+                self.refusal = error
+            raise
+
+    def _check(self, content: bytes) -> None:
+        if self.verified_requests >= 1:
+            raise BoundedRequestLimitExceeded(
+                f"a bounded {self.provider} attempt may send one outbound request; a further request was not sent")
         try:
             body = json.loads(content)
         except (ValueError, TypeError):
@@ -645,6 +669,7 @@ async def ainvoke(role: str, temperature: float, chain_builder: Callable[[Any], 
         usage_handler = _TokenUsageHandler()
         actual_tokens: int | None = None
         bounded_model = None
+        guard = None
         try:
             if limit is None:
                 chain = chain_builder(create_chat_model(provider, role, temperature))
@@ -656,8 +681,11 @@ async def ainvoke(role: str, temperature: float, chain_builder: Callable[[Any], 
                 _ainvoke_with_usage(chain, payload, usage_handler),
                 timeout=min(provider_timeout_seconds(provider), max(0.001, deadline - time.monotonic())),
             )
-            if limit is not None and guard.verified_requests < 1:
-                raise OutputTokenLimitNotEnforced("the response did not come from a verified bounded request")
+            if limit is not None:
+                if guard.refusal is not None:   # refused request(s), even if the chain swallowed the error
+                    raise guard.refusal
+                if guard.verified_requests != 1:
+                    raise OutputTokenLimitNotEnforced("the response did not come from one verified bounded request")
             _validate_role_output(role, result, payload)
             latency_ms = round((time.perf_counter() - started) * 1000, 1)
             input_tokens, output_tokens = _usage_counts(result)
@@ -675,7 +703,9 @@ async def ainvoke(role: str, temperature: float, chain_builder: Callable[[Any], 
         except Exception as error:
             last_error = error
             latency_ms = round((time.perf_counter() - started) * 1000, 1)
-            limit_error = _output_limit_cause(error) if limit is not None else None
+            limit_error = None
+            if limit is not None:   # a refusal is never retried or routed to another provider
+                limit_error = _output_limit_cause(error) or (guard.refusal if guard is not None else None)
             retryable = is_retryable_error(error) and limit_error is None
             status = _status_code(error)
             if status == 429 and cooldowns is not None:
