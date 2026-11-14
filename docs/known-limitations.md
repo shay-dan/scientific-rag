@@ -15,6 +15,9 @@ medical system.
   unavailable, slow, incomplete, or inconsistent.
 - Structured source IDs and verbatim quotes improve traceability but do not prove
   that every interpretation is scientifically correct.
+- R7A degrade recovery can return an intentionally incomplete answer after removing
+  structurally invalid fields. It is opt-in, visibly marks omissions, and records a
+  machine-readable audit, but does not establish semantic or scientific correctness.
 
 ## Security and deployment
 

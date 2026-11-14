@@ -39,12 +39,14 @@ from .query_quality import QueryAnchors, build_arxiv_query, build_pubmed_query, 
 from .pipeline_config import PipelineConfig
 from app.untrusted_content import UNTRUSTED_DATA_RULE, has_instruction_like_content, render_untrusted
 from app.weak_model_synthesis import (
+    RemovedField,
     render_evidence_block,
     StructuredEvidenceAnswerV2,
     V2RepairBatch,
     build_evidence_blocks,
     generation_prompt_v2,
     merge_v2_repairs,
+    recover_v2_answer,
     render_answer_v2,
     repair_prompt_v2,
     validate_answer_v2,
@@ -66,6 +68,21 @@ from app.claim_verification import (
 load_dotenv()
 
 logger = logging.getLogger("ResearchAgent")
+
+
+class NoRunScopedEvidence(RuntimeError):
+    """Retrieved sources produced no eligible evidence for final synthesis."""
+
+
+class NoValidClaimsRemain(RuntimeError):
+    """Generation/repair completed, but no structurally valid answer claim survived."""
+
+    failure_kind = "no_valid_claims_remain"
+
+    def __init__(self, recovery_audit: dict, removals: tuple[RemovedField, ...]):
+        super().__init__("Structured synthesis left no valid answer claims after one repair attempt")
+        self.recovery_audit = recovery_audit
+        self.removals = removals
 
 
 # Biopython's Entrez._open calls its module-level urlopen without a timeout.
@@ -1427,10 +1444,13 @@ class ResearchAgent:
     def __init__(self, vector_service, max_synthesis_subquestions: int = 2, retrieval_documents: int = 6,
                  max_context_documents: int = 8, progress_callback=None,
                  semantic_verification_mode: Literal["off", "shadow", "enforce"] = "off",
+                 claim_recovery_mode: Literal["strict", "degrade"] = "strict",
                  semantic_verification_timeout_seconds: float = 120,
                  semantic_verification_max_gateway_invocations: int = SEMANTIC_VERIFICATION_MAX_GATEWAY_INVOCATIONS):
         if semantic_verification_mode not in {"off", "shadow", "enforce"}:
             raise ValueError(f"Unsupported semantic verification mode: {semantic_verification_mode}")
+        if claim_recovery_mode not in {"strict", "degrade"}:
+            raise ValueError(f"Unsupported claim recovery mode: {claim_recovery_mode}")
         if semantic_verification_timeout_seconds <= 0:
             raise ValueError("Semantic verification timeout must be positive")
         if semantic_verification_max_gateway_invocations < 1:
@@ -1442,6 +1462,7 @@ class ResearchAgent:
         self.max_context_documents = max_context_documents
         self.progress_callback = progress_callback
         self.semantic_verification_mode = semantic_verification_mode
+        self.claim_recovery_mode = claim_recovery_mode
         self.semantic_verification_timeout_seconds = semantic_verification_timeout_seconds
         self.semantic_verification_max_gateway_invocations = semantic_verification_max_gateway_invocations
 
@@ -1605,7 +1626,7 @@ ANSWER LINES:
         combined_docs = list(unique_docs.values())[:self.max_context_documents]
 
         if not combined_docs:
-            raise RuntimeError("No evidence from this research run was retrieved. No answer was generated.")
+            raise NoRunScopedEvidence("No evidence from this research run was retrieved. No answer was generated.")
 
         # A citation identifies a source record, not an individual overlapping passage.
         # This keeps repeated passages from one paper traceable to the same paper in the UI.
@@ -1666,6 +1687,7 @@ ANSWER LINES:
         )
         validation_errors = validate_answer_v2(structured_answer, evidence_blocks)
         repair_audit = None
+        removals: tuple[RemovedField, ...] = ()
         if validation_errors:
             await self._progress("Repairing unsupported answer fields", "expert")
             repair_batch = await ainvoke_structured(
@@ -1674,9 +1696,18 @@ ANSWER LINES:
                 repair_prompt_v2(query, structured_context, structured_answer, validation_errors),
                 V2RepairBatch,
             )
-            structured_answer, repair_audit, validation_errors = merge_v2_repairs(
-                structured_answer, repair_batch, evidence_blocks
-            )
+            if self.claim_recovery_mode == "degrade":
+                recovered, repair_audit, removals = recover_v2_answer(
+                    structured_answer, repair_batch, evidence_blocks
+                )
+                if recovered is None:
+                    raise NoValidClaimsRemain(repair_audit, removals)
+                structured_answer = recovered
+                validation_errors = validate_answer_v2(structured_answer, evidence_blocks)
+            else:
+                structured_answer, repair_audit, validation_errors = merge_v2_repairs(
+                    structured_answer, repair_batch, evidence_blocks
+                )
         if validation_errors:
             raise RuntimeError(
                 "Structured synthesis still contained invalid evidence references after one repair attempt"
@@ -1742,14 +1773,14 @@ ANSWER LINES:
             raise RuntimeError(
                 "Semantically selected answer failed mandatory structural evidence validation"
             )
-        answer = render_answer_v2(selected_answer)
+        answer = render_answer_v2(selected_answer, omitted_count=len(removals))
         def validated_claim(item):
             return {
                 **item.model_dump(),
                 "validation": "source_id_and_verbatim_quote_verified",
             }
         claim_validation = {
-            "status": "completed",
+            "status": "completed_with_removals" if removals else "completed",
             "contract": "structured_evidence_v2",
             "claims": [validated_claim(item) for item in selected_answer.claims],
             "limitations": [validated_claim(item) for item in selected_answer.limitations],
@@ -2196,9 +2227,7 @@ class Orchestrator:
         # Final synthesis handles both the mined docs and internal explanations
         try:
             final_report = await self.synthesize_final_report(original_query)
-        except RuntimeError as error:
-            if "No evidence from this research run" not in str(error):
-                raise
+        except NoRunScopedEvidence:
             source_sufficiency = {
                 **source_sufficiency,
                 "sufficient": False,

@@ -412,6 +412,7 @@ def _enqueue_arguments(record: ResearchRun) -> tuple:
         "run_research_job", str(record.id), record.question, str(metadata.get("mode", "fast")),
         str(metadata.get("cache_mode", "use_cached_answer")),
         str(metadata.get("semantic_claim_verification_mode") or "off"),
+        str(metadata.get("claim_recovery_mode") or "strict"),
     )
 
 
