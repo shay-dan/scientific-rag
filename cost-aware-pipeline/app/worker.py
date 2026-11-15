@@ -99,7 +99,8 @@ async def _mark_interrupted_evaluation_runs() -> None:
 
 async def run_research_job(ctx, run_id: str, question: str, mode: str, cache_mode: str,
                            semantic_verification_mode: str | None = None,
-                           claim_recovery_mode: str | None = None):
+                           claim_recovery_mode: str | None = None,
+                           claim_audit_mode: str | None = None):
     """Claim and execute one research run.
 
     ARQ may deliver a job more than once (redelivery after a crash, retry after a
@@ -111,6 +112,7 @@ async def run_research_job(ctx, run_id: str, question: str, mode: str, cache_mod
         UUID(run_id), question, ResearchMode(mode), ResearchCacheMode(cache_mode),
         semantic_verification_mode,
         claim_recovery_mode=claim_recovery_mode,
+        claim_audit_mode=claim_audit_mode,
     )
 
 

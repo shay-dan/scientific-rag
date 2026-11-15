@@ -414,6 +414,9 @@ def _enqueue_arguments(record: ResearchRun) -> tuple:
         str(metadata.get("semantic_claim_verification_mode") or "off"),
     )
     recovery_mode = str(metadata.get("claim_recovery_mode") or "strict")
+    audit_mode = str(metadata.get("claim_audit_mode") or "off")
+    if audit_mode == "audit":
+        return (*arguments, recovery_mode, audit_mode)
     return (*arguments, recovery_mode) if recovery_mode == "degrade" else arguments
 
 

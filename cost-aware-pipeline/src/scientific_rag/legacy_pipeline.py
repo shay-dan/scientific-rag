@@ -61,6 +61,7 @@ from app.claim_verification import (
     plan_verification_batches,
     verify_claims,
 )
+from app.claim_checks import audit_answer_claims
 
 # --- 1. CONFIGURATION & LOGGING SETUP ---
 
@@ -1446,11 +1447,14 @@ class ResearchAgent:
                  semantic_verification_mode: Literal["off", "shadow", "enforce"] = "off",
                  semantic_verification_timeout_seconds: float = 120,
                  semantic_verification_max_gateway_invocations: int = SEMANTIC_VERIFICATION_MAX_GATEWAY_INVOCATIONS,
-                 claim_recovery_mode: Literal["strict", "degrade"] = "strict"):
+                 claim_recovery_mode: Literal["strict", "degrade"] = "strict",
+                 claim_audit_mode: Literal["off", "audit"] = "off"):
         if semantic_verification_mode not in {"off", "shadow", "enforce"}:
             raise ValueError(f"Unsupported semantic verification mode: {semantic_verification_mode}")
         if claim_recovery_mode not in {"strict", "degrade"}:
             raise ValueError(f"Unsupported claim recovery mode: {claim_recovery_mode}")
+        if claim_audit_mode not in {"off", "audit"}:
+            raise ValueError(f"Unsupported claim audit mode: {claim_audit_mode}")
         if semantic_verification_timeout_seconds <= 0:
             raise ValueError("Semantic verification timeout must be positive")
         if semantic_verification_max_gateway_invocations < 1:
@@ -1463,6 +1467,7 @@ class ResearchAgent:
         self.progress_callback = progress_callback
         self.semantic_verification_mode = semantic_verification_mode
         self.claim_recovery_mode = claim_recovery_mode
+        self.claim_audit_mode = claim_audit_mode
         self.semantic_verification_timeout_seconds = semantic_verification_timeout_seconds
         self.semantic_verification_max_gateway_invocations = semantic_verification_max_gateway_invocations
         self.last_recovery_audit: dict | None = None
@@ -1777,6 +1782,11 @@ ANSWER LINES:
             raise RuntimeError(
                 "Semantically selected answer failed mandatory structural evidence validation"
             )
+        deterministic_audit = (
+            audit_answer_claims(selected_answer, evidence_blocks)
+            if self.claim_audit_mode == "audit"
+            else None
+        )
         answer = render_answer_v2(selected_answer, omitted_count=len(removals))
         def validated_claim(item):
             return {
@@ -1794,6 +1804,8 @@ ANSWER LINES:
         }
         if semantic_audit is not None:
             claim_validation["semantic_verification"] = semantic_audit
+        if deterministic_audit is not None:
+            claim_validation["deterministic_audit"] = deterministic_audit
 
         execution_time = time.time() - start_time
         print(f"DEBUG: ✨ Synthesis complete in {execution_time:.2f}s")

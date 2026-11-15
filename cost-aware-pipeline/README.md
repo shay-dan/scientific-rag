@@ -120,6 +120,13 @@ valid claims after the existing single repair, visibly marks omissions, audits e
 removed field, and fails with a typed error if no answer claim survives. See
 [`docs/claim-recovery-r7a.md`](docs/claim-recovery-r7a.md).
 
+R7B adds opt-in, audit-only numeric and quotation-consistency diagnostics with
+`CLAIM_AUDIT_MODE=off|audit`; `off` is the default. The auditor never changes answer
+text, filters claims, changes semantic-verifier verdicts, or makes provider calls.
+Fresh audited runs store normalized findings in internal claim-validation metadata.
+Historical cached answers remain reusable but are never relabeled as audited. See
+[`docs/claim-audit-r7b.md`](docs/claim-audit-r7b.md).
+
 The API exposes three explicit cache policies through `cache_mode`: `use_cached_answer` returns an exact current-version answer when available; `regenerate_answer` creates a new answer after checking PostgreSQL evidence first; and `refresh_sources` ignores both answer and source caches and mines externally. The legacy `"fresh": true` field remains compatible and maps to `refresh_sources`. The browser exposes **Regenerate from saved evidence** and **Refresh external sources** as separate actions.
 
 Before external mining, deterministic anchor extraction preserves topic-defining concepts from the original question. Provider-specific builders produce PubMed and arXiv syntax. The retry ladder is: a precise deterministic query, a broader required-anchor query, then a single structured LLM repair using Groq `openai/gpt-oss-20b` (OpenRouter and Gemini Flash-Lite fallbacks). The repair returns concepts only; deterministic code still builds and validates provider syntax. If the final source set does not cover all required anchors, the run finishes as `insufficient_evidence` and does not ask the Expert to invent an answer. Attempts, queries, anchors, cache decisions, rejection reasons, and sufficiency are visible in Retrieval inspector.
