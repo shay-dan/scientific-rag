@@ -130,7 +130,16 @@ class LeaseKeeperTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.wait_for(task, 2)
 
     async def test_transient_renewal_errors_do_not_cancel(self) -> None:
-        renewals = AsyncMock(side_effect=[ConnectionError("db blip"), True, True, True, True, True])
+        attempts = 0
+
+        async def renew_after_transient_error(*_args) -> bool:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise ConnectionError("db blip")
+            return True
+
+        renewals = AsyncMock(side_effect=renew_after_transient_error)
         with patch("app.job_lifecycle.renew_lease", renewals):
             async with LeaseKeeper(None, uuid4(), 1, lease_seconds=1, heartbeat_seconds=0.01) as lease:
                 await asyncio.sleep(0.08)

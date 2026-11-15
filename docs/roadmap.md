@@ -1,6 +1,6 @@
 # Scientific RAG — engineering roadmap
 
-**Status:** authoritative planning document. Last updated 2026-11-14 (R6 complete; R7A in review).
+**Status:** authoritative planning document. Last updated 2026-11-15 (R7A complete; R7B in review).
 **Origin:** owner-approved *Master Implementation Plan*, which consolidated an independent
 audit, a reconciled R0–R13 roadmap, a discovery/evidence-acquisition addendum, and the
 historical engineering handover. Changes to this file require owner approval and an entry
@@ -32,7 +32,7 @@ Operating rules for agents are in [`AGENTS.md`](../AGENTS.md). History, complete
 | R4 | Evaluation integrity and reproducibility | **complete** (PR #11, `359e02c`) | R0 |
 | R5 | Offline semantic-verifier evaluation harness | **complete** (PR #12, `b21bc37`) | R0 |
 | R6 | Human-reviewed evidence packs and labels | R6A **complete** (PR #13, `60b394a`); R6B **complete** (PR #14, `e6bf0ee`); R6C **complete** (PR #15, `693b7a5`); R6D **complete** (PR #16, `5328573`) | R4, R5; R3 preferred |
-| R7 | Deterministic claim checks, graceful degradation | R7A **in review** (`agent/r7a-claim-recovery`); R7B–R7D not started | R5, R6 |
+| R7 | Deterministic claim checks, graceful degradation | R7A **complete** (PR #17, `d638e15`); R7B **in review** (`agent/r7b-claim-audit`); R7C–R7D not started | R5, R6 |
 | R9-D | Discovery candidate pool, ranking, backfilling | not started | R6 pilot, R2 |
 | R9-P | PMC scientific-content extraction | conditional | R6 fixtures; R7 preferred |
 | R8 | Semantic-verifier calibration and release decision | not started | R3, R5, R6, R7 |
@@ -712,7 +712,7 @@ uncertainty. Expansion is a separate decision.
 
 ## R7 — Deterministic claim checks and graceful degradation
 
-**Status:** R7A in review; R7B, R7C and R7D not started. **Priority:** high.
+**Status:** R7A complete; R7B in review; R7C and R7D not started. **Priority:** high.
 Independent of R9-D.
 
 R7 is split into separately authorized stages in this order:
@@ -723,7 +723,8 @@ R7 is split into separately authorized stages in this order:
    remains the production default throughout R7. Contract:
    [claim-recovery-r7a.md](../cost-aware-pipeline/docs/claim-recovery-r7a.md).
 2. **R7B — deterministic claim auditing:** numeric, interval, unit and quotation
-   consistency findings. Audit-only; no automatic rejection.
+   consistency findings. Audit-only; no automatic rejection. Contract:
+   [claim-audit-r7b.md](../cost-aware-pipeline/docs/claim-audit-r7b.md).
 3. **R7C — scientific generation-prompt restoration:** restore the missing numeric
    and attribution instructions as versioned v16 behavior.
 4. **R7D — small paid evaluation:** approximately 20 frozen scenarios, at most 80
@@ -731,8 +732,13 @@ R7 is split into separately authorized stages in this order:
    separate execution authorization.
 
 R7A never converts zero surviving claims to `insufficient_evidence`; that outcome
-remains reserved for the independent evidence-sufficiency gate. R7B–R7D are not
-authorized by the R7A implementation.
+remains reserved for the independent evidence-sufficiency gate. R7A merged in PR #17 as
+`d638e15`. Its post-merge CI and Security runs passed: 799 unit tests executed (741
+passed, 58 skipped), 57/57 PostgreSQL/pgvector and Redis integration tests, historical
+prototype 13/13, migrations, `/healthz`, and image provenance. The shipped default is
+still strict; degrade is opt-in, retains valid claims with removal provenance, and raises
+typed `NoValidClaimsRemain` when recovery leaves no answer claim. R7B adds only opt-in
+deterministic diagnostics; R7C and R7D remain separately authorized future work.
 
 ## R9-D — Discovery candidate pool, ranking, and backfilling
 
@@ -899,6 +905,7 @@ load evidence; large synthetic evaluation sets presented as gold data.
 
 | Date | Decision | Evidence / reason |
 |---|---|---|
+| 2026-11-15 | Mark R7A complete (PR #17, `d638e15`) and begin R7B as audit-only, opt-in deterministic numeric/quotation diagnostics. R7B reuses answer caches without changing their identity and never relabels an old cached result as audited; a newly audited result requires a fresh run. | R7A post-merge CI and Security green: 799 unit executed (741 passed, 58 skipped), 57/57 integration, legacy 13/13, migrations, health, provenance. Owner R7B authorization favors cache reuse and requires explicit cache limitations. |
 | 2026-11-14 | R7 sequence is R7A recovery → R7B audit-only deterministic checks → R7C prompt restoration → R7D separately authorized paid evaluation. R7A defaults to `strict`; zero surviving claims are a typed failed generation/validation outcome, never a new `insufficient_evidence` result. | Owner R7A authorization and final planning clarification; preserves evidence-sufficiency semantics and production defaults. |
 | 2026-11-14 | Mark R6D complete (PR #16, `5328573`). | Post-merge CI and Security green: 769 unit executed, 58 skipped, 0 failures; 57/57 integration; migrations, health, provenance and legacy 13/13 passed. |
 | 2026-11-12 | Mark R5 complete (PR #12, `b21bc37`). | CI and Security CI green on `main`: 562 unit (0 failures, 51 skipped), 50/50 integration, image provenance, migrations, smoke; no production code changed. |
