@@ -1,6 +1,6 @@
 # Scientific RAG — engineering roadmap
 
-**Status:** authoritative planning document. Last updated 2026-11-15 (R7B complete; R7C in review).
+**Status:** authoritative planning document. Last updated 2026-11-15 (R7C complete; R7D-A in review).
 **Origin:** owner-approved *Master Implementation Plan*, which consolidated an independent
 audit, a reconciled R0–R13 roadmap, a discovery/evidence-acquisition addendum, and the
 historical engineering handover. Changes to this file require owner approval and an entry
@@ -32,7 +32,7 @@ Operating rules for agents are in [`AGENTS.md`](../AGENTS.md). History, complete
 | R4 | Evaluation integrity and reproducibility | **complete** (PR #11, `359e02c`) | R0 |
 | R5 | Offline semantic-verifier evaluation harness | **complete** (PR #12, `b21bc37`) | R0 |
 | R6 | Human-reviewed evidence packs and labels | R6A **complete** (PR #13, `60b394a`); R6B **complete** (PR #14, `e6bf0ee`); R6C **complete** (PR #15, `693b7a5`); R6D **complete** (PR #16, `5328573`) | R4, R5; R3 preferred |
-| R7 | Deterministic claim checks, graceful degradation | R7A **complete** (PR #17, `d638e15`); R7B **complete** (PR #18, `45f85a9`); R7C **in review** (`agent/r7c-scientific-prompt`); R7D not started | R5, R6 |
+| R7 | Deterministic claim checks, graceful degradation | R7A **complete** (PR #17, `d638e15`); R7B **complete** (PR #18, `45f85a9`); R7C **complete** (PR #19, `23560a7`); R7D-A **in review** (`agent/r7d-generation-eval`) | R5, R6 |
 | R9-D | Discovery candidate pool, ranking, backfilling | not started | R6 pilot, R2 |
 | R9-P | PMC scientific-content extraction | conditional | R6 fixtures; R7 preferred |
 | R8 | Semantic-verifier calibration and release decision | not started | R3, R5, R6, R7 |
@@ -712,7 +712,8 @@ uncertainty. Expansion is a separate decision.
 
 ## R7 — Deterministic claim checks and graceful degradation
 
-**Status:** R7A and R7B complete; R7C in review; R7D not started. **Priority:** high.
+**Status:** R7A, R7B and R7C complete; R7D-A offline preparation in review; no live
+evaluation authorized. **Priority:** high.
 Independent of R9-D.
 
 R7 is split into separately authorized stages in this order:
@@ -729,9 +730,13 @@ R7 is split into separately authorized stages in this order:
    and attribution instructions as opt-in, versioned v16 behavior while preserving
    byte-identical v15 as the default. Contract:
    [scientific-generation-prompt-r7c.md](../cost-aware-pipeline/docs/scientific-generation-prompt-r7c.md).
-4. **R7D — small paid evaluation:** approximately 20 frozen scenarios, at most 80
-   calls and a proposed $1.50 application ceiling. Requires a verified dry run and
-   separate execution authorization.
+4. **R7D — small paid evaluation:** R7D-A prepares a label-free fixed-evidence manifest
+   contract, paired production-component adapter, blind scoring/reporting boundary and
+   fail-closed budget gate. The future comparison remains approximately 20 frozen
+   scenarios, at most 80 physical calls and a proposed $1.50 application ceiling. It
+   requires an eligible reviewed manifest, a verified dry run, and separate exact owner
+   execution authorization. Contract:
+   [generation-evaluation-r7d.md](../cost-aware-pipeline/docs/generation-evaluation-r7d.md).
 
 R7A never converts zero surviving claims to `insufficient_evidence`; that outcome
 remains reserved for the independent evidence-sufficiency gate. R7A merged in PR #17 as
@@ -742,9 +747,13 @@ still strict; degrade is opt-in, retains valid claims with removal provenance, a
 typed `NoValidClaimsRemain` when recovery leaves no answer claim. R7B merged in PR #18
 as `45f85a9`. Its post-merge CI and Security runs passed; the accepted main baseline ran
 828 deterministic tests (770 passed, 58 skipped) and 57/57 PostgreSQL/pgvector and Redis
-integration tests. R7B remains audit-only and opt-in. R7C adds only the opt-in v16
+integration tests. R7B remains audit-only and opt-in. R7C merged in PR #19 as `23560a7`;
+main CI and Security passed, and its accepted Docker baseline ran 845 deterministic tests
+(787 passed, 58 skipped) plus 57/57 integration tests. R7C adds only the opt-in v16
 initial-generation instructions, persisted selection, and cache isolation; v15 remains
-the production default. R7D remains not started and separately authorized.
+the production default. R7D-A makes no provider call and does not authorize the future
+pilot. The repository has no eligible reviewed 20-scenario manifest, so the scientific
+dry run remains explicitly blocked rather than using invented cases.
 
 ## R9-D — Discovery candidate pool, ranking, and backfilling
 
@@ -911,6 +920,7 @@ load evidence; large synthetic evaluation sets presented as gold data.
 
 | Date | Decision | Evidence / reason |
 |---|---|---|
+| 2026-11-15 | Mark R7C complete (PR #19, `23560a7`) and begin R7D-A as offline-only fixed-evidence evaluation preparation. No live or paid execution is authorized; v15 remains the default. | R7C main CI and Security green. R7D-A requires exactly 20 reviewed label-free development scenarios, v15/v16 as the sole arm difference, owner-side blind scoring, at most 80 physical calls and a proposed $1.50 ceiling. The reviewed manifest is not in the repository and must not be invented. |
 | 2026-11-15 | Mark R7B complete (PR #18, `45f85a9`) and begin R7C with byte-identical v15 as the default and opt-in, persisted, cache-isolated v16 generation instructions. | R7B post-merge CI and Security green; accepted-main Docker baseline 828 deterministic tests (770 passed, 58 skipped) and 57/57 integration. R7C authorization requires a single-variable future comparison and no provider calls. |
 | 2026-11-15 | Mark R7A complete (PR #17, `d638e15`) and begin R7B as audit-only, opt-in deterministic numeric/quotation diagnostics. R7B reuses answer caches without changing their identity and never relabels an old cached result as audited; a newly audited result requires a fresh run. | R7A post-merge CI and Security green: 799 unit executed (741 passed, 58 skipped), 57/57 integration, legacy 13/13, migrations, health, provenance. Owner R7B authorization favors cache reuse and requires explicit cache limitations. |
 | 2026-11-14 | R7 sequence is R7A recovery → R7B audit-only deterministic checks → R7C prompt restoration → R7D separately authorized paid evaluation. R7A defaults to `strict`; zero surviving claims are a typed failed generation/validation outcome, never a new `insufficient_evidence` result. | Owner R7A authorization and final planning clarification; preserves evidence-sufficiency semantics and production defaults. |

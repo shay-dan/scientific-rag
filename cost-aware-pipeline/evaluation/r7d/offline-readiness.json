@@ -1,0 +1,22 @@
+{
+  "base_sha": "23560a7f7f94f07aa5ca233fa030274b9e674bb3",
+  "blockers": [
+    "No owner-reviewed, label-free, frozen 20-scenario development manifest is available in the repository.",
+    "No future owner authorization binds a manifest hash, accepted R7D code SHA, full config, provider/model and hard ceilings."
+  ],
+  "execution_authorized": false,
+  "manifest_scenarios_available": 0,
+  "provider_calls_made": 0,
+  "proposed_limits": {
+    "max_cost_usd": 1.5,
+    "max_input_tokens_per_call": 100000,
+    "max_output_tokens_per_call": 2000,
+    "max_physical_calls": 80,
+    "model_context_tokens": 131072,
+    "scenarios": 20
+  },
+  "proposed_model": "openai/gpt-oss-120b",
+  "proposed_provider": "groq",
+  "schema": "scientific-rag-generation-eval-offline-readiness/v1",
+  "status": "blocked_missing_reviewed_manifest_and_future_authorization"
+}
