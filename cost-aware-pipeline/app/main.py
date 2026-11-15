@@ -1013,6 +1013,7 @@ async def queue_evidence_job(request: Request, payload: EvidenceJobRequest, sess
     version = effective_pipeline_version(
         settings.semantic_claim_verification_mode,
         settings.claim_recovery_mode,
+        generation_prompt_version=settings.generation_prompt_version,
     )
     # The lock and the reuse lookup share one identity: caller (sharing scope),
     # research mode, effective pipeline version, and normalized question. The

@@ -67,6 +67,8 @@ class ResearchFencedOut(RuntimeError):
 def effective_pipeline_version(
     semantic_verification_mode: str,
     claim_recovery_mode: str = "strict",
+    *,
+    generation_prompt_version: str = "v15",
 ) -> str:
     """Separate cache identities per verification mode; historical records keep their stored version."""
     if semantic_verification_mode == "off":
@@ -76,9 +78,13 @@ def effective_pipeline_version(
     else:
         raise ValueError(f"Unsupported semantic verification mode: {semantic_verification_mode}")
     if claim_recovery_mode == "degrade":
-        return f"{version}-recovery-degrade-v1"
-    if claim_recovery_mode != "strict":
+        version = f"{version}-recovery-degrade-v1"
+    elif claim_recovery_mode != "strict":
         raise ValueError(f"Unsupported claim recovery mode: {claim_recovery_mode}")
+    if generation_prompt_version == "v16":
+        return f"{version}-genprompt-v16"
+    if generation_prompt_version != "v15":
+        raise ValueError(f"Unsupported generation prompt version: {generation_prompt_version}")
     return version
 
 
@@ -159,7 +165,8 @@ class ResearchService:
     def _metadata(self, mode: ResearchMode, budget: ResearchBudget, stage: str, role: str | None = None, *,
                   semantic_verification_mode: str | None = None,
                   claim_recovery_mode: str | None = None,
-                  claim_audit_mode: str | None = None) -> dict:
+                  claim_audit_mode: str | None = None,
+                  generation_prompt_version: str | None = None) -> dict:
         verification_mode = semantic_verification_mode or getattr(
             getattr(self, "settings", None), "semantic_claim_verification_mode", "off"
         )
@@ -169,13 +176,18 @@ class ResearchService:
         audit_mode = claim_audit_mode or getattr(
             getattr(self, "settings", None), "claim_audit_mode", "off"
         )
+        prompt_version = generation_prompt_version or getattr(
+            getattr(self, "settings", None), "generation_prompt_version", "v15"
+        )
         metadata = {
             "policy": "provider-agnostic Groq -> OpenRouter -> Gemini gateway",
             "mode": mode.value,
             "budget": budget.as_dict(),
             "estimated_max_generation_calls": estimated_generation_calls(budget, verification_mode),
             "cache_hit": False,
-            "retrieval_version": effective_pipeline_version(verification_mode, recovery_mode),
+            "retrieval_version": effective_pipeline_version(
+                verification_mode, recovery_mode, generation_prompt_version=prompt_version
+            ),
             "semantic_claim_verification_mode": verification_mode,
             "progress": {"stage": stage, "role": role, "model": self._model_for_role(role)},
         }
@@ -185,18 +197,26 @@ class ResearchService:
             metadata["claim_recovery_mode"] = recovery_mode
         if audit_mode != "off":
             metadata["claim_audit_mode"] = audit_mode
+        if prompt_version != "v15":
+            metadata["generation_prompt_version"] = prompt_version
         return metadata
 
     async def _find_cached(self, session: AsyncSession, question: str, actor: str, mode: ResearchMode,
                            semantic_verification_mode: str | None = None,
-                           claim_recovery_mode: str | None = None) -> ResearchRun | None:
+                           claim_recovery_mode: str | None = None,
+                           generation_prompt_version: str | None = None) -> ResearchRun | None:
         verification_mode = semantic_verification_mode or getattr(
             getattr(self, "settings", None), "semantic_claim_verification_mode", "off"
         )
         recovery_mode = claim_recovery_mode or getattr(
             getattr(self, "settings", None), "claim_recovery_mode", "strict"
         )
-        version = effective_pipeline_version(verification_mode, recovery_mode)
+        prompt_version = generation_prompt_version or getattr(
+            getattr(self, "settings", None), "generation_prompt_version", "v15"
+        )
+        version = effective_pipeline_version(
+            verification_mode, recovery_mode, generation_prompt_version=prompt_version
+        )
         return (
             await session.execute(
                 select(ResearchRun)
@@ -284,10 +304,18 @@ class ResearchService:
         audit_mode = getattr(
             getattr(self, "settings", None), "claim_audit_mode", "off"
         )
-        version = effective_pipeline_version(semantic_mode, recovery_mode)
+        prompt_version = getattr(
+            getattr(self, "settings", None), "generation_prompt_version", "v15"
+        )
+        version = effective_pipeline_version(
+            semantic_mode, recovery_mode, generation_prompt_version=prompt_version
+        )
         # Serialize identical submissions (same caller, mode, pipeline version, question).
         await acquire_identity_lock(session, actor, mode.value, version, question)
-        cached = await self._find_cached(session, question, actor, mode, semantic_mode, recovery_mode)
+        cached = await self._find_cached(
+            session, question, actor, mode, semantic_mode, recovery_mode,
+            generation_prompt_version=prompt_version,
+        )
         if cached is not None and cache_mode is ResearchCacheMode.use_cached_answer:
             logger.info("research_cache_hit run_id=%s mode=%s", cached.id, mode.value)
             return to_response(cached, await self.sources_for_run(session, cached.id), mode=mode, cached=True)
@@ -303,6 +331,7 @@ class ResearchService:
             semantic_verification_mode=semantic_mode,
             claim_recovery_mode=recovery_mode,
             claim_audit_mode=audit_mode,
+            generation_prompt_version=prompt_version,
         )
         metadata["cache_mode"] = cache_mode.value
         metadata["retrieval_version"] = version
@@ -362,7 +391,8 @@ class ResearchService:
     async def run_queued(self, run_id: UUID, question: str, mode: ResearchMode, cache_mode: ResearchCacheMode,
                          semantic_verification_mode: str | None = None,
                          claim_recovery_mode: str | None = None,
-                         claim_audit_mode: str | None = None) -> None:
+                         claim_audit_mode: str | None = None,
+                         generation_prompt_version: str | None = None) -> None:
         settings = self.settings
         async with session_factory() as session:
             record = await claim_run(session, run_id, owner=worker_identity(), lease_seconds=settings.research_lease_seconds)
@@ -388,7 +418,15 @@ class ResearchService:
                 (record.model_metadata or {}).get("claim_audit_mode")
                 or "off"
             )
-            effective_pipeline_version(stored_semantic_mode, stored_recovery_mode)
+            stored_prompt_version = str(
+                (record.model_metadata or {}).get("generation_prompt_version")
+                or "v15"
+            )
+            effective_pipeline_version(
+                stored_semantic_mode,
+                stored_recovery_mode,
+                generation_prompt_version=stored_prompt_version,
+            )
             lease = LeaseKeeper(
                 session_factory, run_id, attempt,
                 lease_seconds=settings.research_lease_seconds,
@@ -401,6 +439,7 @@ class ResearchService:
                         semantic_verification_mode=stored_semantic_mode,
                         claim_recovery_mode=stored_recovery_mode,
                         claim_audit_mode=stored_audit_mode,
+                        generation_prompt_version=stored_prompt_version,
                     )
             except ResearchFencedOut:
                 logger.warning("research_execution_fenced_out run_id=%s attempt=%s", run_id, attempt)
@@ -462,8 +501,12 @@ class ResearchService:
         audit_mode = getattr(
             getattr(self, "settings", None), "claim_audit_mode", "off"
         )
+        prompt_version = getattr(
+            getattr(self, "settings", None), "generation_prompt_version", "v15"
+        )
         cached = None if cache_mode is not ResearchCacheMode.use_cached_answer else await self._find_cached(
-            session, question, actor, mode, semantic_mode, recovery_mode
+            session, question, actor, mode, semantic_mode, recovery_mode,
+            generation_prompt_version=prompt_version,
         )
         if cached is not None:
             return to_response(cached, await self.sources_for_run(session, cached.id), mode=mode, cached=True)
@@ -474,6 +517,7 @@ class ResearchService:
             semantic_verification_mode=semantic_mode,
             claim_recovery_mode=recovery_mode,
             claim_audit_mode=audit_mode,
+            generation_prompt_version=prompt_version,
         )
         initial_metadata["cache_mode"] = cache_mode.value
         record = ResearchRun(question=question, requested_by=actor, status="running", model_metadata=initial_metadata)
@@ -493,6 +537,7 @@ class ResearchService:
             cache_mode=cache_mode, semantic_verification_mode=semantic_mode,
             claim_recovery_mode=recovery_mode,
             claim_audit_mode=audit_mode,
+            generation_prompt_version=prompt_version,
         )
 
     async def _set_progress(self, session: AsyncSession, record: ResearchRun, stage: str, role: str | None = None) -> None:
@@ -517,7 +562,8 @@ class ResearchService:
                        cache_mode: ResearchCacheMode = ResearchCacheMode.use_cached_answer,
                        semantic_verification_mode: str | None = None,
                        claim_recovery_mode: str | None = None,
-                       claim_audit_mode: str | None = None) -> ResearchResponse:
+                       claim_audit_mode: str | None = None,
+                       generation_prompt_version: str | None = None) -> ResearchResponse:
         budget = budget_for(mode)
         semantic_mode = str(
             semantic_verification_mode
@@ -532,7 +578,13 @@ class ResearchService:
             (record.model_metadata or {}).get("claim_audit_mode")
             or "off"
         )
-        version = effective_pipeline_version(semantic_mode, recovery_mode)
+        prompt_version = str(
+            (record.model_metadata or {}).get("generation_prompt_version")
+            or "v15"
+        )
+        version = effective_pipeline_version(
+            semantic_mode, recovery_mode, generation_prompt_version=prompt_version
+        )
         trace_token = begin_trace(self.redis)
         trace_closed = False
         orchestrator = None
@@ -561,6 +613,7 @@ class ResearchService:
                     semantic_verification_mode=semantic_mode,
                     claim_recovery_mode=recovery_mode,
                     claim_audit_mode=audit_mode,
+                    generation_prompt_version=prompt_version,
                     semantic_verification_timeout_seconds=120,
                 )
                 orchestrator = legacy_pipeline.Orchestrator(
@@ -613,6 +666,7 @@ class ResearchService:
                 semantic_verification_mode=semantic_mode,
                 claim_recovery_mode=recovery_mode,
                 claim_audit_mode=audit_mode,
+                generation_prompt_version=prompt_version,
             )
             metadata["retrieval_version"] = version
             metadata["llm_gateway"] = summarize_trace(end_trace(trace_token))

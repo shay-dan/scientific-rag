@@ -127,6 +127,14 @@ Fresh audited runs store normalized findings in internal claim-validation metada
 Historical cached answers remain reusable but are never relabeled as audited. See
 [`docs/claim-audit-r7b.md`](docs/claim-audit-r7b.md).
 
+R7C adds an opt-in versioned scientific generation prompt with
+`GENERATION_PROMPT_VERSION=v15|v16`; `v15` remains the byte-identical production
+default. V16 adds only numeric-fidelity, attribution, design, and certainty instructions
+to the initial structured generation prompt. It adds no provider call and has a separate
+cache identity. Queued jobs retain their persisted version, while missing metadata
+resolves to v15. See
+[`docs/scientific-generation-prompt-r7c.md`](docs/scientific-generation-prompt-r7c.md).
+
 The API exposes three explicit cache policies through `cache_mode`: `use_cached_answer` returns an exact current-version answer when available; `regenerate_answer` creates a new answer after checking PostgreSQL evidence first; and `refresh_sources` ignores both answer and source caches and mines externally. The legacy `"fresh": true` field remains compatible and maps to `refresh_sources`. The browser exposes **Regenerate from saved evidence** and **Refresh external sources** as separate actions.
 
 Before external mining, deterministic anchor extraction preserves topic-defining concepts from the original question. Provider-specific builders produce PubMed and arXiv syntax. The retry ladder is: a precise deterministic query, a broader required-anchor query, then a single structured LLM repair using Groq `openai/gpt-oss-20b` (OpenRouter and Gemini Flash-Lite fallbacks). The repair returns concepts only; deterministic code still builds and validates provider syntax. If the final source set does not cover all required anchors, the run finishes as `insufficient_evidence` and does not ask the Expert to invent an answer. Attempts, queries, anchors, cache decisions, rejection reasons, and sufficiency are visible in Retrieval inspector.

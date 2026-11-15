@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     semantic_claim_verification_mode: Literal["off", "shadow", "enforce"] = "off"
     claim_recovery_mode: Literal["strict", "degrade"] = "strict"
     claim_audit_mode: Literal["off", "audit"] = "off"
+    generation_prompt_version: Literal["v15", "v16"] = "v15"
     allow_database_reset: bool = False
     embedding_model: str = "gemini-embedding-2"
     ragas_judge_model: str = "gemini-2.5-flash"

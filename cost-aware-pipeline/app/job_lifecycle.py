@@ -415,6 +415,9 @@ def _enqueue_arguments(record: ResearchRun) -> tuple:
     )
     recovery_mode = str(metadata.get("claim_recovery_mode") or "strict")
     audit_mode = str(metadata.get("claim_audit_mode") or "off")
+    prompt_version = str(metadata.get("generation_prompt_version") or "v15")
+    if prompt_version == "v16":
+        return (*arguments, recovery_mode, audit_mode, prompt_version)
     if audit_mode == "audit":
         return (*arguments, recovery_mode, audit_mode)
     return (*arguments, recovery_mode) if recovery_mode == "degrade" else arguments

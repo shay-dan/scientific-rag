@@ -1448,13 +1448,16 @@ class ResearchAgent:
                  semantic_verification_timeout_seconds: float = 120,
                  semantic_verification_max_gateway_invocations: int = SEMANTIC_VERIFICATION_MAX_GATEWAY_INVOCATIONS,
                  claim_recovery_mode: Literal["strict", "degrade"] = "strict",
-                 claim_audit_mode: Literal["off", "audit"] = "off"):
+                 claim_audit_mode: Literal["off", "audit"] = "off",
+                 generation_prompt_version: Literal["v15", "v16"] = "v15"):
         if semantic_verification_mode not in {"off", "shadow", "enforce"}:
             raise ValueError(f"Unsupported semantic verification mode: {semantic_verification_mode}")
         if claim_recovery_mode not in {"strict", "degrade"}:
             raise ValueError(f"Unsupported claim recovery mode: {claim_recovery_mode}")
         if claim_audit_mode not in {"off", "audit"}:
             raise ValueError(f"Unsupported claim audit mode: {claim_audit_mode}")
+        if generation_prompt_version not in {"v15", "v16"}:
+            raise ValueError(f"Unsupported generation prompt version: {generation_prompt_version}")
         if semantic_verification_timeout_seconds <= 0:
             raise ValueError("Semantic verification timeout must be positive")
         if semantic_verification_max_gateway_invocations < 1:
@@ -1468,6 +1471,7 @@ class ResearchAgent:
         self.semantic_verification_mode = semantic_verification_mode
         self.claim_recovery_mode = claim_recovery_mode
         self.claim_audit_mode = claim_audit_mode
+        self.generation_prompt_version = generation_prompt_version
         self.semantic_verification_timeout_seconds = semantic_verification_timeout_seconds
         self.semantic_verification_max_gateway_invocations = semantic_verification_max_gateway_invocations
         self.last_recovery_audit: dict | None = None
@@ -1690,7 +1694,11 @@ ANSWER LINES:
         # validating quotes only against the original evidence passages.
         structured_context = formatted_context
         structured_answer = await ainvoke_structured(
-            "expert", 0, generation_prompt_v2(query, structured_context), StructuredEvidenceAnswerV2
+            "expert", 0,
+            generation_prompt_v2(
+                query, structured_context, prompt_version=self.generation_prompt_version
+            ),
+            StructuredEvidenceAnswerV2,
         )
         validation_errors = validate_answer_v2(structured_answer, evidence_blocks)
         repair_audit = None
