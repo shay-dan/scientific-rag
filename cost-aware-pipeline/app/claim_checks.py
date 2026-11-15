@@ -8,7 +8,7 @@ evidence strength, and they never modify an answer.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN, ROUND_HALF_UP
 import re
 from typing import Iterable, Literal
 
@@ -21,13 +21,27 @@ from .weak_model_synthesis import (
 
 
 AuditStatus = Literal["consistent", "inconsistent", "unverifiable", "not_applicable"]
-_NUMBER = r"[-+]?\d[\d,]*(?:\.\d+)?"
+SignKind = Literal["none", "positive", "negative", "ambiguous"]
+RoundingResult = Literal[
+    "equivalent", "different", "ambiguous_tie",
+    "claim_precision_exceeds_evidence", "unsupported_precision",
+]
+_UNSIGNED_NUMBER = r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
+_NUMBER = rf"[-+−–]?{_UNSIGNED_NUMBER}"
+_VALID_UNSIGNED_NUMBER_RE = re.compile(rf"{_UNSIGNED_NUMBER}\Z")
+_NUMERIC_TOKEN_RE = re.compile(
+    r"(?<![\w.])[-+−–]?\d[\d,]*(?:\.\d+)?(?:[eE][-+]?\d+)?"
+)
 # Deliberately small direct-unit vocabulary. Unknown alphabetic words are not
 # silently promoted to units; expanding this list requires focused examples.
 _UNIT = (
-    r"(?:%|percent(?:age)?|mg\s*/\s*dl|mmol\s*/\s*l|"
+    r"(?:%|percent(?:age)?|"
+    r"(?:kg|mg|mcg|ug|[µμ]g|ng|g)\s*/\s*(?:day|week|month|year)s?|"
+    r"mg\s*/\s*dl|mmol\s*/\s*l|"
     r"(?:mcg|ug|[µμ]g|ng)\s*/\s*ml|"
-    r"kg|mg|mcg|ug|[µμ]g|ng|g|ml|dl|l|mmol|mol|mmhg|bpm|hz)"
+    r"kg|mg|mcg|ug|[µμ]g|ng|g|ml|dl|l|mmol|mol|mmhg|bpm|hz|"
+    r"years?|months?|weeks?|days?|hours?|minutes?|seconds?|"
+    r"patients?|participants?|adults?|subjects?)"
     r"(?![A-Za-zµμ/])"
 )
 _INTERVAL_RE = re.compile(
@@ -56,6 +70,7 @@ class _Quantity:
     values: tuple[Decimal, ...]
     precision: tuple[int, ...]
     unit: str | None
+    signs: tuple[SignKind, ...]
     raw_signature: str
 
     def diagnostic(self) -> dict:
@@ -64,19 +79,33 @@ class _Quantity:
             "normalized": _normalized_values(self.form, self.values),
             "unit": self.unit,
             "precision": list(self.precision),
+            "sign": self.signs[0] if len(self.signs) == 1 else list(self.signs),
         }
 
 
 def _decimal(raw: str) -> Decimal:
+    normalized = raw.replace("−", "-")
+    if normalized.startswith("–"):
+        normalized = normalized[1:]
     try:
-        return Decimal(raw.replace(",", ""))
+        return Decimal(normalized.replace(",", ""))
     except InvalidOperation as error:  # pragma: no cover - guarded by regex
         raise ValueError(f"Invalid numeric token: {raw!r}") from error
 
 
 def _precision(raw: str) -> int:
-    normalized = raw.replace(",", "")
+    normalized = raw.lstrip("-+−–").replace(",", "")
     return len(normalized.rsplit(".", 1)[1]) if "." in normalized else 0
+
+
+def _sign(raw: str) -> SignKind:
+    if raw.startswith("+"):
+        return "positive"
+    if raw.startswith(("-", "−")):
+        return "negative"
+    if raw.startswith("–"):
+        return "ambiguous"
+    return "none"
 
 
 def _normalize_unit(raw: str | None, *, percentage: bool = False) -> str | None:
@@ -86,7 +115,18 @@ def _normalize_unit(raw: str | None, *, percentage: bool = False) -> str | None:
         return None
     unit = raw.casefold().replace("µ", "u").replace("μ", "u")
     unit = re.sub(r"\s*/\s*", "/", unit)
-    return "%" if unit in {"%", "percent", "percentage"} else unit
+    if unit in {"%", "percent", "percentage"}:
+        return "%"
+    singular = {
+        "years": "year", "months": "month", "weeks": "week", "days": "day",
+        "hours": "hour", "minutes": "minute", "seconds": "second",
+        "patients": "patient", "participants": "participant", "adults": "adult",
+        "subjects": "subject",
+    }
+    if "/" in unit:
+        numerator, denominator = unit.split("/", 1)
+        return f"{numerator}/{singular.get(denominator, denominator)}"
+    return singular.get(unit, unit)
 
 
 def _decimal_text(value: Decimal) -> str:
@@ -111,13 +151,33 @@ def _overlaps(span: tuple[int, int], occupied: list[tuple[int, int]]) -> bool:
     return any(span[0] < end and start < span[1] for start, end in occupied)
 
 
-def _extract_quantities(text: str) -> tuple[_Quantity, ...]:
+def _has_unsupported_numeric_format(text: str) -> bool:
+    for match in _NUMERIC_TOKEN_RE.finditer(text):
+        raw = match.group(0)
+        unsigned = raw.lstrip("-+−–")
+        if "e" in unsigned.casefold() or _VALID_UNSIGNED_NUMBER_RE.fullmatch(unsigned) is None:
+            return True
+    return False
+
+
+def _is_hyphenated_identifier(text: str, span: tuple[int, int]) -> bool:
+    start, _ = span
+    return (
+        start >= 2
+        and text[start - 1] in "-–—"
+        and (text[start - 2].isalnum() or text[start - 2] == "_")
+    )
+
+
+def _extract_quantities(text: str) -> tuple[tuple[_Quantity, ...], bool]:
+    if _has_unsupported_numeric_format(text):
+        return (), True
     found: list[tuple[int, _Quantity]] = []
     occupied: list[tuple[int, int]] = []
 
     for pattern, form in ((_INTERVAL_RE, "interval"), (_RATIO_RE, "ratio")):
         for match in pattern.finditer(text):
-            if _overlaps(match.span(), occupied):
+            if _overlaps(match.span(), occupied) or _is_hyphenated_identifier(text, match.span()):
                 continue
             left = match.group("left")
             right = match.group("right")
@@ -129,54 +189,59 @@ def _extract_quantities(text: str) -> tuple[_Quantity, ...]:
                 (_decimal(left), _decimal(right)),
                 (_precision(left), _precision(right)),
                 unit,
+                (_sign(left), _sign(right)),
                 re.sub(r"\s+", "", match.group(0)).casefold(),
             )))
             occupied.append(match.span())
 
     for match in _PERCENT_RE.finditer(text):
-        if _overlaps(match.span(), occupied):
+        if _overlaps(match.span(), occupied) or _is_hyphenated_identifier(text, match.span()):
             continue
         raw = match.group("value")
         found.append((match.start(), _Quantity(
-            "percentage", (_decimal(raw),), (_precision(raw),), "%",
+            "percentage", (_decimal(raw),), (_precision(raw),), "%", (_sign(raw),),
             re.sub(r"\s+", "", match.group(0)).casefold(),
         )))
         occupied.append(match.span())
 
     for match in _SCALAR_RE.finditer(text):
-        if _overlaps(match.span(), occupied):
+        if _overlaps(match.span(), occupied) or _is_hyphenated_identifier(text, match.span()):
             continue
         raw = match.group("value")
         found.append((match.start(), _Quantity(
             "scalar", (_decimal(raw),), (_precision(raw),),
             _normalize_unit(match.group("unit")),
+            (_sign(raw),),
             re.sub(r"\s+", "", match.group(0)).casefold(),
         )))
         occupied.append(match.span())
 
-    return tuple(item for _, item in sorted(found, key=lambda item: item[0]))
+    return tuple(item for _, item in sorted(found, key=lambda item: item[0])), False
 
 
-def _rounded_equivalent(left: _Quantity, right: _Quantity) -> bool | None:
+def _rounded_equivalent(left: _Quantity, right: _Quantity) -> RoundingResult:
     try:
         for left_value, right_value, left_precision, right_precision in zip(
             left.values, right.values, left.precision, right.precision, strict=True
         ):
-            precision = min(left_precision, right_precision)
-            quantum = Decimal(1).scaleb(-precision)
-            if left_precision < right_precision:
-                if right_value.quantize(quantum, rounding=ROUND_HALF_UP) != left_value:
-                    return False
-            elif right_precision < left_precision:
-                if left_value.quantize(quantum, rounding=ROUND_HALF_UP) != right_value:
-                    return False
-            elif left_value != right_value:
-                return False
+            if left_precision > right_precision:
+                return "claim_precision_exceeds_evidence"
+            if left_precision == right_precision:
+                if left_value != right_value:
+                    return "different"
+                continue
+            quantum = Decimal(1).scaleb(-left_precision)
+            half_up = right_value.quantize(quantum, rounding=ROUND_HALF_UP)
+            half_even = right_value.quantize(quantum, rounding=ROUND_HALF_EVEN)
+            if half_up != half_even:
+                return "ambiguous_tie"
+            if half_up != left_value:
+                return "different"
     except InvalidOperation:
         # Optional diagnostics must not fail research when a numeric token is
         # beyond the active Decimal context's safely supported precision.
-        return None
-    return True
+        return "unsupported_precision"
+    return "equivalent"
 
 
 def _finding(
@@ -199,9 +264,19 @@ def _finding(
 
 
 def _audit_field(target: str, claim: EvidenceClaim) -> dict:
-    claim_values = _extract_quantities(claim.text)
-    evidence_values = _extract_quantities(claim.evidence_quote)
+    claim_values, claim_format_error = _extract_quantities(claim.text)
+    evidence_values, evidence_format_error = _extract_quantities(claim.evidence_quote)
+    if claim_format_error or evidence_format_error:
+        return _finding(
+            target, claim, "unverifiable", "ambiguous_numeric_format",
+            claim_values, evidence_values,
+        )
     if not claim_values:
+        if evidence_values:
+            return _finding(
+                target, claim, "unverifiable", "missing_numeric_claim",
+                claim_values, evidence_values,
+            )
         return _finding(
             target, claim, "not_applicable", "no_numeric_claim", claim_values, evidence_values
         )
@@ -239,7 +314,29 @@ def _audit_field(target: str, claim: EvidenceClaim) -> dict:
         ) else "incompatible_units"
         return _finding(target, claim, "unverifiable", reason, claim_values, evidence_values)
 
+    if any(
+        item.form in {"scalar", "interval"} and item.unit is None
+        for item in (*claim_values, *evidence_values)
+    ):
+        return _finding(
+            target, claim, "unverifiable", "missing_unit_context",
+            claim_values, evidence_values,
+        )
+
     pairs = tuple(zip(claim_values, evidence_values, strict=True))
+    if any(sign == "ambiguous" for pair in pairs for item in pair for sign in item.signs):
+        return _finding(
+            target, claim, "unverifiable", "ambiguous_sign", claim_values, evidence_values
+        )
+    if any(
+        (left_sign == "none") != (right_sign == "none")
+        for left, right in pairs
+        for left_sign, right_sign in zip(left.signs, right.signs, strict=True)
+    ):
+        return _finding(
+            target, claim, "unverifiable", "implicit_sign_direction",
+            claim_values, evidence_values,
+        )
     if any(
         left_value.copy_abs() == right_value.copy_abs() and left_value != right_value
         for left, right in pairs
@@ -256,12 +353,22 @@ def _audit_field(target: str, claim: EvidenceClaim) -> dict:
         )
         return _finding(target, claim, "consistent", reason, claim_values, evidence_values)
     rounded_results = tuple(_rounded_equivalent(left, right) for left, right in pairs)
-    if any(result is None for result in rounded_results):
+    if "unsupported_precision" in rounded_results:
         return _finding(
             target, claim, "unverifiable", "numeric_precision_unsupported",
             claim_values, evidence_values,
         )
-    if all(rounded_results):
+    if "claim_precision_exceeds_evidence" in rounded_results:
+        return _finding(
+            target, claim, "unverifiable", "claim_precision_exceeds_evidence",
+            claim_values, evidence_values,
+        )
+    if "ambiguous_tie" in rounded_results:
+        return _finding(
+            target, claim, "unverifiable", "ambiguous_rounding_tie",
+            claim_values, evidence_values,
+        )
+    if all(result == "equivalent" for result in rounded_results):
         return _finding(
             target, claim, "consistent", "rounded_numeric_match", claim_values, evidence_values
         )

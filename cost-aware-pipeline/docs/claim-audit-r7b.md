@@ -28,8 +28,8 @@ shape:
       "category": "quotation_numeric_consistency",
       "status": "inconsistent",
       "reason_code": "numeric_mismatch",
-      "claim_values": [{"form": "percentage", "normalized": "31", "unit": "%", "precision": [0]}],
-      "evidence_values": [{"form": "percentage", "normalized": "13", "unit": "%", "precision": [0]}]
+      "claim_values": [{"form": "percentage", "normalized": "31", "unit": "%", "precision": [0], "sign": "none"}],
+      "evidence_values": [{"form": "percentage", "normalized": "13", "unit": "%", "precision": [0], "sign": "none"}]
     }
   ],
   "summary": {"consistent": 0, "inconsistent": 1, "unverifiable": 0, "not_applicable": 0}
@@ -59,7 +59,9 @@ Stable reason codes in `numeric-quote-v1` are:
 - Inconsistent: `sign_mismatch`, `numeric_mismatch`.
 - Unverifiable: `incomparable_numeric_forms`, `ambiguous_numeric_alignment`,
   `incompatible_units`, `missing_unit_context`, `missing_numeric_evidence`,
-  `numeric_precision_unsupported`.
+  `missing_numeric_claim`, `numeric_precision_unsupported`,
+  `claim_precision_exceeds_evidence`, `ambiguous_rounding_tie`,
+  `ambiguous_numeric_format`, `ambiguous_sign`, `implicit_sign_direction`.
 - Not applicable: `no_numeric_claim`.
 
 These categories describe quotation/numeric consistency only. They do not establish
@@ -72,12 +74,24 @@ already validated verbatim evidence quotation. It does not search adjacent passa
 or infer that an unrelated number supports a measurement.
 
 It recognizes signed integers and decimals, percentages, intervals, ratios/fractions,
-and a deliberately small direct-unit vocabulary (common mass, volume, concentration,
-amount, pressure, rate, and frequency tokens). Ordinary words such as `participants`
-and `patients` are not treated as units. Exact values and benign reformatting such as
-`5.0` versus `5.00` are consistent. Same-form rounding is consistent only when rounding
-the more precise value with round-half-up to the lower stated decimal precision yields
-the less precise value. Values beyond the active Decimal context's safe precision are
+and a deliberately small direct-context vocabulary: common mass, volume, concentration,
+amount, pressure, rate, frequency, time, and participant-count tokens. Plurals are
+normalized, but different contexts such as `year` versus `month`, `patient` versus
+`week`, and `mg/day` versus `mg/week` remain incompatible. Arbitrary neighboring words
+are never promoted to units, and unitless scalar/range values are unverifiable because
+their measurement context is not established.
+
+ASCII `-` and the true Unicode minus `−` are equivalent explicit negative signs. An en
+dash used where a sign would appear is ambiguous. Explicit versus omitted signs are also
+unverifiable: the auditor does not infer direction from prose such as “decreased.” Only
+opposing explicit signs on otherwise directly comparable values produce `sign_mismatch`.
+The normalized diagnostic keeps sign separately from magnitude.
+
+Exact values and benign reformatting such as `5.0` versus `5.00` are consistent.
+Rounding is directional: only a more precise quotation may be rounded to the claim's
+precision. A more precise claim than its quotation is unverifiable unless their Decimal
+values are exactly equal. If half-up and half-even disagree at a tie, the result is
+`ambiguous_rounding_tie`. Values beyond the active Decimal context's safe precision are
 unverifiable rather than errors. Interval endpoints remain ordered and are compared
 independently.
 
@@ -89,6 +103,13 @@ Those multi-quantity sentences are unverifiable even when their numeric sequence
 identical, because numeric equality is not semantic agreement. Missing unit
 context and explicitly incompatible unit strings are separate unverifiable outcomes,
 not contradictions.
+
+Only dot-decimal numbers and correctly grouped comma thousands separators are supported.
+Comma-decimal or malformed comma tokens and scientific notation are rejected as a whole
+with `ambiguous_numeric_format`; the auditor never compares a partial prefix. Hyphenated
+identifiers such as `COVID-19` and `IL-6` are not scalar measurements. Locale detection,
+scientific-notation arithmetic, unit conversion, and linguistic direction inference are
+outside R7B.
 
 Structural validation is repeated as a fail-closed precondition. This preserves the R3
 source-ID, verbatim-quotation, and instruction-like-content protections; source text is
@@ -111,12 +132,16 @@ require an R7B-capable worker.
 
 ## Limitations, cost, and rollback
 
-The parser is intentionally narrow. Complex scientific notation, confidence-interval
-grammar beyond simple numeric ranges, compound/dimensional units, locale-specific number
-formats, and unit conversions can be unverifiable or unrecognized. Matching values can
+The parser is intentionally narrow. Scientific notation, confidence-interval grammar
+beyond simple numeric ranges, unlisted compound/dimensional units, locale-specific number
+formats, and unit conversions are unverifiable or unrecognized. Matching values can
 still refer to different measurements; a consistent finding is not semantic support.
 Conversely, safe transformations outside the documented rules can abstain. These
 false-positive controls favor `unverifiable` over speculative equivalence or conflict.
+
+No broad diagnostic exception guard is used. Mandatory structural validation remains
+fail-closed, while the reproduced Decimal precision boundary is handled narrowly as an
+unverifiable numeric diagnostic.
 
 The audit is local and linear in the claim/quotation text examined. It adds no model,
 network, or provider calls and has no provider cost. To roll back behavior, set

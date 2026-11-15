@@ -23,6 +23,89 @@ def _audit(text: str, quote: str) -> dict:
 
 
 class NumericClaimAuditTests(unittest.TestCase):
+    def test_unrecognized_or_misaligned_measurement_context_is_unverifiable(self) -> None:
+        cases = (
+            ("Age was 45 years.", "Age was 45 months."),
+            ("Among 120 patients, response improved.", "Response improved at 12 weeks."),
+            ("The phase 3 trial enrolled patients.", "450 stable patients were enrolled."),
+            (
+                "COVID-19 vaccination reduced hospitalization.",
+                "Hospitalization decreased among 2059 adults.",
+            ),
+            (
+                "IL-6 signaling was reduced.",
+                "Signaling decreased among 200 participants.",
+            ),
+            ("The dose was 12 mg/day.", "The dose was 12 mg/week."),
+        )
+        for text, quote in cases:
+            with self.subTest(text=text, quote=quote):
+                self.assertEqual(_audit(text, quote)["status"], "unverifiable")
+
+    def test_unicode_and_implicit_signs_are_conservative(self) -> None:
+        cases = (
+            ("Change was -5 mg.", "Change was −5 mg.", "consistent", None),
+            ("Change was -5 mg.", "Change was –5 mg.", "unverifiable", "ambiguous_sign"),
+            ("Change was +5 mg.", "Change was -5 mg.", "inconsistent", "sign_mismatch"),
+            (
+                "Decreased by 5 mg.", "Change was -5 mg.",
+                "unverifiable", "implicit_sign_direction",
+            ),
+            (
+                "Change was +5 mg.", "Change was 5 mg.",
+                "unverifiable", "implicit_sign_direction",
+            ),
+        )
+        for text, quote, status, reason in cases:
+            with self.subTest(text=text, quote=quote):
+                finding = _audit(text, quote)
+                self.assertEqual(finding["status"], status)
+                if reason is not None:
+                    self.assertEqual(finding["reason_code"], reason)
+
+    def test_rounding_direction_and_ties_are_conservative(self) -> None:
+        cases = (
+            (
+                "The result was 12.0 mg.", "The result was 12.05 mg.",
+                "unverifiable", "ambiguous_rounding_tie",
+            ),
+            (
+                "The change was -2.4 mg.", "The change was -2.45 mg.",
+                "unverifiable", "ambiguous_rounding_tie",
+            ),
+            (
+                "The result was 12.04 mg.", "The result was 12.0 mg.",
+                "unverifiable", "claim_precision_exceeds_evidence",
+            ),
+            (
+                "The result was 12.3 mg.", "The result was 12.34 mg.",
+                "consistent", "rounded_numeric_match",
+            ),
+        )
+        for text, quote, status, reason in cases:
+            with self.subTest(text=text, quote=quote):
+                finding = _audit(text, quote)
+                self.assertEqual(finding["status"], status)
+                self.assertEqual(finding["reason_code"], reason)
+
+    def test_ambiguous_numeric_formats_do_not_create_partial_values(self) -> None:
+        cases = (
+            ("The dose was 0,5 mg.", "The dose was 0.5 mg."),
+            ("The result was 12,34 mg.", "The result was 1234 mg."),
+            ("The concentration was 1.2e-3 mg.", "The concentration was 0.0012 mg."),
+        )
+        for text, quote in cases:
+            with self.subTest(text=text, quote=quote):
+                finding = _audit(text, quote)
+                self.assertEqual(finding["status"], "unverifiable")
+                self.assertEqual(finding["reason_code"], "ambiguous_numeric_format")
+                self.assertEqual(finding["claim_values"], [])
+
+    def test_valid_thousands_separator_is_preserved(self) -> None:
+        finding = _audit("The dose was 1,000 mg.", "The dose was 1000 mg.")
+        self.assertEqual(finding["status"], "consistent")
+        self.assertEqual(finding["claim_values"][0]["normalized"], "1000")
+
     def test_unsupported_long_decimal_precision_is_unverifiable(self) -> None:
         finding = _audit(
             "The result was 123456789012345678901234567890.1 mg.",
@@ -49,8 +132,8 @@ class NumericClaimAuditTests(unittest.TestCase):
 
     def test_unit_parser_does_not_treat_ordinary_words_as_units(self) -> None:
         cases = (
-            ("The cohort had 12 participants.", [None]),
-            ("The cohort had 12 patients.", [None]),
+            ("The cohort had 12 participants.", ["participant"]),
+            ("The cohort had 12 patients.", ["patient"]),
             ("The estimate was between 0.1 and 0.2.", [None, None]),
             ("The dose was 12 mg.", ["mg"]),
             ("The mass was 12 g.", ["g"]),
@@ -84,7 +167,7 @@ class NumericClaimAuditTests(unittest.TestCase):
             ),
             (
                 "sign mismatch", "The change was -5 mg.", "The change was 5 mg.",
-                "inconsistent", "sign_mismatch",
+                "unverifiable", "implicit_sign_direction",
             ),
             (
                 "interval formatting", "The interval was 10.0-20.0 mg.",
