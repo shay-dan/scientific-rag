@@ -22,7 +22,14 @@ from .weak_model_synthesis import (
 
 AuditStatus = Literal["consistent", "inconsistent", "unverifiable", "not_applicable"]
 _NUMBER = r"[-+]?\d[\d,]*(?:\.\d+)?"
-_UNIT = r"(?:%|percent(?:age)?|[A-Za-zµμ]+(?:\s*/\s*[A-Za-zµμ]+)?)"
+# Deliberately small direct-unit vocabulary. Unknown alphabetic words are not
+# silently promoted to units; expanding this list requires focused examples.
+_UNIT = (
+    r"(?:%|percent(?:age)?|mg\s*/\s*dl|mmol\s*/\s*l|"
+    r"(?:mcg|ug|[µμ]g|ng)\s*/\s*ml|"
+    r"kg|mg|mcg|ug|[µμ]g|ng|g|ml|dl|l|mmol|mol|mmhg|bpm|hz)"
+    r"(?![A-Za-zµμ/])"
+)
 _INTERVAL_RE = re.compile(
     rf"(?<![\w.])(?P<left>{_NUMBER})\s*(?P<separator>to|[-–—])\s*"
     rf"(?P<right>{_NUMBER})(?:\s*(?P<unit>{_UNIT}))?",
@@ -150,20 +157,25 @@ def _extract_quantities(text: str) -> tuple[_Quantity, ...]:
     return tuple(item for _, item in sorted(found, key=lambda item: item[0]))
 
 
-def _rounded_equivalent(left: _Quantity, right: _Quantity) -> bool:
-    for left_value, right_value, left_precision, right_precision in zip(
-        left.values, right.values, left.precision, right.precision, strict=True
-    ):
-        precision = min(left_precision, right_precision)
-        quantum = Decimal(1).scaleb(-precision)
-        if left_precision < right_precision:
-            if right_value.quantize(quantum, rounding=ROUND_HALF_UP) != left_value:
+def _rounded_equivalent(left: _Quantity, right: _Quantity) -> bool | None:
+    try:
+        for left_value, right_value, left_precision, right_precision in zip(
+            left.values, right.values, left.precision, right.precision, strict=True
+        ):
+            precision = min(left_precision, right_precision)
+            quantum = Decimal(1).scaleb(-precision)
+            if left_precision < right_precision:
+                if right_value.quantize(quantum, rounding=ROUND_HALF_UP) != left_value:
+                    return False
+            elif right_precision < left_precision:
+                if left_value.quantize(quantum, rounding=ROUND_HALF_UP) != right_value:
+                    return False
+            elif left_value != right_value:
                 return False
-        elif right_precision < left_precision:
-            if left_value.quantize(quantum, rounding=ROUND_HALF_UP) != right_value:
-                return False
-        elif left_value != right_value:
-            return False
+    except InvalidOperation:
+        # Optional diagnostics must not fail research when a numeric token is
+        # beyond the active Decimal context's safely supported precision.
+        return None
     return True
 
 
@@ -215,6 +227,11 @@ def _audit_field(target: str, claim: EvidenceClaim) -> dict:
             target, claim, "unverifiable", "incomparable_numeric_forms",
             claim_values, evidence_values,
         )
+    if len(claim_values) > 1:
+        return _finding(
+            target, claim, "unverifiable", "ambiguous_numeric_alignment",
+            claim_values, evidence_values,
+        )
     if any(left.unit != right.unit for left, right in zip(claim_values, evidence_values, strict=True)):
         reason = "missing_unit_context" if any(
             (left.unit is None) != (right.unit is None)
@@ -238,7 +255,13 @@ def _audit_field(target: str, claim: EvidenceClaim) -> dict:
             else "reformatted_numeric_match"
         )
         return _finding(target, claim, "consistent", reason, claim_values, evidence_values)
-    if all(_rounded_equivalent(left, right) for left, right in pairs):
+    rounded_results = tuple(_rounded_equivalent(left, right) for left, right in pairs)
+    if any(result is None for result in rounded_results):
+        return _finding(
+            target, claim, "unverifiable", "numeric_precision_unsupported",
+            claim_values, evidence_values,
+        )
+    if all(rounded_results):
         return _finding(
             target, claim, "consistent", "rounded_numeric_match", claim_values, evidence_values
         )
@@ -275,6 +298,7 @@ def audit_answer_claims(
         "mode": "audit",
         "status": "completed",
         "taxonomy_version": "numeric-quote-v1",
+        "target_scope": "final_selected_answer",
         "findings": findings,
         "summary": summary,
     }

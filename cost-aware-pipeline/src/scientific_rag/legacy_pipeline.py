@@ -1721,11 +1721,6 @@ ANSWER LINES:
             raise RuntimeError(
                 "Structured synthesis still contained invalid evidence references after one repair attempt"
             )
-        deterministic_audit = (
-            audit_answer_claims(structured_answer, evidence_blocks)
-            if self.claim_audit_mode == "audit"
-            else None
-        )
         semantic_audit = None
         selected_answer = structured_answer
         if self.semantic_verification_mode != "off":
@@ -1787,6 +1782,11 @@ ANSWER LINES:
             raise RuntimeError(
                 "Semantically selected answer failed mandatory structural evidence validation"
             )
+        deterministic_audit = (
+            audit_answer_claims(selected_answer, evidence_blocks)
+            if self.claim_audit_mode == "audit"
+            else None
+        )
         answer = render_answer_v2(selected_answer, omitted_count=len(removals))
         def validated_claim(item):
             return {

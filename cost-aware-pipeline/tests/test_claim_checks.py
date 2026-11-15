@@ -23,6 +23,47 @@ def _audit(text: str, quote: str) -> dict:
 
 
 class NumericClaimAuditTests(unittest.TestCase):
+    def test_unsupported_long_decimal_precision_is_unverifiable(self) -> None:
+        finding = _audit(
+            "The result was 123456789012345678901234567890.1 mg.",
+            "The result was 123456789012345678901234567890.12 mg.",
+        )
+        self.assertEqual(finding["status"], "unverifiable")
+        self.assertEqual(finding["reason_code"], "numeric_precision_unsupported")
+
+    def test_reordered_separate_quantities_are_not_positionally_mismatched(self) -> None:
+        finding = _audit(
+            "Mortality was 12% and survival was 88%.",
+            "Survival was 88% and mortality was 12%.",
+        )
+        self.assertEqual(finding["status"], "unverifiable")
+        self.assertEqual(finding["reason_code"], "ambiguous_numeric_alignment")
+
+    def test_equal_sequences_with_different_outcomes_are_not_semantic_agreement(self) -> None:
+        finding = _audit(
+            "Mortality was 12% and survival was 88%.",
+            "Response was 12% and withdrawal was 88%.",
+        )
+        self.assertEqual(finding["status"], "unverifiable")
+        self.assertEqual(finding["reason_code"], "ambiguous_numeric_alignment")
+
+    def test_unit_parser_does_not_treat_ordinary_words_as_units(self) -> None:
+        cases = (
+            ("The cohort had 12 participants.", [None]),
+            ("The cohort had 12 patients.", [None]),
+            ("The estimate was between 0.1 and 0.2.", [None, None]),
+            ("The dose was 12 mg.", ["mg"]),
+            ("The mass was 12 g.", ["g"]),
+            ("The concentration was 12 mg/dL.", ["mg/dl"]),
+        )
+        for text, expected_units in cases:
+            with self.subTest(text=text):
+                finding = _audit(text, text)
+                self.assertEqual(
+                    [value["unit"] for value in finding["claim_values"]],
+                    expected_units,
+                )
+
     def test_table_driven_numeric_relationships(self) -> None:
         cases = (
             (
@@ -99,7 +140,7 @@ class NumericClaimAuditTests(unittest.TestCase):
             (
                 "different quantities", "Participants received 5 mg at week 4.",
                 "Participants received 5 mg at week 8.",
-                "inconsistent", "numeric_mismatch",
+                "unverifiable", "ambiguous_numeric_alignment",
             ),
             (
                 "unrelated passage number", "The dose was 12 mg.",

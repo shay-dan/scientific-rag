@@ -7,9 +7,9 @@ claims, alter semantic-verifier verdicts, or trigger provider calls.
 ## Configuration and placement
 
 Set `CLAIM_AUDIT_MODE=off|audit`. The production default is `off`. The audit runs after
-the existing structural validation and optional R7A repair, and remains separate from
-semantic-verification metadata. Strict and degrade recovery modes and semantic
-`off|shadow|enforce` behavior are unchanged.
+the existing structural validation, optional R7A repair, and any semantic filtering,
+and remains separate from semantic-verification metadata. Strict and degrade recovery
+modes and semantic `off|shadow|enforce` behavior are unchanged.
 
 For a fresh audited run, internal metadata records `claim_audit_mode: audit` and the
 claim-validation record includes `deterministic_audit`. The audit report has this stable
@@ -20,6 +20,7 @@ shape:
   "mode": "audit",
   "status": "completed",
   "taxonomy_version": "numeric-quote-v1",
+  "target_scope": "final_selected_answer",
   "findings": [
     {
       "target": "claims.1",
@@ -35,9 +36,12 @@ shape:
 }
 ```
 
-Targets use the original one-based `claims.N` and `limitations.N` positions. Reports
-contain normalized numeric diagnostics, source IDs, and stable reason codes, not full
-source passages or quotations.
+Targets use the one-based `claims.N` and `limitations.N` positions in the final selected
+answer stored alongside `claim_validation.claims` and `claim_validation.limitations`.
+`target_scope: final_selected_answer` makes this contract explicit. In semantic enforce
+mode, removed claims receive no deterministic finding and surviving claims are reindexed
+to match those final lists. Reports contain normalized numeric diagnostics, source IDs,
+and stable reason codes, not full source passages or quotations.
 
 ## Status and reason taxonomy
 
@@ -54,7 +58,8 @@ Stable reason codes in `numeric-quote-v1` are:
   `rounded_numeric_match`.
 - Inconsistent: `sign_mismatch`, `numeric_mismatch`.
 - Unverifiable: `incomparable_numeric_forms`, `ambiguous_numeric_alignment`,
-  `incompatible_units`, `missing_unit_context`, `missing_numeric_evidence`.
+  `incompatible_units`, `missing_unit_context`, `missing_numeric_evidence`,
+  `numeric_precision_unsupported`.
 - Not applicable: `no_numeric_claim`.
 
 These categories describe quotation/numeric consistency only. They do not establish
@@ -67,15 +72,21 @@ already validated verbatim evidence quotation. It does not search adjacent passa
 or infer that an unrelated number supports a measurement.
 
 It recognizes signed integers and decimals, percentages, intervals, ratios/fractions,
-and direct unit expressions. Exact values and benign reformatting such as `5.0` versus
-`5.00` are consistent. Same-form rounding is consistent only when rounding the more
-precise value with round-half-up to the lower stated decimal precision yields the less
-precise value. Interval endpoints remain ordered and are compared independently.
+and a deliberately small direct-unit vocabulary (common mass, volume, concentration,
+amount, pressure, rate, and frequency tokens). Ordinary words such as `participants`
+and `patients` are not treated as units. Exact values and benign reformatting such as
+`5.0` versus `5.00` are consistent. Same-form rounding is consistent only when rounding
+the more precise value with round-half-up to the lower stated decimal precision yields
+the less precise value. Values beyond the active Decimal context's safe precision are
+unverifiable rather than errors. Interval endpoints remain ordered and are compared
+independently.
 
 The auditor abstains when forms or alignment are unsafe. Decimal-to-percentage and
 ratio/fraction-to-percentage comparisons are unverifiable. It never derives a percentage
 from separately stated numerator and denominator values, converts units, infers a
-measurement's meaning, or aligns an unequal/ambiguous list of quantities. Missing unit
+measurement's meaning, or positionally aligns multiple separately stated quantities.
+Those multi-quantity sentences are unverifiable even when their numeric sequence is
+identical, because numeric equality is not semantic agreement. Missing unit
 context and explicitly incompatible unit strings are separate unverifiable outcomes,
 not contradictions.
 

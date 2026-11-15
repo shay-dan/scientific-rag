@@ -162,6 +162,7 @@ class ClaimAuditPersistenceTests(unittest.IsolatedAsyncioTestCase):
         now = datetime.now(timezone.utc)
         report = {
             "mode": "audit", "status": "completed", "taxonomy_version": "numeric-quote-v1",
+            "target_scope": "final_selected_answer",
             "findings": [],
             "summary": {"consistent": 0, "inconsistent": 0, "unverifiable": 0, "not_applicable": 0},
         }
@@ -264,8 +265,32 @@ class ClaimAuditProductionFlowTests(unittest.IsolatedAsyncioTestCase):
             result = await agent.run_research("Question")
         self.assertNotIn("The second result", result["answer"])
         validation = result["claim_validation"]
-        self.assertEqual(len(validation["deterministic_audit"]["findings"]), 2)
+        self.assertEqual(len(validation["deterministic_audit"]["findings"]), 1)
+        self.assertEqual(
+            validation["deterministic_audit"]["findings"][0]["source_id"], "S1",
+        )
         self.assertEqual(validation["semantic_verification"]["removed_target_ids"], ["claims.2"])
+        gateway.assert_awaited_once()
+        verifier.assert_awaited_once()
+
+    async def test_enforce_audit_targets_reindex_to_the_final_selected_claims(self) -> None:
+        gateway = AsyncMock(return_value=_answer())
+        verifier = AsyncMock(return_value=ClaimVerificationBatch(assessments=[
+            ClaimAssessment(target="claims.1", verdict="contradicted", reason="Removed."),
+            ClaimAssessment(target="claims.2", verdict="supported", reason="Retained."),
+        ]))
+        agent = self._agent(semantic_mode="enforce")
+        with patch("scientific_rag.legacy_pipeline.ainvoke_structured", new=gateway), \
+             patch("scientific_rag.legacy_pipeline.verify_claims", new=verifier):
+            result = await agent.run_research("Question")
+        audit = result["claim_validation"]["deterministic_audit"]
+        self.assertEqual(audit["target_scope"], "final_selected_answer")
+        self.assertEqual(
+            [(item["target"], item["source_id"]) for item in audit["findings"]],
+            [("claims.1", "S2")],
+        )
+        self.assertNotIn("The first result", result["answer"])
+        self.assertIn("The second result", result["answer"])
         gateway.assert_awaited_once()
         verifier.assert_awaited_once()
 
