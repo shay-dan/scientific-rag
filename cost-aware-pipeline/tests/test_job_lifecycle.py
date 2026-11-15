@@ -10,7 +10,13 @@ from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 from app.config import Settings
-from app.job_lifecycle import LeaseKeeper, Termination, research_identity_lock_id, settle_terminated_cost
+from app.job_lifecycle import (
+    LeaseKeeper,
+    Termination,
+    _enqueue_arguments,
+    research_identity_lock_id,
+    settle_terminated_cost,
+)
 from app.schemas import ResearchCacheMode, ResearchMode
 from app.services import ResearchService
 
@@ -31,6 +37,34 @@ class IdentityLockTests(unittest.TestCase):
     def test_fields_cannot_be_shifted_into_each_other(self) -> None:
         self.assertNotEqual(research_identity_lock_id("ab", "c", "v", "q"), research_identity_lock_id("a", "bc", "v", "q"))
 
+
+class QueueArgumentCompatibilityTests(unittest.TestCase):
+    def test_strict_run_keeps_historical_worker_argument_shape(self) -> None:
+        record = SimpleNamespace(
+            id=uuid4(), question="Question",
+            model_metadata={
+                "mode": "fast",
+                "cache_mode": "use_cached_answer",
+                "semantic_claim_verification_mode": "off",
+            },
+        )
+        arguments = _enqueue_arguments(record)
+        self.assertEqual(len(arguments), 6)
+        self.assertEqual(arguments[-1], "off")
+
+    def test_degrade_run_adds_recovery_mode_for_updated_worker(self) -> None:
+        record = SimpleNamespace(
+            id=uuid4(), question="Question",
+            model_metadata={
+                "mode": "fast",
+                "cache_mode": "use_cached_answer",
+                "semantic_claim_verification_mode": "shadow",
+                "claim_recovery_mode": "degrade",
+            },
+        )
+        arguments = _enqueue_arguments(record)
+        self.assertEqual(len(arguments), 7)
+        self.assertEqual(arguments[-1], "degrade")
 
 class TerminationTests(unittest.TestCase):
     def test_only_unclaimed_queued_runs_count_as_never_started(self) -> None:

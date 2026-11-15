@@ -19,6 +19,7 @@ The root README is the project overview. The maintained application's
 
 - [Implementation baseline](../cost-aware-pipeline/docs/implementation-baseline.md)
 - [Semantic claim verification](../cost-aware-pipeline/docs/semantic-claim-verifier.md)
+- [R7A claim recovery](../cost-aware-pipeline/docs/claim-recovery-r7a.md)
 - [Query quality and evidence gating](../cost-aware-pipeline/docs/query-quality-validation-2026-10-25.md)
 - [Reliability and production plan](../cost-aware-pipeline/docs/reliability-and-production-plan-2026-10-24.md)
 - [Research job lifecycle and recovery (R2)](../cost-aware-pipeline/docs/research-job-lifecycle.md)

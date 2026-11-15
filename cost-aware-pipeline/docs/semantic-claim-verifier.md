@@ -10,7 +10,9 @@ and verbatim-quotation checks. The structured synthesis path is:
 1. Generate `StructuredEvidenceAnswerV2`.
 2. Validate source IDs and verbatim evidence quotes.
 3. Run the existing targeted structural repair when necessary.
-4. Require structural validation to pass.
+4. In the default `strict` recovery mode, require the complete repair to pass as
+   before. In opt-in `degrade` mode, keep valid fields and audit removals; zero
+   surviving answer claims raise `NoValidClaimsRemain`.
 5. Optionally map each claim/limitation to its exact cited passage and verify it.
 6. In enforce mode, retain only `supported` fields.
 7. Validate the selected answer structurally again.
@@ -95,6 +97,10 @@ Cache identity is verification-aware:
 - Shadow: the v15 identity plus `-semantic-shadow-v1`.
 - Enforce: the v15 identity plus `-semantic-enforce-v1`.
 
+R7A claim recovery composes with these identities. `strict` leaves each identity
+unchanged; `degrade` appends `-recovery-degrade-v1`. See
+[claim recovery](claim-recovery-r7a.md).
+
 v15 (R3) marks answers produced under the untrusted-content security contract. Records
 stored under v14 (and its shadow/enforce variants) remain readable but are never reused
 as cache hits for new research; see
@@ -110,7 +116,9 @@ authoritative after worker restarts. Legacy queued jobs without that field execu
 
 Structural source/quote validation remains mandatory in every mode and runs again
 after filtering. Shadow errors expose only a safe error type and sanitized reason.
-Enforce errors propagate to the existing failed-run persistence path.
+Enforce errors propagate to the existing failed-run persistence path. A recovery
+that leaves zero answer claims is a typed generation/validation failure, not an
+`insufficient_evidence` result; its audit is persisted under `claim_validation`.
 
 LLM verification is probabilistic. Temperature zero does not guarantee semantic
 correctness, prompt-injection immunity, or consistent judgment of subtle scientific

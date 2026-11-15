@@ -1,6 +1,6 @@
 # Scientific RAG — engineering roadmap
 
-**Status:** authoritative planning document. Last updated 2026-11-13 (R6C complete; R6 in review — R6D optional output-token limits).
+**Status:** authoritative planning document. Last updated 2026-11-14 (R6 complete; R7A in review).
 **Origin:** owner-approved *Master Implementation Plan*, which consolidated an independent
 audit, a reconciled R0–R13 roadmap, a discovery/evidence-acquisition addendum, and the
 historical engineering handover. Changes to this file require owner approval and an entry
@@ -31,8 +31,8 @@ Operating rules for agents are in [`AGENTS.md`](../AGENTS.md). History, complete
 | R3 | Untrusted scientific-content security | **complete** (PR #10, `138f29a`) | R1 (order); before R8, R9-F |
 | R4 | Evaluation integrity and reproducibility | **complete** (PR #11, `359e02c`) | R0 |
 | R5 | Offline semantic-verifier evaluation harness | **complete** (PR #12, `b21bc37`) | R0 |
-| R6 | Human-reviewed evidence packs and labels | R6A **complete** (PR #13, `60b394a`); R6B **complete** (PR #14, `e6bf0ee`); R6C **complete** (PR #15, `693b7a5`); R6D in review (branch `agent/r6d-output-token-limits`; optional gateway output limit, no live calls run) | R4, R5; R3 preferred |
-| R7 | Deterministic claim checks, graceful degradation | not started | R5, R6 |
+| R6 | Human-reviewed evidence packs and labels | R6A **complete** (PR #13, `60b394a`); R6B **complete** (PR #14, `e6bf0ee`); R6C **complete** (PR #15, `693b7a5`); R6D **complete** (PR #16, `5328573`) | R4, R5; R3 preferred |
+| R7 | Deterministic claim checks, graceful degradation | R7A **in review** (`agent/r7a-claim-recovery`); R7B–R7D not started | R5, R6 |
 | R9-D | Discovery candidate pool, ranking, backfilling | not started | R6 pilot, R2 |
 | R9-P | PMC scientific-content extraction | conditional | R6 fixtures; R7 preferred |
 | R8 | Semantic-verifier calibration and release decision | not started | R3, R5, R6, R7 |
@@ -676,7 +676,7 @@ uncertainty. Expansion is a separate decision.
   ranking within a pack only; embedding costs are estimates; the 67 locator-only segments
   are not executed.
 
-### R6D findings (in review)
+### R6D findings (complete)
 
 - **Scope:** an optional, per-request `max_output_tokens` through the gateway
   (`create_chat_model`, `ainvoke`, `ainvoke_structured`) and an optional pass-through on
@@ -705,20 +705,34 @@ uncertainty. Expansion is a separate decision.
   honoring of the limit, reasoning-token counting, prices and unreported usage cannot be
   verified offline.
 - **Not executed:** no live or paid provider call has been made.
+- **Final status:** merged as `5328573` (PR #16). Post-merge evidence: 769 unit tests
+  executed, 0 failures, 58 skipped; PostgreSQL/pgvector + Redis integration 57/57;
+  historical Gradio prototype 13/13; migrations, `/healthz`, image provenance, CI and
+  Security CI passed.
 
 ## R7 — Deterministic claim checks and graceful degradation
 
-**Status:** not started. **Priority:** high. Independent of R9-D.
+**Status:** R7A in review; R7B, R7C and R7D not started. **Priority:** high.
+Independent of R9-D.
 
-Inspect current structured-synthesis validation; restore useful attribution instructions
-missing from the active synthesis prompt; add numeric diagnostics (percentages, counts,
-units, ranges, intervals), study-attribution mismatch and malformed reference detection;
-improve partial-answer handling; keep a clear insufficient-evidence outcome when no valid
-claims remain. New numeric rules start **audit-only** (48/96 legitimately supports 50%;
-a wrong subgroup can reuse a valid number). Record removed claims and lost coverage —
-never present a filtered answer as complete.
-**Acceptance:** measured improvement on reviewed development data without unacceptable
-supported-claim rejection; verifier contracts stay compatible.
+R7 is split into separately authorized stages in this order:
+
+1. **R7A — graceful claim recovery:** opt-in `strict|degrade` handling after the
+   existing one repair; deterministic removal auditing; typed
+   `NoValidClaimsRemain`; queued-mode persistence and cache isolation. `strict`
+   remains the production default throughout R7. Contract:
+   [claim-recovery-r7a.md](../cost-aware-pipeline/docs/claim-recovery-r7a.md).
+2. **R7B — deterministic claim auditing:** numeric, interval, unit and quotation
+   consistency findings. Audit-only; no automatic rejection.
+3. **R7C — scientific generation-prompt restoration:** restore the missing numeric
+   and attribution instructions as versioned v16 behavior.
+4. **R7D — small paid evaluation:** approximately 20 frozen scenarios, at most 80
+   calls and a proposed $1.50 application ceiling. Requires a verified dry run and
+   separate execution authorization.
+
+R7A never converts zero surviving claims to `insufficient_evidence`; that outcome
+remains reserved for the independent evidence-sufficiency gate. R7B–R7D are not
+authorized by the R7A implementation.
 
 ## R9-D — Discovery candidate pool, ranking, and backfilling
 
@@ -885,6 +899,8 @@ load evidence; large synthetic evaluation sets presented as gold data.
 
 | Date | Decision | Evidence / reason |
 |---|---|---|
+| 2026-11-14 | R7 sequence is R7A recovery → R7B audit-only deterministic checks → R7C prompt restoration → R7D separately authorized paid evaluation. R7A defaults to `strict`; zero surviving claims are a typed failed generation/validation outcome, never a new `insufficient_evidence` result. | Owner R7A authorization and final planning clarification; preserves evidence-sufficiency semantics and production defaults. |
+| 2026-11-14 | Mark R6D complete (PR #16, `5328573`). | Post-merge CI and Security green: 769 unit executed, 58 skipped, 0 failures; 57/57 integration; migrations, health, provenance and legacy 13/13 passed. |
 | 2026-11-12 | Mark R5 complete (PR #12, `b21bc37`). | CI and Security CI green on `main`: 562 unit (0 failures, 51 skipped), 50/50 integration, image provenance, migrations, smoke; no production code changed. |
 | 2026-11-12 | Mark R6A complete (PR #13, `60b394a`). | CI and Security CI green on `main`: 610 unit (0 failures, 51 skipped), 50/50 integration, image provenance, migrations, smoke, legacy 13/13; no production code changed. |
 | 2026-11-12 | R6B: import the label-free development handoff through its own unscored input contract (not R6A gold records); enforce discovery-before-fixed-evidence in code; export portable unscored predictions joined on opaque IDs; scoring only by the owner, per population, outside the repository; no handoff text in the public repository. | Owner R6B authorization; handoff README and configs; repository is public. |

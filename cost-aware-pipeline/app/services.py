@@ -64,13 +64,22 @@ class ResearchFencedOut(RuntimeError):
     """This execution no longer owns the run (cancelled or recovered); its results are discarded."""
 
 
-def effective_pipeline_version(semantic_verification_mode: str) -> str:
+def effective_pipeline_version(
+    semantic_verification_mode: str,
+    claim_recovery_mode: str = "strict",
+) -> str:
     """Separate cache identities per verification mode; historical records keep their stored version."""
     if semantic_verification_mode == "off":
-        return PIPELINE_VERSION
-    if semantic_verification_mode in {"shadow", "enforce"}:
-        return f"{PIPELINE_VERSION}-semantic-{semantic_verification_mode}-v1"
-    raise ValueError(f"Unsupported semantic verification mode: {semantic_verification_mode}")
+        version = PIPELINE_VERSION
+    elif semantic_verification_mode in {"shadow", "enforce"}:
+        version = f"{PIPELINE_VERSION}-semantic-{semantic_verification_mode}-v1"
+    else:
+        raise ValueError(f"Unsupported semantic verification mode: {semantic_verification_mode}")
+    if claim_recovery_mode == "degrade":
+        return f"{version}-recovery-degrade-v1"
+    if claim_recovery_mode != "strict":
+        raise ValueError(f"Unsupported claim recovery mode: {claim_recovery_mode}")
+    return version
 
 
 def _timeline_phase(stage: str, role: str | None) -> str:
@@ -148,27 +157,40 @@ class ResearchService:
         return primary_route_label(role)
 
     def _metadata(self, mode: ResearchMode, budget: ResearchBudget, stage: str, role: str | None = None, *,
-                  semantic_verification_mode: str | None = None) -> dict:
+                  semantic_verification_mode: str | None = None,
+                  claim_recovery_mode: str | None = None) -> dict:
         verification_mode = semantic_verification_mode or getattr(
             getattr(self, "settings", None), "semantic_claim_verification_mode", "off"
         )
-        return {
+        recovery_mode = claim_recovery_mode or getattr(
+            getattr(self, "settings", None), "claim_recovery_mode", "strict"
+        )
+        metadata = {
             "policy": "provider-agnostic Groq -> OpenRouter -> Gemini gateway",
             "mode": mode.value,
             "budget": budget.as_dict(),
             "estimated_max_generation_calls": estimated_generation_calls(budget, verification_mode),
             "cache_hit": False,
-            "retrieval_version": effective_pipeline_version(verification_mode),
+            "retrieval_version": effective_pipeline_version(verification_mode, recovery_mode),
             "semantic_claim_verification_mode": verification_mode,
             "progress": {"stage": stage, "role": role, "model": self._model_for_role(role)},
         }
+        # Strict is represented by absence for backward-compatible metadata and
+        # so historical queued jobs resolve safely to the production default.
+        if recovery_mode != "strict":
+            metadata["claim_recovery_mode"] = recovery_mode
+        return metadata
 
     async def _find_cached(self, session: AsyncSession, question: str, actor: str, mode: ResearchMode,
-                           semantic_verification_mode: str | None = None) -> ResearchRun | None:
+                           semantic_verification_mode: str | None = None,
+                           claim_recovery_mode: str | None = None) -> ResearchRun | None:
         verification_mode = semantic_verification_mode or getattr(
             getattr(self, "settings", None), "semantic_claim_verification_mode", "off"
         )
-        version = effective_pipeline_version(verification_mode)
+        recovery_mode = claim_recovery_mode or getattr(
+            getattr(self, "settings", None), "claim_recovery_mode", "strict"
+        )
+        version = effective_pipeline_version(verification_mode, recovery_mode)
         return (
             await session.execute(
                 select(ResearchRun)
@@ -250,10 +272,13 @@ class ResearchService:
         semantic_mode = getattr(
             getattr(self, "settings", None), "semantic_claim_verification_mode", "off"
         )
-        version = effective_pipeline_version(semantic_mode)
+        recovery_mode = getattr(
+            getattr(self, "settings", None), "claim_recovery_mode", "strict"
+        )
+        version = effective_pipeline_version(semantic_mode, recovery_mode)
         # Serialize identical submissions (same caller, mode, pipeline version, question).
         await acquire_identity_lock(session, actor, mode.value, version, question)
-        cached = await self._find_cached(session, question, actor, mode, semantic_mode)
+        cached = await self._find_cached(session, question, actor, mode, semantic_mode, recovery_mode)
         if cached is not None and cache_mode is ResearchCacheMode.use_cached_answer:
             logger.info("research_cache_hit run_id=%s mode=%s", cached.id, mode.value)
             return to_response(cached, await self.sources_for_run(session, cached.id), mode=mode, cached=True)
@@ -267,6 +292,7 @@ class ResearchService:
         metadata = self._metadata(
             mode, budget, "Queued for research",
             semantic_verification_mode=semantic_mode,
+            claim_recovery_mode=recovery_mode,
         )
         metadata["cache_mode"] = cache_mode.value
         metadata["retrieval_version"] = version
@@ -324,7 +350,8 @@ class ResearchService:
                 logger.warning("research_reservation_release_failed run_id=%s", run_id, exc_info=True)
 
     async def run_queued(self, run_id: UUID, question: str, mode: ResearchMode, cache_mode: ResearchCacheMode,
-                         semantic_verification_mode: str | None = None) -> None:
+                         semantic_verification_mode: str | None = None,
+                         claim_recovery_mode: str | None = None) -> None:
         settings = self.settings
         async with session_factory() as session:
             record = await claim_run(session, run_id, owner=worker_identity(), lease_seconds=settings.research_lease_seconds)
@@ -334,15 +361,19 @@ class ResearchService:
                 logger.info("research_claim_skipped run_id=%s", run_id)
                 return
             attempt = record.attempt
-            # Persisted run intent is authoritative across worker restarts. The
-            # optional job argument supports new jobs; old queued jobs default
-            # safely to off rather than inheriting a changed worker environment.
+            # Persisted run intent is authoritative across worker restarts.
+            # Historical runs without recovery metadata stay strict even if a
+            # stale job argument or newer worker environment says degrade.
             stored_semantic_mode = str(
                 (record.model_metadata or {}).get("semantic_claim_verification_mode")
                 or semantic_verification_mode
                 or "off"
             )
-            effective_pipeline_version(stored_semantic_mode)
+            stored_recovery_mode = str(
+                (record.model_metadata or {}).get("claim_recovery_mode")
+                or "strict"
+            )
+            effective_pipeline_version(stored_semantic_mode, stored_recovery_mode)
             lease = LeaseKeeper(
                 session_factory, run_id, attempt,
                 lease_seconds=settings.research_lease_seconds,
@@ -353,6 +384,7 @@ class ResearchService:
                     await self._execute(
                         session, record, question, mode, False, cache_mode=cache_mode,
                         semantic_verification_mode=stored_semantic_mode,
+                        claim_recovery_mode=stored_recovery_mode,
                     )
             except ResearchFencedOut:
                 logger.warning("research_execution_fenced_out run_id=%s attempt=%s", run_id, attempt)
@@ -408,8 +440,11 @@ class ResearchService:
         semantic_mode = getattr(
             getattr(self, "settings", None), "semantic_claim_verification_mode", "off"
         )
+        recovery_mode = getattr(
+            getattr(self, "settings", None), "claim_recovery_mode", "strict"
+        )
         cached = None if cache_mode is not ResearchCacheMode.use_cached_answer else await self._find_cached(
-            session, question, actor, mode, semantic_mode
+            session, question, actor, mode, semantic_mode, recovery_mode
         )
         if cached is not None:
             return to_response(cached, await self.sources_for_run(session, cached.id), mode=mode, cached=True)
@@ -418,6 +453,7 @@ class ResearchService:
         initial_metadata = self._metadata(
             mode, budget, "Starting research",
             semantic_verification_mode=semantic_mode,
+            claim_recovery_mode=recovery_mode,
         )
         initial_metadata["cache_mode"] = cache_mode.value
         record = ResearchRun(question=question, requested_by=actor, status="running", model_metadata=initial_metadata)
@@ -435,6 +471,7 @@ class ResearchService:
         return await self._execute(
             session, record, question, mode, generate_evaluation_dataset,
             cache_mode=cache_mode, semantic_verification_mode=semantic_mode,
+            claim_recovery_mode=recovery_mode,
         )
 
     async def _set_progress(self, session: AsyncSession, record: ResearchRun, stage: str, role: str | None = None) -> None:
@@ -457,18 +494,24 @@ class ResearchService:
 
     async def _execute(self, session: AsyncSession, record: ResearchRun, question: str, mode: ResearchMode, generate_evaluation_dataset: bool, *,
                        cache_mode: ResearchCacheMode = ResearchCacheMode.use_cached_answer,
-                       semantic_verification_mode: str | None = None) -> ResearchResponse:
+                       semantic_verification_mode: str | None = None,
+                       claim_recovery_mode: str | None = None) -> ResearchResponse:
         budget = budget_for(mode)
         semantic_mode = str(
             semantic_verification_mode
             or (record.model_metadata or {}).get("semantic_claim_verification_mode")
             or "off"
         )
-        version = effective_pipeline_version(semantic_mode)
+        recovery_mode = str(
+            (record.model_metadata or {}).get("claim_recovery_mode")
+            or "strict"
+        )
+        version = effective_pipeline_version(semantic_mode, recovery_mode)
         trace_token = begin_trace(self.redis)
         trace_closed = False
         orchestrator = None
         vector_service = None
+        research_agent = None
         # Fencing token (R2): the attempt this execution owns. A cancellation or
         # recovery increments it, after which every write from here fails.
         fence = getattr(record, "attempt", None)
@@ -490,6 +533,7 @@ class ResearchService:
                     max_context_documents=budget.max_context_documents,
                     progress_callback=progress,
                     semantic_verification_mode=semantic_mode,
+                    claim_recovery_mode=recovery_mode,
                     semantic_verification_timeout_seconds=120,
                 )
                 orchestrator = legacy_pipeline.Orchestrator(
@@ -540,6 +584,7 @@ class ResearchService:
             metadata = self._metadata(
                 mode, budget, "Research complete",
                 semantic_verification_mode=semantic_mode,
+                claim_recovery_mode=recovery_mode,
             )
             metadata["retrieval_version"] = version
             metadata["llm_gateway"] = summarize_trace(end_trace(trace_token))
@@ -611,6 +656,24 @@ class ResearchService:
                 trace_closed = True
             _close_active_timeline(metadata, record.completed_at)
             metadata["failure_stage"] = (metadata.get("progress") or {}).get("stage")
+            if isinstance(error, legacy_pipeline.NoValidClaimsRemain):
+                metadata["failure_kind"] = error.failure_kind
+                metadata["claim_validation"] = {
+                    "status": "failed",
+                    "failure_kind": error.failure_kind,
+                    "recovery": dict(error.recovery_audit),
+                    "removals": [item.as_dict() for item in error.removals],
+                }
+            elif research_agent is not None and getattr(research_agent, "last_recovery_audit", None):
+                metadata["claim_validation"] = {
+                    "status": "failed_after_recovery",
+                    "recovery": dict(research_agent.last_recovery_audit),
+                    "removals": [
+                        item.as_dict()
+                        for item in getattr(research_agent, "last_recovery_removals", ())
+                    ],
+                    "downstream_failure_kind": type(error).__name__,
+                }
             metadata["progress"] = {"stage": "Research failed", "role": None, "model": None}
             if orchestrator is not None:
                 metadata["source_diagnostics"] = getattr(orchestrator, "last_source_diagnostics", {})

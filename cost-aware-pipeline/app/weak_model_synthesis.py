@@ -111,6 +111,39 @@ class LocalRepairAudit:
     unresolved_reasons: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class RemovedField:
+    """One structurally invalid field omitted by deterministic recovery."""
+
+    target: str
+    reason: Literal["model_dropped", "replacement_invalid", "repair_unaddressed"]
+    errors: tuple[str, ...]
+    text: str
+    source_id: str
+    unresolved_reason: str | None = None
+    replacement_errors: tuple[str, ...] = ()
+    replacement_text: str | None = None
+    replacement_source_id: str | None = None
+
+    def as_dict(self) -> dict:
+        result = {
+            "target": self.target,
+            "reason": self.reason,
+            "errors": list(self.errors),
+            "text": self.text,
+            "source_id": self.source_id,
+        }
+        if self.unresolved_reason is not None:
+            result["unresolved_reason"] = self.unresolved_reason
+        if self.replacement_errors or self.replacement_text is not None or self.replacement_source_id is not None:
+            result["rejected_replacement"] = {
+                "errors": list(self.replacement_errors),
+                "text": self.replacement_text,
+                "source_id": self.replacement_source_id,
+            }
+        return result
+
+
 def build_evidence_blocks(documents: Iterable[Document]) -> list[EvidenceBlock]:
     """Assign stable source labels while preserving production citation labels."""
     labels: dict[str, str] = {}
@@ -298,7 +331,7 @@ def validate_answer_v2(
     return errors
 
 
-def render_answer_v2(answer: StructuredEvidenceAnswerV2) -> str:
+def render_answer_v2(answer: StructuredEvidenceAnswerV2, *, omitted_count: int = 0) -> str:
     lines = [f"- {claim.text} [{claim.source_id}]" for claim in answer.claims]
     if answer.limitations:
         lines.extend(["", "**Limitations**"])
@@ -306,6 +339,11 @@ def render_answer_v2(answer: StructuredEvidenceAnswerV2) -> str:
     if answer.unanswered_parts:
         lines.extend(["", "**Not established by the retrieved evidence**"])
         lines.extend(f"- {item}" for item in answer.unanswered_parts)
+    if omitted_count:
+        lines.extend([
+            "",
+            "Some statements were omitted because they could not be validated against the retrieved evidence.",
+        ])
     return "\n".join(lines)
 
 
@@ -408,6 +446,141 @@ def merge_v2_repairs(
         "limitations_before": len(original.limitations), "limitations_after": len(merged.limitations),
         "preserved_targets": preserved, "repaired_targets": repaired, "dropped_targets": dropped,
     }, remaining
+
+
+def recover_v2_answer(
+    original: StructuredEvidenceAnswerV2,
+    batch: V2RepairBatch,
+    blocks: Iterable[EvidenceBlock],
+) -> tuple[StructuredEvidenceAnswerV2 | None, dict, tuple[RemovedField, ...]]:
+    """Apply one repair batch while retaining every structurally valid field.
+
+    Unlike :func:`merge_v2_repairs`, this recovery path tolerates malformed target
+    coverage. It is pure, performs no provider calls, and returns ``None`` when no
+    answer claim survives so the caller can raise a typed failure.
+    """
+    block_list = list(blocks)
+    invalid = validate_answer_v2(original, block_list)
+    expected = set(invalid)
+    first_by_target: dict[str, V2RepairItem] = {}
+    duplicate_targets: list[str] = []
+    unexpected_targets: list[str] = []
+    for item in batch.repairs:
+        if item.target not in expected:
+            unexpected_targets.append(item.target)
+            continue
+        if item.target in first_by_target:
+            duplicate_targets.append(item.target)
+            continue
+        first_by_target[item.target] = item
+
+    output: dict[str, list[EvidenceClaim]] = {"claims": [], "limitations": []}
+    preserved: list[str] = []
+    repaired: list[str] = []
+    removed: list[RemovedField] = []
+    # Valid originals reserve their normalized text before replacements are
+    # considered, preventing a repair from duplicating a surviving field.
+    accepted_text = {
+        _normalise(claim.text)
+        for section in ("claims", "limitations")
+        for index, claim in enumerate(getattr(original, section), start=1)
+        if f"{section}.{index}" not in invalid
+    }
+
+    for section in ("claims", "limitations"):
+        for index, claim in enumerate(getattr(original, section), start=1):
+            target = f"{section}.{index}"
+            if target not in invalid:
+                output[section].append(claim)
+                preserved.append(target)
+                continue
+            item = first_by_target.get(target)
+            if item is None:
+                removed.append(RemovedField(
+                    target, "repair_unaddressed", invalid[target], claim.text, claim.source_id
+                ))
+                continue
+            if item.action == "drop":
+                removed.append(RemovedField(
+                    target, "model_dropped", invalid[target], claim.text, claim.source_id,
+                    unresolved_reason=item.unresolved_reason,
+                ))
+                continue
+            replacement = item.replacement
+            replacement_errors: tuple[str, ...] = ()
+            if replacement is None:
+                replacement_errors = (f"{target} selected replace without replacement",)
+            else:
+                partial = StructuredEvidenceAnswer(claims=[replacement])
+                replacement_errors = claim_validation_errors(partial, block_list).get(1, ())
+                if _normalise(replacement.text) in accepted_text:
+                    replacement_errors = (*replacement_errors, "duplicate claim text across answer sections")
+            if replacement is None or replacement_errors:
+                removed.append(RemovedField(
+                    target,
+                    "replacement_invalid",
+                    invalid[target],
+                    claim.text,
+                    claim.source_id,
+                    unresolved_reason=item.unresolved_reason,
+                    replacement_errors=replacement_errors,
+                    replacement_text=replacement.text if replacement is not None else None,
+                    replacement_source_id=replacement.source_id if replacement is not None else None,
+                ))
+                continue
+            output[section].append(replacement)
+            accepted_text.add(_normalise(replacement.text))
+            repaired.append(target)
+
+    missing_targets = sorted(expected.difference(first_by_target))
+    removed_by_target = {item.target: item.reason for item in removed}
+    seen_targets: set[str] = set()
+    repair_items: list[dict] = []
+    for item in batch.repairs:
+        if item.target not in expected:
+            disposition = "unexpected"
+        elif item.target in seen_targets:
+            disposition = "duplicate"
+        else:
+            seen_targets.add(item.target)
+            disposition = "repaired" if item.target in repaired else removed_by_target.get(
+                item.target, "ignored"
+            )
+        repair_items.append({
+            "target": item.target,
+            "action": item.action,
+            "disposition": disposition,
+            "unresolved_reason": item.unresolved_reason,
+        })
+
+    audit = {
+        "claims_before": len(original.claims),
+        "claims_after": len(output["claims"]),
+        "limitations_before": len(original.limitations),
+        "limitations_after": len(output["limitations"]),
+        "preserved_targets": preserved,
+        "repaired_targets": repaired,
+        "dropped_targets": [item.target for item in removed],
+        "missing_targets": missing_targets,
+        "duplicate_targets": duplicate_targets,
+        "unexpected_targets": unexpected_targets,
+        "repair_items": repair_items,
+        "removal_count": len(removed),
+        "removals": [item.as_dict() for item in removed],
+    }
+    if not output["claims"]:
+        return None, audit, tuple(removed)
+    recovered = StructuredEvidenceAnswerV2(
+        claims=output["claims"],
+        limitations=output["limitations"],
+        unanswered_parts=list(original.unanswered_parts),
+    )
+    remaining = validate_answer_v2(recovered, block_list)
+    if remaining:
+        # This indicates an invariant error in recovery, not another opportunity
+        # to call a model. Fail closed without introducing a second repair cycle.
+        raise ValueError(f"Recovered answer still contains invalid fields {sorted(remaining)}")
+    return recovered, audit, tuple(removed)
 
 
 def coverage_prompt_v2(question: str, context: str, answer: StructuredEvidenceAnswerV2) -> str:

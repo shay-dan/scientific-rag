@@ -1009,7 +1009,11 @@ async def queue_evidence_job(request: Request, payload: EvidenceJobRequest, sess
     if any(marker in payload.question for marker in ("@", "\n", "\r")):
         raise HTTPException(status_code=422, detail="Generic single-line research question required")
     question = " ".join(payload.question.split())
-    version = effective_pipeline_version(get_settings().semantic_claim_verification_mode)
+    settings = get_settings()
+    version = effective_pipeline_version(
+        settings.semantic_claim_verification_mode,
+        settings.claim_recovery_mode,
+    )
     # The lock and the reuse lookup share one identity: caller (sharing scope),
     # research mode, effective pipeline version, and normalized question. The
     # client-supplied topic_key is not part of the identity.
