@@ -100,7 +100,8 @@ async def _mark_interrupted_evaluation_runs() -> None:
 async def run_research_job(ctx, run_id: str, question: str, mode: str, cache_mode: str,
                            semantic_verification_mode: str | None = None,
                            claim_recovery_mode: str | None = None,
-                           claim_audit_mode: str | None = None):
+                           claim_audit_mode: str | None = None,
+                           generation_prompt_version: str | None = None):
     """Claim and execute one research run.
 
     ARQ may deliver a job more than once (redelivery after a crash, retry after a
@@ -113,6 +114,7 @@ async def run_research_job(ctx, run_id: str, question: str, mode: str, cache_mod
         semantic_verification_mode,
         claim_recovery_mode=claim_recovery_mode,
         claim_audit_mode=claim_audit_mode,
+        generation_prompt_version=generation_prompt_version,
     )
 
 
@@ -187,10 +189,13 @@ async def _run_evaluation_job(ctx, evaluation_run_id: str):
             reference_claims=case.reference_claims, provenance=case.provenance) for case in cases}
         semantic_mode = settings.semantic_claim_verification_mode
         recovery_mode = settings.claim_recovery_mode
+        prompt_version = settings.generation_prompt_version
         provenance = build_run_provenance(
             run_id=str(run.id), dataset_id=str(dataset.id), dataset_name=dataset.name,
             case_hashes=[case_hashes[case.id] for case in cases], case_provenance=[case.provenance for case in cases],
-            mode=mode.value, pipeline_version=effective_pipeline_version(semantic_mode, recovery_mode),
+            mode=mode.value, pipeline_version=effective_pipeline_version(
+                semantic_mode, recovery_mode, generation_prompt_version=prompt_version
+            ),
             semantic_verification_mode=semantic_mode, judge_model=settings.ragas_judge_model,
             embedding_model=settings.embedding_model, prompt_versions=EVALUATION_PROMPT_VERSIONS,
             ragas_rubric_version=RAGAS_RUBRIC_VERSION, fallback_chain=list(EVALUATOR_FALLBACK_CHAIN),
