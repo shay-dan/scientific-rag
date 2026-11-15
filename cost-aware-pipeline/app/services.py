@@ -361,9 +361,9 @@ class ResearchService:
                 logger.info("research_claim_skipped run_id=%s", run_id)
                 return
             attempt = record.attempt
-            # Persisted run intent is authoritative across worker restarts. The
-            # optional job argument supports new jobs; old queued jobs default
-            # safely to off rather than inheriting a changed worker environment.
+            # Persisted run intent is authoritative across worker restarts.
+            # Historical runs without recovery metadata stay strict even if a
+            # stale job argument or newer worker environment says degrade.
             stored_semantic_mode = str(
                 (record.model_metadata or {}).get("semantic_claim_verification_mode")
                 or semantic_verification_mode
@@ -371,7 +371,6 @@ class ResearchService:
             )
             stored_recovery_mode = str(
                 (record.model_metadata or {}).get("claim_recovery_mode")
-                or claim_recovery_mode
                 or "strict"
             )
             effective_pipeline_version(stored_semantic_mode, stored_recovery_mode)
@@ -505,7 +504,6 @@ class ResearchService:
         )
         recovery_mode = str(
             (record.model_metadata or {}).get("claim_recovery_mode")
-            or claim_recovery_mode
             or "strict"
         )
         version = effective_pipeline_version(semantic_mode, recovery_mode)
@@ -513,6 +511,7 @@ class ResearchService:
         trace_closed = False
         orchestrator = None
         vector_service = None
+        research_agent = None
         # Fencing token (R2): the attempt this execution owns. A cancellation or
         # recovery increments it, after which every write from here fails.
         fence = getattr(record, "attempt", None)
@@ -664,6 +663,16 @@ class ResearchService:
                     "failure_kind": error.failure_kind,
                     "recovery": dict(error.recovery_audit),
                     "removals": [item.as_dict() for item in error.removals],
+                }
+            elif research_agent is not None and getattr(research_agent, "last_recovery_audit", None):
+                metadata["claim_validation"] = {
+                    "status": "failed_after_recovery",
+                    "recovery": dict(research_agent.last_recovery_audit),
+                    "removals": [
+                        item.as_dict()
+                        for item in getattr(research_agent, "last_recovery_removals", ())
+                    ],
+                    "downstream_failure_kind": type(error).__name__,
                 }
             metadata["progress"] = {"stage": "Research failed", "role": None, "model": None}
             if orchestrator is not None:

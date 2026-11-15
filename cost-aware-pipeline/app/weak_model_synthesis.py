@@ -120,15 +120,28 @@ class RemovedField:
     errors: tuple[str, ...]
     text: str
     source_id: str
+    unresolved_reason: str | None = None
+    replacement_errors: tuple[str, ...] = ()
+    replacement_text: str | None = None
+    replacement_source_id: str | None = None
 
     def as_dict(self) -> dict:
-        return {
+        result = {
             "target": self.target,
             "reason": self.reason,
             "errors": list(self.errors),
             "text": self.text,
             "source_id": self.source_id,
         }
+        if self.unresolved_reason is not None:
+            result["unresolved_reason"] = self.unresolved_reason
+        if self.replacement_errors or self.replacement_text is not None or self.replacement_source_id is not None:
+            result["rejected_replacement"] = {
+                "errors": list(self.replacement_errors),
+                "text": self.replacement_text,
+                "source_id": self.replacement_source_id,
+            }
+        return result
 
 
 def build_evidence_blocks(documents: Iterable[Document]) -> list[EvidenceBlock]:
@@ -489,7 +502,8 @@ def recover_v2_answer(
                 continue
             if item.action == "drop":
                 removed.append(RemovedField(
-                    target, "model_dropped", invalid[target], claim.text, claim.source_id
+                    target, "model_dropped", invalid[target], claim.text, claim.source_id,
+                    unresolved_reason=item.unresolved_reason,
                 ))
                 continue
             replacement = item.replacement
@@ -505,9 +519,13 @@ def recover_v2_answer(
                 removed.append(RemovedField(
                     target,
                     "replacement_invalid",
-                    replacement_errors or invalid[target],
-                    (replacement.text if replacement is not None else claim.text),
-                    (replacement.source_id if replacement is not None else claim.source_id),
+                    invalid[target],
+                    claim.text,
+                    claim.source_id,
+                    unresolved_reason=item.unresolved_reason,
+                    replacement_errors=replacement_errors,
+                    replacement_text=replacement.text if replacement is not None else None,
+                    replacement_source_id=replacement.source_id if replacement is not None else None,
                 ))
                 continue
             output[section].append(replacement)
@@ -515,6 +533,26 @@ def recover_v2_answer(
             repaired.append(target)
 
     missing_targets = sorted(expected.difference(first_by_target))
+    removed_by_target = {item.target: item.reason for item in removed}
+    seen_targets: set[str] = set()
+    repair_items: list[dict] = []
+    for item in batch.repairs:
+        if item.target not in expected:
+            disposition = "unexpected"
+        elif item.target in seen_targets:
+            disposition = "duplicate"
+        else:
+            seen_targets.add(item.target)
+            disposition = "repaired" if item.target in repaired else removed_by_target.get(
+                item.target, "ignored"
+            )
+        repair_items.append({
+            "target": item.target,
+            "action": item.action,
+            "disposition": disposition,
+            "unresolved_reason": item.unresolved_reason,
+        })
+
     audit = {
         "claims_before": len(original.claims),
         "claims_after": len(output["claims"]),
@@ -526,6 +564,7 @@ def recover_v2_answer(
         "missing_targets": missing_targets,
         "duplicate_targets": duplicate_targets,
         "unexpected_targets": unexpected_targets,
+        "repair_items": repair_items,
         "removal_count": len(removed),
         "removals": [item.as_dict() for item in removed],
     }

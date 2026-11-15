@@ -408,12 +408,13 @@ async def _arq_result_only(redis, job_id: str) -> bool:
 
 def _enqueue_arguments(record: ResearchRun) -> tuple:
     metadata = record.model_metadata or {}
-    return (
+    arguments = (
         "run_research_job", str(record.id), record.question, str(metadata.get("mode", "fast")),
         str(metadata.get("cache_mode", "use_cached_answer")),
         str(metadata.get("semantic_claim_verification_mode") or "off"),
-        str(metadata.get("claim_recovery_mode") or "strict"),
     )
+    recovery_mode = str(metadata.get("claim_recovery_mode") or "strict")
+    return (*arguments, recovery_mode) if recovery_mode == "degrade" else arguments
 
 
 async def enqueue_run(redis, record: ResearchRun):

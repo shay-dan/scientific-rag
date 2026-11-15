@@ -1444,9 +1444,9 @@ class ResearchAgent:
     def __init__(self, vector_service, max_synthesis_subquestions: int = 2, retrieval_documents: int = 6,
                  max_context_documents: int = 8, progress_callback=None,
                  semantic_verification_mode: Literal["off", "shadow", "enforce"] = "off",
-                 claim_recovery_mode: Literal["strict", "degrade"] = "strict",
                  semantic_verification_timeout_seconds: float = 120,
-                 semantic_verification_max_gateway_invocations: int = SEMANTIC_VERIFICATION_MAX_GATEWAY_INVOCATIONS):
+                 semantic_verification_max_gateway_invocations: int = SEMANTIC_VERIFICATION_MAX_GATEWAY_INVOCATIONS,
+                 claim_recovery_mode: Literal["strict", "degrade"] = "strict"):
         if semantic_verification_mode not in {"off", "shadow", "enforce"}:
             raise ValueError(f"Unsupported semantic verification mode: {semantic_verification_mode}")
         if claim_recovery_mode not in {"strict", "degrade"}:
@@ -1465,6 +1465,8 @@ class ResearchAgent:
         self.claim_recovery_mode = claim_recovery_mode
         self.semantic_verification_timeout_seconds = semantic_verification_timeout_seconds
         self.semantic_verification_max_gateway_invocations = semantic_verification_max_gateway_invocations
+        self.last_recovery_audit: dict | None = None
+        self.last_recovery_removals: tuple[RemovedField, ...] = ()
 
     async def _progress(self, stage: str, role: str | None = None):
         if self.progress_callback:
@@ -1700,6 +1702,8 @@ ANSWER LINES:
                 recovered, repair_audit, removals = recover_v2_answer(
                     structured_answer, repair_batch, evidence_blocks
                 )
+                self.last_recovery_audit = repair_audit
+                self.last_recovery_removals = removals
                 if recovered is None:
                     raise NoValidClaimsRemain(repair_audit, removals)
                 structured_answer = recovered

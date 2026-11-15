@@ -34,6 +34,9 @@ has one stable diagnostic reason:
 These codes describe repair mechanics, not semantic support or scientific evidence
 strength. Source IDs and quotations on surviving fields are preserved and revalidated.
 Limitations may all be removed as long as at least one answer claim survives.
+Invalid replacements retain the original field and validation errors separately from
+the rejected replacement. Model-provided `unresolved_reason` values remain audit-only;
+they are not added to prompts, logs, or public error text.
 
 ## Failure semantics
 
@@ -48,6 +51,10 @@ existing `insufficient_evidence` outcome before synthesis. Provider errors, time
 budget refusals, invalid structured output, and semantic-enforcement failures continue
 to propagate through their existing failure paths.
 
+If semantic enforcement fails after partial structural recovery, the failed run retains
+the recovery audit and removals with `status=failed_after_recovery`; the semantic error
+type and enforcement behavior remain unchanged.
+
 ## Calls, cache, and rollback
 
 Recovery is pure Python and causes no provider call. A run still performs at most one
@@ -58,6 +65,11 @@ cross-mode reuse. No migration or public `/v1` schema change is required.
 Rollback is one configuration change: set `CLAIM_RECOVERY_MODE=strict`. Existing v15
 strict cache entries become eligible again; degrade records remain readable but are not
 reused by strict requests. No data cleanup is needed.
+
+Before rolling back to a worker version that does not accept recovery-mode job
+arguments, drain queued degrade jobs or let them finish on updated workers. Strict jobs
+retain the historical shorter argument shape and remain compatible with mixed-version
+workers.
 
 ## Limitations
 
@@ -73,7 +85,7 @@ implementation, the focused file ran 9 tests: the strict compatibility case pass
 8 desired recovery/configuration/typed-failure cases errored because the R7A contracts
 did not exist.
 
-Final local Docker evidence on the R7A branch:
+Initial local Docker evidence on the R7A branch:
 
 - Focused R7A: 15/15 passed.
 - Full deterministic suite: 784 executed, 726 passed, 58 skipped, 0 failures.
@@ -86,3 +98,14 @@ The baseline and one post-change repeat exposed an existing timing-sensitive
 `LeaseKeeperTests.test_transient_renewal_errors_do_not_cancel` failure; the final full
 run passed it. No unrelated lifecycle code was changed. Historical Gradio tests require
 their separate dependency image and are left to the existing CI job.
+
+The targeted review-correction pass first ran 45 focused recovery/lifecycle tests
+against the reviewed head: 3 failed and 2 errored, reproducing audit separation,
+persisted-mode precedence, constructor compatibility, strict queue shape, and
+downstream audit-retention gaps. Final correction evidence:
+
+- R7A plus semantic-verification integration: 52/52 passed.
+- Full deterministic suite: 799 executed, 741 passed, 58 skipped, 0 failures.
+- PostgreSQL/pgvector and Redis integration: 57/57 passed.
+- Application and tests compiled successfully in the production image.
+- All provider interactions in the new tests are mocks; no live provider calls ran.
