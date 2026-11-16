@@ -1,6 +1,6 @@
 # Scientific RAG — engineering roadmap
 
-**Status:** authoritative planning document. Last updated 2026-11-16 (R7D-A complete; R7D-B exploratory pilot awaiting runtime dry run).
+**Status:** authoritative planning document. Last updated 2026-11-16 (R7D-A complete; R7D-B incremental execution safety in review).
 **Origin:** owner-approved *Master Implementation Plan*, which consolidated an independent
 audit, a reconciled R0–R13 roadmap, a discovery/evidence-acquisition addendum, and the
 historical engineering handover. Changes to this file require owner approval and an entry
@@ -32,7 +32,7 @@ Operating rules for agents are in [`AGENTS.md`](../AGENTS.md). History, complete
 | R4 | Evaluation integrity and reproducibility | **complete** (PR #11, `359e02c`) | R0 |
 | R5 | Offline semantic-verifier evaluation harness | **complete** (PR #12, `b21bc37`) | R0 |
 | R6 | Human-reviewed evidence packs and labels | R6A **complete** (PR #13, `60b394a`); R6B **complete** (PR #14, `e6bf0ee`); R6C **complete** (PR #15, `693b7a5`); R6D **complete** (PR #16, `5328573`) | R4, R5; R3 preferred |
-| R7 | Deterministic claim checks, graceful degradation | R7A **complete** (PR #17, `d638e15`); R7B **complete** (PR #18, `45f85a9`); R7C **complete** (PR #19, `23560a7`); R7D-A **complete** (PR #20, `6710fc4`); R7D route hotfix **complete** (PR #21, `14938d9`); R7D-B **not started** (private manifest prepared; dry run pending) | R5, R6 |
+| R7 | Deterministic claim checks, graceful degradation | R7A **complete** (PR #17, `d638e15`); R7B **complete** (PR #18, `45f85a9`); R7C **complete** (PR #19, `23560a7`); R7D-A **complete** (PR #20, `6710fc4`); R7D route hotfix **complete** (PR #21, `14938d9`); R7D-B incremental safety **in review** (no paid calls) | R5, R6 |
 | R9-D | Discovery candidate pool, ranking, backfilling | not started | R6 pilot, R2 |
 | R9-P | PMC scientific-content extraction | conditional | R6 fixtures; R7 preferred |
 | R8 | Semantic-verifier calibration and release decision | not started | R3, R5, R6, R7 |
@@ -713,8 +713,9 @@ uncertainty. Expansion is a separate decision.
 ## R7 — Deterministic claim checks and graceful degradation
 
 **Status:** R7A–R7C complete; R7D-A offline harness complete; R7D-B owner-waived,
-AI-assisted exploratory development pilot prepared privately, with runtime dry run and
-paid comparison not yet executed. **Priority:** high.
+AI-assisted exploratory development pilot prepared privately; the opt-in incremental
+checkpoint/resume extension is in review, with no inference against unmerged code.
+**Priority:** high.
 Independent of R9-D.
 
 R7 is split into separately authorized stages in this order:
@@ -741,6 +742,8 @@ R7 is split into separately authorized stages in this order:
    authorization are still required. Contract:
    [generation-evaluation-r7d.md](../cost-aware-pipeline/docs/generation-evaluation-r7d.md).
    Execution instructions: [R7D exploratory runbook](r7d-exploratory-runbook.md).
+   Free-tier staged execution contract:
+   [R7D-B incremental execution](../cost-aware-pipeline/docs/generation-evaluation-r7d-incremental.md).
 
 R7A never converts zero surviving claims to `insufficient_evidence`; that outcome
 remains reserved for the independent evidence-sufficiency gate. R7A merged in PR #17 as
@@ -932,6 +935,7 @@ load evidence; large synthetic evaluation sets presented as gold data.
 
 | Date | Decision | Evidence / reason |
 |---|---|---|
+| 2026-11-16 | Put the minimal R7D-B Free-tier incremental execution extension in review. Keep the frozen 20-case manifest and generation/scoring contracts unchanged; add only opt-in atomic private checkpoints, cumulative ledger restoration, frozen-index pair staging, single-campaign locking, provider rate-header capture, and fail-closed resume. Do not call a provider before merge and a new merge-SHA-bound config, authorization, and zero-call dry run. | The accepted one-shot runner persisted only after the full invocation, so interruption could lose completed billable work. The incremental contract writes before and after every attempt, refuses unresolved attempts rather than duplicating them, and preserves the 80-call / $1.50 campaign ceilings across sessions. Rollback is to omit `incremental-run` or revert the PR; no migration, API, prompt, cache, or default-route change. |
 | 2026-11-16 | Record R7D-A complete (PR #20, `6710fc4`) and the R7D paid-run route hotfix complete (PR #21, `14938d9`). Proceed toward the *R7D-B exploratory development* pilot with the owner's explicit one-pilot waiver of independent human selection review; do **not** describe this as gold, human-reviewed, or calibrated. Private manifest, labels, passage text, scoring materials and keys remain outside Git. A production zero-call dry run, exact code/config/manifest authorization and maximum $1.50 / 80 attempts remain enforced before any paid execution. | Both PRs merged with green post-merge CI and Security. Frozen private 20-case manifest commitment `3dc9e1073a1cea87edf3d328828533553e56dc9319ebf7a65d0e94119b1f5739`; 76 passages, 5 cases per category. Offline source-equivalent cost bound $0.56904060, **not** a production dry run. See [R7D exploratory runbook](r7d-exploratory-runbook.md). |
 | 2026-11-15 | Mark R7C complete (PR #19, `23560a7`) and begin R7D-A as offline-only fixed-evidence evaluation preparation. No live or paid execution is authorized; v15 remains the default. | R7C main CI and Security green. R7D-A requires exactly 20 reviewed label-free development scenarios, v15/v16 as the sole arm difference, owner-side blind scoring, at most 80 physical calls and a proposed $1.50 ceiling. The reviewed manifest is not in the repository and must not be invented. |
 | 2026-11-15 | Mark R7B complete (PR #18, `45f85a9`) and begin R7C with byte-identical v15 as the default and opt-in, persisted, cache-isolated v16 generation instructions. | R7B post-merge CI and Security green; accepted-main Docker baseline 828 deterministic tests (770 passed, 58 skipped) and 57/57 integration. R7C authorization requires a single-variable future comparison and no provider calls. |

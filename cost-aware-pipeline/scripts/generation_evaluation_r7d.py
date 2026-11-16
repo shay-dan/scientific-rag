@@ -25,6 +25,12 @@ from app.benchmark.generation_evaluation import (  # noqa: E402
     run_paid_evaluation,
     unblind_owner_scores,
 )
+from app.benchmark.incremental_generation_evaluation import (  # noqa: E402
+    AtomicCheckpoint,
+    CampaignLocked,
+    CheckpointError,
+    run_incremental_evaluation,
+)
 
 
 def _reject_constant(value: str):
@@ -78,6 +84,29 @@ def _paid_run(args) -> int:
     return 0
 
 
+def _incremental_run(args) -> int:
+    if args.authorization is None:
+        raise AuthorizationError("incremental-run requires --authorization from an exact owner approval")
+    manifest = _load(_private(args.manifest, "manifest"))
+    config = _load(_private(args.config, "config"))
+    authorization = _load(_private(args.authorization, "authorization"))
+    store = AtomicCheckpoint(_private(args.private_checkpoint, "private checkpoint"))
+    with store.locked():
+        checkpoint = asyncio.run(run_incremental_evaluation(
+            manifest, config, authorization=authorization, checkpoint_store=store,
+            pairs=args.pairs, resume_after_rate_limit=args.resume_after_rate_limit,
+        ))
+    records = checkpoint["records"]
+    print(json.dumps({
+        "checkpoint_sha256": checkpoint["checkpoint_sha256"],
+        "completed_pairs": sum(record.get("status") == "completed" for record in records),
+        "physical_requests": checkpoint["execution"]["budget"]["provider_calls_charged"],
+        "stopped": checkpoint["execution"].get("stopped"),
+        "stop_code": checkpoint["execution"].get("stop_code"),
+    }, sort_keys=True))
+    return 0
+
+
 def _blind_packet(args) -> int:
     manifest = _load(_private(args.manifest, "manifest"))
     payload = _load(_private(args.private_records, "private records"))
@@ -120,6 +149,17 @@ def parser() -> argparse.ArgumentParser:
     paid.add_argument("--authorization", type=Path)
     paid.add_argument("--private-records", type=Path, required=True)
     paid.set_defaults(func=_paid_run)
+    incremental = commands.add_parser(
+        "incremental-run", help="authorized staged execution with an atomic private checkpoint")
+    incremental.add_argument("--manifest", type=Path, required=True)
+    incremental.add_argument("--config", type=Path, required=True)
+    incremental.add_argument("--authorization", type=Path)
+    incremental.add_argument("--private-checkpoint", type=Path, required=True)
+    incremental.add_argument("--pairs", type=int, required=True)
+    incremental.add_argument(
+        "--resume-after-rate-limit", action="store_true",
+        help="explicitly continue only unexecuted work after a recorded 429/quota stop")
+    incremental.set_defaults(func=_incremental_run)
     blind = commands.add_parser("blind-packet", help="build private owner-scoring packet and separate key")
     blind.add_argument("--manifest", type=Path, required=True)
     blind.add_argument("--private-records", type=Path, required=True)
@@ -139,7 +179,7 @@ def main() -> int:
     args = parser().parse_args()
     try:
         return args.func(args)
-    except (AuthorizationError, ManifestError, ValueError) as error:
+    except (AuthorizationError, CampaignLocked, CheckpointError, ManifestError, ValueError) as error:
         raise SystemExit(f"refused: {error}") from None
 
 

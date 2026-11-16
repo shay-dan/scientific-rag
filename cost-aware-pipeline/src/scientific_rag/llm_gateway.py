@@ -207,6 +207,35 @@ RETRYABLE_MARKERS = (
     "invalid json output",
     "output_parsing_failure",
 )
+RATE_LIMIT_HEADER_NAMES = (
+    "retry-after",
+    "x-ratelimit-limit-requests",
+    "x-ratelimit-limit-tokens",
+    "x-ratelimit-remaining-requests",
+    "x-ratelimit-remaining-tokens",
+    "x-ratelimit-reset-requests",
+    "x-ratelimit-reset-tokens",
+)
+
+
+def _rate_limit_headers(value: Any) -> dict[str, str]:
+    if not value or not hasattr(value, "items"):
+        return {}
+    lowered = {str(key).lower(): str(item) for key, item in value.items()}
+    return {name: lowered[name] for name in RATE_LIMIT_HEADER_NAMES if name in lowered}
+
+
+def _error_rate_limit_headers(error: BaseException) -> dict[str, str]:
+    current: BaseException | None = error
+    visited: set[int] = set()
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        headers = getattr(getattr(current, "response", None), "headers", None) or getattr(current, "headers", None)
+        captured = _rate_limit_headers(headers)
+        if captured:
+            return captured
+        current = current.__cause__ or current.__context__
+    return {}
 
 
 @dataclass(frozen=True)
@@ -227,12 +256,14 @@ class ProviderAttempt:
     context_chars: int | None = None
     skipped: bool = False
     admission_wait_ms: float = 0.0
+    rate_limit_headers: dict[str, str] | None = None
 
 
 _trace: ContextVar[list[ProviderAttempt] | None] = ContextVar("llm_gateway_trace", default=None)
 _provider_cooldowns: ContextVar[dict[str, float] | None] = ContextVar("llm_gateway_provider_cooldowns", default=None)
 _provider_failures: ContextVar[dict[str, int] | None] = ContextVar("llm_gateway_provider_failures", default=None)
 _shared_redis: ContextVar[Any | None] = ContextVar("llm_gateway_shared_redis", default=None)
+_capture_rate_limits: ContextVar[bool] = ContextVar("llm_gateway_capture_rate_limits", default=False)
 
 
 class _TokenUsageHandler(BaseCallbackHandler):
@@ -240,9 +271,17 @@ class _TokenUsageHandler(BaseCallbackHandler):
         self.input_tokens = 0
         self.output_tokens = 0
         self.has_usage = False
+        self.rate_limit_headers: dict[str, str] = {}
 
     def on_llm_end(self, response, **kwargs) -> None:
         usage = getattr(response, "llm_output", None) or {}
+        self.rate_limit_headers.update(_rate_limit_headers(usage.get("headers") or usage.get("response_headers")))
+        messages = [getattr(generation, "message", None)
+                    for group in getattr(response, "generations", []) or [] for generation in group]
+        for message in messages:
+            metadata = getattr(message, "response_metadata", None) or {}
+            self.rate_limit_headers.update(
+                _rate_limit_headers(metadata.get("headers") or metadata.get("response_headers")))
         token_usage = usage.get("token_usage") or usage.get("usage") or {}
         input_tokens, output_tokens = _usage_pair(token_usage)
         if input_tokens is not None and output_tokens is not None:
@@ -250,13 +289,12 @@ class _TokenUsageHandler(BaseCallbackHandler):
             self.output_tokens += output_tokens
             self.has_usage = True
             return
-        for group in getattr(response, "generations", []) or []:
-            for generation in group:
-                input_tokens, output_tokens = _usage_counts(getattr(generation, "message", None))
-                if input_tokens is not None and output_tokens is not None:
-                    self.input_tokens += input_tokens
-                    self.output_tokens += output_tokens
-                    self.has_usage = True
+        for message in messages:
+            input_tokens, output_tokens = _usage_counts(message)
+            if input_tokens is not None and output_tokens is not None:
+                self.input_tokens += input_tokens
+                self.output_tokens += output_tokens
+                self.has_usage = True
 
 
 def _usage_pair(usage: Any) -> tuple[int | None, int | None]:
@@ -269,19 +307,28 @@ def _usage_pair(usage: Any) -> tuple[int | None, int | None]:
     return int(input_tokens), int(output_tokens)
 
 
-def begin_trace(redis: Any | None = None) -> tuple[Token, Token, Token, Token]:
+def begin_trace(
+    redis: Any | None = None, *, capture_rate_limits: bool = False,
+) -> tuple[Token, Token, Token, Token, Token]:
     """Start an isolated trace for one research run."""
-    return _trace.set([]), _provider_cooldowns.set({}), _provider_failures.set({}), _shared_redis.set(redis)
+    return (_trace.set([]), _provider_cooldowns.set({}), _provider_failures.set({}),
+            _shared_redis.set(redis), _capture_rate_limits.set(bool(capture_rate_limits)))
 
 
-def end_trace(token: tuple[Token, Token, Token, Token]) -> list[dict[str, Any]]:
+def end_trace(token: tuple[Token, Token, Token, Token, Token]) -> list[dict[str, Any]]:
     """Return serializable attempt metadata and restore the prior context."""
     attempts = list(_trace.get() or [])
+    capture_rate_limits = _capture_rate_limits.get()
     _trace.reset(token[0])
     _provider_cooldowns.reset(token[1])
     _provider_failures.reset(token[2])
     _shared_redis.reset(token[3])
-    return [asdict(attempt) for attempt in attempts]
+    _capture_rate_limits.reset(token[4])
+    serialized = [asdict(attempt) for attempt in attempts]
+    if not capture_rate_limits:
+        for attempt in serialized:
+            attempt.pop("rate_limit_headers", None)
+    return serialized
 
 
 def summarize_trace(attempts: list[dict[str, Any]]) -> dict[str, Any]:
@@ -481,6 +528,8 @@ def create_chat_model(provider: str, role: str, temperature: float, max_output_t
                 "HTTP-Referer": os.getenv("OPENROUTER_SITE_URL", "https://github.com/shay-dan/scientific-rag"),
                 "X-Title": os.getenv("OPENROUTER_APP_NAME", "Scientific RAG"),
             }
+        if _capture_rate_limits.get():
+            kwargs["include_response_headers"] = True
         if limit is not None:
             guard = _OutputLimitGuard(provider, limit)
             kwargs["max_tokens"] = limit
@@ -693,7 +742,11 @@ async def ainvoke(role: str, temperature: float, chain_builder: Callable[[Any], 
                 input_tokens, output_tokens = usage_handler.input_tokens, usage_handler.output_tokens
             if input_tokens is not None and output_tokens is not None:
                 actual_tokens = input_tokens + output_tokens
-            _record(ProviderAttempt(call_id, attempt_index, provider, model, role, latency_ms, True, False, input_tokens=input_tokens, output_tokens=output_tokens, recovery=recovery_phase, context_chars=context_chars, admission_wait_ms=admission.wait_ms if admission else 0))
+            _record(ProviderAttempt(call_id, attempt_index, provider, model, role, latency_ms, True, False,
+                                    input_tokens=input_tokens, output_tokens=output_tokens,
+                                    recovery=recovery_phase, context_chars=context_chars,
+                                    admission_wait_ms=admission.wait_ms if admission else 0,
+                                    rate_limit_headers=usage_handler.rate_limit_headers or None))
             if failures is not None:
                 failures[provider] = 0
             if cooldowns is not None:
@@ -724,7 +777,11 @@ async def ainvoke(role: str, temperature: float, chain_builder: Callable[[Any], 
                     logger.info("llm_gateway_circuit_open provider=%s role=%s failures=%s", provider, role, failures[provider])
             input_tokens = usage_handler.input_tokens if usage_handler.has_usage else None
             output_tokens = usage_handler.output_tokens if usage_handler.has_usage else None
-            _record(ProviderAttempt(call_id, attempt_index, provider, model, role, latency_ms, False, retryable, status, type(error).__name__, input_tokens, output_tokens, recovery_phase, context_chars, False, admission.wait_ms if admission else 0))
+            _record(ProviderAttempt(call_id, attempt_index, provider, model, role, latency_ms, False,
+                                    retryable, status, type(error).__name__, input_tokens, output_tokens,
+                                    recovery_phase, context_chars, False,
+                                    admission.wait_ms if admission else 0,
+                                    _error_rate_limit_headers(error) or None))
             logger.warning(
                 "llm_gateway_failure provider=%s model=%s role=%s latency_ms=%s status=%s retryable=%s error_type=%s",
                 provider, model, role, latency_ms, status, retryable, type(error).__name__,

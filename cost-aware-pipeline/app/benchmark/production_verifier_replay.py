@@ -178,6 +178,39 @@ class BudgetLedger:
         self.calls = 0
         self.complete = self.lower_bound = self.uncertain = self.unsettled = self.charged = 0.0
 
+    @classmethod
+    def from_snapshot(cls, max_calls: int, max_cost_usd: float, snapshot: dict) -> "BudgetLedger":
+        """Restore a checkpointed ledger without relaxing either authorization ceiling."""
+        if not isinstance(snapshot, dict):
+            raise ValueError("budget snapshot must be an object")
+        required = {
+            "provider_calls_charged", "cost_complete_usd", "known_cost_lower_bound_usd",
+            "uncertain_reserved_usd", "unsettled_reserved_usd", "budget_charged_usd",
+        }
+        if set(snapshot) != required:
+            raise ValueError("budget snapshot fields do not match the ledger contract")
+        calls = snapshot["provider_calls_charged"]
+        if type(calls) is not int or calls < 0 or calls > max_calls:
+            raise ValueError("checkpointed provider call count exceeds the authorization")
+        values = {key: snapshot[key] for key in required - {"provider_calls_charged"}}
+        if any(not isinstance(value, (int, float)) or isinstance(value, bool)
+               or not math.isfinite(value) or value < 0 for value in values.values()):
+            raise ValueError("checkpointed budget values must be finite and non-negative")
+        if values["budget_charged_usd"] > max_cost_usd + 1e-9:
+            raise ValueError("checkpointed cost exceeds the authorization")
+        accounted = (values["cost_complete_usd"] + values["uncertain_reserved_usd"]
+                     + values["unsettled_reserved_usd"])
+        if not math.isclose(values["budget_charged_usd"], accounted, abs_tol=1e-8):
+            raise ValueError("checkpointed budget charge does not reconcile with its components")
+        ledger = cls(max_calls, max_cost_usd)
+        ledger.calls = calls
+        ledger.complete = float(values["cost_complete_usd"])
+        ledger.lower_bound = float(values["known_cost_lower_bound_usd"])
+        ledger.uncertain = float(values["uncertain_reserved_usd"])
+        ledger.unsettled = float(values["unsettled_reserved_usd"])
+        ledger.charged = float(values["budget_charged_usd"])
+        return ledger
+
     def reserve(self, cost: float | None) -> bool:
         """Charge one call and its reserved cost, or refuse if either allowance would be exceeded."""
         if cost is None or self.calls + 1 > self.max_calls or self.charged + cost > self.max_cost_usd:
