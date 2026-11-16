@@ -125,7 +125,7 @@ deviation.
 - Verify authorization with `check_paid_authorization` before passing a
   credential. The budget is application-enforced; provider-side billing,
   hidden retries and incomplete usage still require post-run reconciliation.
-- Run **one** bounded attempt; never repeat or expand the campaign simply
+- Run **one** bounded 20-pair campaign; never repeat or expand it simply
   because some cases failed. Fail closed on route drift, missing usage,
   cost uncertainty, rate drift or unexpected retries.
 
