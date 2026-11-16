@@ -7,10 +7,16 @@ auditing, cache identity, or defaults.
 
 ## Current status and data boundary
 
-The repository does not contain an owner-reviewed, label-free 20-scenario development
-selection. No scenario was invented to fill that gap. Consequently, scientific dry-run
-readiness is **blocked on the private reviewed manifest**, and paid execution remains
-unauthorized. Synthetic cases exist only inside unit tests to exercise the contract.
+R7D-A merged in PR #20 (`6710fc4`); the strict expert-route tuple comparison was
+corrected in PR #21 (`14938d9`). Both passed CI and Security after merge. As of
+2026-11-16, the owner has separately frozen a **private, label-free, unreviewed,
+AI-assisted exploratory** 20-case R6B development subset under an explicit
+one-pilot waiver of independent human selection review. The manifest commitment is
+`3dc9e1073a1cea87edf3d328828533553e56dc9319ebf7a65d0e94119b1f5739`.
+There are 5 cases in each of 4 categories and 76 evidence passages. Neither the
+manifest nor scientific case text is included in this public repository. The
+production CLI dry run, paid generation and scoring **have not run**. Synthetic cases
+exist only inside unit tests to exercise the contract.
 
 Private manifests, generation outputs, blind-scoring packets, arm keys, and owner scores
 must stay outside this public repository. The public report contains only opaque scenario
@@ -150,8 +156,12 @@ Preparation can be automated as follows:
    translate their existing evidence IDs to stable `S#` citation IDs, calculate passage,
    question/context and manifest hashes, and run the zero-call R7D dry run.
 
-Independent human review is required before freezing selection. A reviewer who has not
-seen v15/v16 outputs or private correctness labels must inspect the original R6 question
+Independent human review is normally required before scientific-eligibility approval.
+For **this one R7D-B exploratory pilot only**, the owner explicitly waived that human
+gate and froze an unreviewed selection. This is a scope exception, not an acceptance of
+scientific validity, gold labels, downstream deployment, or a permanent change to
+benchmark policy. A future gold-quality evaluation still needs a reviewer who has not
+seen v15/v16 outputs or private correctness labels to inspect the original R6 question
 and passages and confirm: exact transcription and provenance; enough context to assess an
 answer without outside evidence; no answer/reference-label leakage; a defensible primary
 category; scientific and study-design diversity; and no near duplicate. Select five
@@ -175,11 +185,14 @@ python scripts/generation_evaluation_r7d.py public-report --private-records PRIV
   --scores OWNER_BLIND_SCORES --private-key PRIVATE_KEY --out PUBLIC_REPORT
 ```
 
-Rollback is removal of the isolated benchmark module, CLI, tests and this document. No
-database migration or production setting needs reversal. Known limitations are the absent
-reviewed manifest; provider-side tokenization and billing outside application control;
-dated pricing that must be reverified; human owner scoring variability; and a 20-case
-development pilot too small to establish broad end-to-end scientific accuracy.
+Rollback is removal of the isolated benchmark module, CLI, tests and this document.
+No database migration or production setting needs reversal. Known limitations: the
+available frozen manifest is **owner-waived and unreviewed** rather than scientifically
+approved; all cases are biomedical and the attribution packs are single-paper; most
+redistribution permissions are not established; provider-side tokenization and billing
+remain outside application control; dated prices must be reverified; owner/AI-assisted
+scoring is variable; and a 20-case development pilot is too small to establish broad
+end-to-end scientific accuracy. Never publish private case text or raw model outputs.
 
 ## R7D-A verification
 
@@ -188,3 +201,35 @@ Its main CI and Security workflows completed successfully. R7D-A began from that
 commit. The pre-change Docker baseline executed 845 deterministic tests with zero
 failures and 58 skips. Focused and final verification evidence is recorded in PR #20.
 No provider request was made.
+
+## 2026-11-16 R7D status, owner waiver, and regression fix
+
+- **Merged code:** R7D-A PR [#20](https://github.com/shay-dan/scientific-rag/pull/20)
+  at `6710fc47edca07f8028b9f8deebce374f77e7aba` and the R7D paid-route
+  correctness PR [#21](https://github.com/shay-dan/scientific-rag/pull/21)
+  at `14938d91b66acb6c8fe85e1b164100030a9383bc`.
+- **PR #21 defect:** `llm_gateway.provider_order("expert")` returns a tuple but
+  `run_paid_evaluation` previously compared it to a one-element list, so a correct
+  Groq-only route was rejected. The production comparison now uses a one-element
+  tuple. Regression tests use tuple-return mocks and reject fallback or model drift.
+  Production defaults and price/call ceilings were not changed.
+- **Verification:** GitHub post-merge [CI](https://github.com/shay-dan/scientific-rag/actions/runs/43841265124)
+  and [Security](https://github.com/shay-dan/scientific-rag/actions/runs/43841265123)
+  passed for PR #21. No paid provider call was made during the fix.
+- **Private inputs:** validated R6B v0.3.1 label-free handoff SHA-256
+  `73948667be7919aa38da30323dbc3ee8dfb92ebe7334f673cc76a736ed36a70f`;
+  private frozen 20-case manifest commitment
+  `3dc9e1073a1cea87edf3d328828533553e56dc9319ebf7a65d0e94119b1f5739`.
+  Selection metadata explicitly says `human_review_waived_by_owner`.
+- **Owner-side preparation (not production execution):** 20 cases, 76 fixed
+  excerpts, 5/category, balanced 10/10 prompt execution order, maximum 80
+  physical calls. A source-equivalent offline calculation of the *conservative
+  plan* was $0.56904060 at dated Groq rates; compare to the official dry run,
+  never represent that estimate as measured provider spend.
+- **Not yet done:** official production dry run on the final accepted commit,
+  exact authorization file for that final code/config/manifest, 20 paired
+  provider executions, blind scoring, or any scientific result. No paid
+  calls or spend have occurred.
+
+The executable operator checklist, run commands, stop conditions and privacy
+handling are in the [public R7D exploratory runbook](../../docs/r7d-exploratory-runbook.md).
