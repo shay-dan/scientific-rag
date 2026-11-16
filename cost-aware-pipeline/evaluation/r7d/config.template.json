@@ -1,0 +1,19 @@
+{
+  "claim_audit_mode": "off",
+  "claim_recovery_mode": "strict",
+  "code_sha": "REPLACE_WITH_ACCEPTED_40_HEX_COMMIT_SHA",
+  "max_calls": 80,
+  "max_cost_usd": 1.5,
+  "max_input_tokens": 100000,
+  "max_output_tokens": 2000,
+  "model_context_tokens": 131072,
+  "model": "openai/gpt-oss-120b",
+  "prompt_versions": [
+    "v15",
+    "v16"
+  ],
+  "provider": "groq",
+  "schema": "scientific-rag-generation-eval-config/v1",
+  "semantic_verification_mode": "off",
+  "temperature": 0
+}
