@@ -494,6 +494,52 @@ class LLMGatewayRoutingTests(unittest.IsolatedAsyncioTestCase):
 
 
 class LLMGatewayConfigurationTests(unittest.TestCase):
+    def test_rate_header_capture_is_trace_opt_in(self) -> None:
+        with patch.dict(os.environ, {"GROQ_API_KEY": "test-key"}, clear=False), \
+             patch.object(llm_gateway, "ChatOpenAI", return_value=object()) as constructor:
+            llm_gateway.create_chat_model("groq", "expert", 0)
+            self.assertNotIn("include_response_headers", constructor.call_args.kwargs)
+            token = llm_gateway.begin_trace(capture_rate_limits=True)
+            try:
+                llm_gateway.create_chat_model("groq", "expert", 0)
+                self.assertIs(constructor.call_args.kwargs["include_response_headers"], True)
+            finally:
+                llm_gateway.end_trace(token)
+
+        token = llm_gateway.begin_trace()
+        llm_gateway._record(llm_gateway.ProviderAttempt(
+            "call", 0, "groq", "model", "expert", 1.0, True, False,
+            rate_limit_headers={"x-ratelimit-remaining-tokens": "7"},
+        ))
+        self.assertNotIn("rate_limit_headers", llm_gateway.end_trace(token)[0])
+
+        token = llm_gateway.begin_trace(capture_rate_limits=True)
+        llm_gateway._record(llm_gateway.ProviderAttempt(
+            "call", 0, "groq", "model", "expert", 1.0, True, False,
+            rate_limit_headers={"x-ratelimit-remaining-tokens": "7"},
+        ))
+        self.assertEqual(
+            {"x-ratelimit-remaining-tokens": "7"},
+            llm_gateway.end_trace(token)[0]["rate_limit_headers"],
+        )
+
+    def test_usage_handler_allowlists_rate_limit_headers(self) -> None:
+        handler = llm_gateway._TokenUsageHandler()
+        message = SimpleNamespace(
+            usage_metadata={"input_tokens": 3, "output_tokens": 2},
+            response_metadata={"headers": {
+                "X-RateLimit-Remaining-Tokens": "7995",
+                "Authorization": "must-not-be-recorded",
+            }},
+        )
+        response = SimpleNamespace(
+            llm_output={"token_usage": {"prompt_tokens": 3, "completion_tokens": 2}},
+            generations=[[SimpleNamespace(message=message)]],
+        )
+        handler.on_llm_end(response)
+        self.assertEqual({"x-ratelimit-remaining-tokens": "7995"}, handler.rate_limit_headers)
+        self.assertEqual((3, 2), (handler.input_tokens, handler.output_tokens))
+
     def test_openrouter_query_repair_defaults_to_configured_qwen_model(self) -> None:
         with patch.dict(os.environ, {
             "GROQ_MODEL": "openai/gpt-oss-120b",

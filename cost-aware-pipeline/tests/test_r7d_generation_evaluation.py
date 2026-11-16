@@ -1,6 +1,9 @@
 import asyncio
 import copy
 import json
+from pathlib import Path
+import stat
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -22,6 +25,12 @@ from app.benchmark.generation_evaluation import (
     validate_manifest,
 )
 from app.benchmark.production_verifier_replay import BudgetLedger
+from app.benchmark.incremental_generation_evaluation import (
+    AtomicCheckpoint,
+    CampaignLocked,
+    CheckpointError,
+    run_incremental_evaluation,
+)
 from app.weak_model_synthesis import StructuredEvidenceAnswerV2, V2RepairBatch
 
 
@@ -489,6 +498,288 @@ class GateAndReportTests(unittest.TestCase):
                 records, scores={"D001": {"winner": "v15", "metrics": {}}},
                 manifest_sha256=manifest["manifest_sha256"], config_sha256="e" * 64,
             )
+
+
+class IncrementalExecutionTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.store = AtomicCheckpoint(Path(self.temporary.name) / "r7d-checkpoint.private.json")
+        self.manifest = _manifest()
+        self.config = _config()
+        self.authorization = GateAndReportTests()._authorization(self.manifest, self.config)
+
+    @staticmethod
+    def _summary(*, headers=None, complete=True, status=None, provider_calls=1, cost=0.000021):
+        attempt = {
+            "provider": "groq", "model": "openai/gpt-oss-120b", "status_code": status,
+            "rate_limit_headers": headers or {},
+        }
+        return {
+            "token_usage_complete": complete,
+            "estimated_cost_usd": cost if complete else None,
+            "provider_calls": provider_calls,
+            "input_tokens": 100 if complete else None,
+            "output_tokens": 10 if complete else None,
+            "by_model": {"groq:openai/gpt-oss-120b": {}},
+            "attempts": [attempt],
+        }
+
+    async def _run(self, *, pairs, gateway, summaries, resume_after_rate_limit=False, clock=None):
+        with (patch("scientific_rag.llm_gateway.provider_order", return_value=("groq",)),
+              patch("scientific_rag.llm_gateway.model_for", return_value="openai/gpt-oss-120b"),
+              patch("scientific_rag.llm_gateway.begin_trace", return_value=object()),
+              patch("scientific_rag.llm_gateway.end_trace", return_value=[]),
+              patch("scientific_rag.llm_gateway.summarize_trace", side_effect=summaries)):
+            return await run_incremental_evaluation(
+                self.manifest, self.config, authorization=self.authorization,
+                checkpoint_store=self.store, pairs=pairs, gateway=gateway,
+                resume_after_rate_limit=resume_after_rate_limit,
+                provenance_resolver=lambda: {"sha": "a" * 40, "source": "test"},
+                **({"clock": clock} if clock is not None else {}),
+            )
+
+    @staticmethod
+    def _headers():
+        return {
+            "x-ratelimit-limit-requests": "30",
+            "x-ratelimit-remaining-requests": "29",
+            "x-ratelimit-limit-tokens": "8000",
+            "x-ratelimit-remaining-tokens": "8000",
+            "x-ratelimit-reset-requests": "1h",
+            "x-ratelimit-reset-tokens": "1m",
+        }
+
+    async def test_checkpoint_recovery_preserves_order_budget_and_prompt_fingerprints(self):
+        calls = []
+
+        async def gateway(role, temperature, prompt, schema, *, max_output_tokens):
+            calls.append((prompt, schema))
+            return StructuredEvidenceAnswerV2(claims=[_claim()])
+
+        first = await self._run(
+            pairs=1, gateway=gateway,
+            summaries=[self._summary(headers=self._headers()) for _ in range(2)],
+        )
+        first_revision = first["checkpoint_revision"]
+        self.assertEqual(0o600, stat.S_IMODE(self.store.path.stat().st_mode))
+        self.assertEqual(["D001"], [record["scenario_id"] for record in first["records"]])
+        self.assertEqual(["v15", "v16"], [arm["prompt_version"] for arm in first["records"][0]["arms"]])
+        original_fingerprints = copy.deepcopy(first["prompt_contracts"])
+        second = await self._run(
+            pairs=1, gateway=gateway,
+            summaries=[self._summary(headers=self._headers()) for _ in range(2)],
+        )
+        self.assertEqual(["D001", "D002"], [record["scenario_id"] for record in second["records"]])
+        self.assertEqual(["v16", "v15"], [arm["prompt_version"] for arm in second["records"][1]["arms"]])
+        self.assertEqual(original_fingerprints, second["prompt_contracts"])
+        self.assertEqual(4, second["execution"]["budget"]["provider_calls_charged"])
+        self.assertAlmostEqual(0.000084, second["execution"]["budget"]["cost_complete_usd"])
+        self.assertGreater(second["checkpoint_revision"], first_revision)
+        self.assertEqual(4, len(calls))
+
+    async def test_repeated_completed_campaign_is_refused_without_a_call(self):
+        calls = 0
+
+        async def gateway(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return StructuredEvidenceAnswerV2(claims=[_claim()])
+
+        checkpoint = await self._run(
+            pairs=20, gateway=gateway,
+            summaries=[self._summary(headers=self._headers()) for _ in range(40)],
+        )
+        packet, blind_key = build_blind_scoring_packet(self.manifest, checkpoint["records"])
+        self.assertEqual(20, len(packet["cases"]))
+        self.assertEqual(20, len(blind_key["arms"]))
+        self.assertTrue(all(case["scorable"] for case in packet["cases"]))
+        with self.assertRaisesRegex(CheckpointError, "no unexecuted pairs"):
+            await self._run(pairs=1, gateway=gateway, summaries=[])
+        self.assertEqual(40, calls)
+
+    async def test_partial_pair_stops_when_remaining_capacity_is_unknown(self):
+        calls = 0
+
+        async def gateway(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return StructuredEvidenceAnswerV2(claims=[_claim()])
+
+        checkpoint = await self._run(
+            pairs=1, gateway=gateway, summaries=[self._summary(headers={})],
+        )
+        record = checkpoint["records"][0]
+        self.assertEqual("partial", record["status"])
+        self.assertEqual(["v15"], [arm["prompt_version"] for arm in record["arms"]])
+        self.assertEqual("rate_limit_capacity_unknown", checkpoint["execution"]["stop_code"])
+        self.assertEqual(1, calls)
+
+    async def test_explicit_resume_uses_elapsed_token_reset_instead_of_stale_remaining(self):
+        now = [1_000.0]
+        calls = 0
+
+        async def gateway(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return StructuredEvidenceAnswerV2(claims=[_claim()])
+
+        exhausted = self._headers() | {
+            "x-ratelimit-remaining-tokens": "0",
+            "x-ratelimit-reset-tokens": "1m0.5s",
+        }
+        first = await self._run(
+            pairs=1, gateway=gateway, summaries=[self._summary(headers=exhausted)],
+            clock=lambda: now[0],
+        )
+        self.assertEqual("rate_limit", first["execution"]["stop_code"])
+        self.assertEqual(
+            1_060.5, first["execution"]["rate_limit_state"]["reset_at_unix"]["tokens"],
+        )
+        self.assertEqual(
+            4_600.0, first["execution"]["rate_limit_state"]["reset_at_unix"]["requests"],
+        )
+        self.assertEqual(1, calls)
+
+        now[0] += 61
+        resumed = await self._run(
+            pairs=1, gateway=gateway, summaries=[self._summary(headers=self._headers())],
+            resume_after_rate_limit=True, clock=lambda: now[0],
+        )
+        self.assertEqual("completed", resumed["records"][0]["status"])
+        self.assertEqual(2, resumed["execution"]["budget"]["provider_calls_charged"])
+        self.assertEqual(1, len(resumed["execution"]["rate_limit_continuations"]))
+        self.assertEqual(2, calls)
+
+    async def test_explicit_resume_before_reset_remains_stopped_without_a_call(self):
+        now = [1_000.0]
+        calls = 0
+
+        async def gateway(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return StructuredEvidenceAnswerV2(claims=[_claim()])
+
+        exhausted = self._headers() | {"x-ratelimit-remaining-tokens": "0"}
+        await self._run(
+            pairs=1, gateway=gateway, summaries=[self._summary(headers=exhausted)],
+            clock=lambda: now[0],
+        )
+        now[0] += 30
+        checkpoint = await self._run(
+            pairs=1, gateway=gateway, summaries=[], resume_after_rate_limit=True,
+            clock=lambda: now[0],
+        )
+        self.assertEqual("rate_limit", checkpoint["execution"]["stop_code"])
+        self.assertIn("has not elapsed", checkpoint["execution"]["stopped"])
+        self.assertEqual(1, calls)
+
+    async def test_malformed_reset_metadata_refuses_explicit_resume(self):
+        now = [1_000.0]
+        calls = 0
+
+        async def gateway(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return StructuredEvidenceAnswerV2(claims=[_claim()])
+
+        exhausted = self._headers() | {
+            "x-ratelimit-remaining-tokens": "0",
+            "x-ratelimit-reset-tokens": "tomorrow",
+        }
+        await self._run(
+            pairs=1, gateway=gateway, summaries=[self._summary(headers=exhausted)],
+            clock=lambda: now[0],
+        )
+        now[0] += 3_600
+        checkpoint = await self._run(
+            pairs=1, gateway=gateway, summaries=[], resume_after_rate_limit=True,
+            clock=lambda: now[0],
+        )
+        self.assertEqual("rate_limit_capacity_unknown", checkpoint["execution"]["stop_code"])
+        self.assertEqual(1, calls)
+
+    async def test_cancellation_persists_attempt_and_refuses_unsafe_resume(self):
+        calls = 0
+
+        async def gateway(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            raise asyncio.CancelledError()
+
+        with self.assertRaises(asyncio.CancelledError):
+            await self._run(
+                pairs=1, gateway=gateway,
+                summaries=[self._summary(complete=False, cost=None)],
+            )
+        checkpoint = self.store.load()
+        self.assertEqual(1, checkpoint["execution"]["budget"]["provider_calls_charged"])
+        self.assertGreater(checkpoint["execution"]["budget"]["uncertain_reserved_usd"], 0)
+        self.assertIsNotNone(checkpoint["active_arm"])
+        with self.assertRaisesRegex(CheckpointError, "unresolved provider attempt or arm"):
+            await self._run(pairs=1, gateway=gateway, summaries=[])
+        self.assertEqual(1, calls)
+
+    async def test_429_stops_after_one_attempt_without_retrying_other_arm(self):
+        class RateLimitError(Exception):
+            status_code = 429
+
+        calls = 0
+
+        async def gateway(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            raise RateLimitError("rate limit exceeded")
+
+        checkpoint = await self._run(
+            pairs=1, gateway=gateway,
+            summaries=[self._summary(headers={"retry-after": "60"}, complete=False, status=429)],
+        )
+        self.assertEqual("rate_limit", checkpoint["execution"]["stop_code"])
+        self.assertEqual(1, calls)
+        self.assertEqual(1, len(checkpoint["records"][0]["arms"]))
+        self.assertEqual("failed", checkpoint["records"][0]["arms"][0]["status"])
+        with self.assertRaisesRegex(CheckpointError, "pre-transmission capacity stop"):
+            await self._run(
+                pairs=1, gateway=gateway, summaries=[], resume_after_rate_limit=True,
+            )
+        self.assertEqual(1, calls)
+
+    async def test_checkpoint_rejects_prompt_and_billing_reconciliation_tampering(self):
+        async def gateway(*args, **kwargs):
+            return StructuredEvidenceAnswerV2(claims=[_claim()])
+
+        await self._run(
+            pairs=1, gateway=gateway,
+            summaries=[self._summary(headers=self._headers()) for _ in range(2)],
+        )
+        valid = self.store.load()
+        changed = copy.deepcopy(valid)
+        changed["prompt_contracts"][0]["prompt_sha256"] = "0" * 64
+        self.store.write(changed)
+        with self.assertRaisesRegex(CheckpointError, "prompt_contracts"):
+            await self._run(pairs=1, gateway=gateway, summaries=[])
+
+        # Restore a valid checkpoint, then make the internally checksummed ledger disagree
+        # with its immutable per-attempt audit.
+        changed = copy.deepcopy(valid)
+        changed["execution"]["budget"]["cost_complete_usd"] += 0.1
+        changed["execution"]["budget"]["budget_charged_usd"] += 0.1
+        self.store.write(changed)
+        with self.assertRaisesRegex(CheckpointError, "complete usage"):
+            await self._run(pairs=1, gateway=gateway, summaries=[])
+
+        changed = copy.deepcopy(valid)
+        changed["execution"]["budget"]["budget_charged_usd"] -= 0.00001
+        self.store.write(changed)
+        with self.assertRaisesRegex(ValueError, "does not reconcile with its components"):
+            await self._run(pairs=1, gateway=gateway, summaries=[])
+
+    async def test_campaign_lock_refuses_concurrent_execution(self):
+        with self.store.locked():
+            with self.assertRaises(CampaignLocked):
+                with self.store.locked():
+                    self.fail("concurrent lock unexpectedly acquired")
 
 
 if __name__ == "__main__":
