@@ -50,6 +50,19 @@ in the private run record. Recovery itself makes no provider call. Retrieval, mi
 planning, embedding, evidence selection, semantic filtering, and answer rewriting are
 absent from the adapter.
 
+Execution order is counterbalanced from the frozen manifest position: positions 1, 3,
+5, ... run v15 then v16, while positions 2, 4, 6, ... run v16 then v15. Exactly ten of
+the 20 scenarios therefore start with each version. The dry run exports this schedule and
+its 10/10 counts. The schedule changes no prompt, evidence, model setting, budget rule or
+repair behavior, and the separate A/B blind mapping does not reveal execution order.
+
+Every scenario record always contains both prompt-version arms. If a budget/accounting
+stop occurs after one arm, the other is emitted as `not_executed` with zero calls; every
+later scenario is emitted with two `not_executed` arms. Blind packets retain these cases
+with `scorable: false`, and public reports retain them as `unscored`. Supplying an owner
+score for an incomplete pair is refused rather than silently treating missing output as
+a loss, tie or abstention.
+
 ## Proposed future pilot configuration
 
 The proposed route is the existing production expert route pinned to Groq
@@ -110,6 +123,43 @@ failure, and abstention, plus a paired v15/v16/tie decision. No LLM judge or RAG
 used. Every attempted scenario stays in the denominator; failed and unscored cases do not
 disappear. Public reports reject arbitrary prose and never contain questions, passages,
 model outputs, evidence quotations, references, or the blind key.
+
+## Preparing the 20 real scenarios
+
+The preferred source is the existing private R6B v0.3.1 label-free development handoff,
+which already contains 64 main fixed-evidence questions and frozen evidence segments.
+The handoff, derived manifest and review worksheet remain outside this public repository.
+No reference labels, private ID map, scoring records, validation data, QASPER material or
+sealed holdout are read.
+
+Preparation can be automated as follows:
+
+1. Import the handoff through the existing `import_handoff` checks, requiring a clean
+   label-free development import and verified archive, file and record hashes.
+2. Inventory only fixed-evidence answer candidates whose passages are redistributed as
+   text. Preserve supplied question text, segment order, titles, section labels, evidence
+   IDs, paper IDs, licence notes and input hashes; perform no discovery or new fetch.
+3. Reject duplicates, locator-only packs, empty passages, prompt/input-ceiling failures,
+   and exact question/evidence-hash duplicates. Produce a private candidate table with
+   opaque R6 IDs and deterministic size/hash diagnostics.
+4. Flag possible primary categories using transparent lexical cues only—for example,
+   numeric tokens for numeric fidelity and study-design terms for design/causality.
+   These flags shortlist candidates; they are not scientific labels and cannot accept a
+   scenario automatically.
+5. After review freezes 20 candidates, assign `D001`–`D020` in the reviewed order,
+   translate their existing evidence IDs to stable `S#` citation IDs, calculate passage,
+   question/context and manifest hashes, and run the zero-call R7D dry run.
+
+Independent human review is required before freezing selection. A reviewer who has not
+seen v15/v16 outputs or private correctness labels must inspect the original R6 question
+and passages and confirm: exact transcription and provenance; enough context to assess an
+answer without outside evidence; no answer/reference-label leakage; a defensible primary
+category; scientific and study-design diversity; and no near duplicate. Select five
+primary scenarios in each of numeric fidelity, attribution, study design/causality and
+coverage. A second independent pass should verify the 20 eligibility decisions and hash
+the frozen selection; disagreements are resolved only about eligibility/category, never
+by creating a gold answer. Model generation and owner-side blind scoring begin only after
+that freeze. Outputs must never be recycled into expected claims or gold labels.
 
 ## Commands and rollback
 

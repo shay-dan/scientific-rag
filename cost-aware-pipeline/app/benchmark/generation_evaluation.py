@@ -231,6 +231,27 @@ def _failure_kind(error: BaseException) -> str:
     return "gateway_failure"
 
 
+def _not_executed_arm(scenario: dict, prompt_version: str, reason: str) -> dict:
+    """A complete arm-shaped record for a call that was never started."""
+    _, context = _blocks_and_context(scenario)
+    prompt = generation_prompt_v2(scenario["question"], context, prompt_version=prompt_version)
+    return {
+        "prompt_version": prompt_version,
+        "question_context_sha256": scenario["question_context_sha256"],
+        "evidence_sha256": [item["evidence_sha256"] for item in scenario["evidence"]],
+        "prompt_sha256": canonical_sha256(prompt),
+        "status": "not_executed", "reason": reason,
+        "repair_attempted": False, "physical_calls": 0,
+        "initial_output": None, "post_repair_output": None, "validation_errors": {},
+    }
+
+
+def _execution_order(config: dict, execution_index: int) -> list[str]:
+    """Alternate the first arm by frozen manifest position."""
+    versions = list(config["prompt_versions"])
+    return versions if execution_index % 2 == 0 else list(reversed(versions))
+
+
 async def _evaluate_arm(scenario: dict, prompt_version: str, config: dict, gateway: Gateway) -> dict:
     blocks, context = _blocks_and_context(scenario)
     prompt = generation_prompt_v2(scenario["question"], context, prompt_version=prompt_version)
@@ -278,12 +299,49 @@ async def _evaluate_arm(scenario: dict, prompt_version: str, config: dict, gatew
     return result
 
 
-async def evaluate_pair(scenario: dict, *, config: dict, gateway: Gateway) -> dict:
+async def evaluate_pair(scenario: dict, *, config: dict, gateway: Gateway,
+                        execution_index: int = 0) -> dict:
     """Evaluate both arms sequentially on one fixed scenario; recovery makes no extra calls."""
     validate_config(config)
-    arms = [await _evaluate_arm(scenario, version, config, gateway) for version in config["prompt_versions"]]
-    return {"scenario_id": scenario["scenario_id"], "category": scenario["category"], "arms": arms,
+    if not isinstance(execution_index, int) or isinstance(execution_index, bool) or execution_index < 0:
+        raise ValueError("execution_index must be a non-negative integer")
+    order = _execution_order(config, execution_index)
+    arms = []
+    for position, version in enumerate(order):
+        arm = await _evaluate_arm(scenario, version, config, gateway)
+        arms.append(arm)
+        if arm.get("failure_kind") == "budget_or_accounting_stop":
+            arms.extend(_not_executed_arm(scenario, pending, arm.get("error") or "evaluation stopped")
+                        for pending in order[position + 1:])
+            break
+    interrupted = any(arm["status"] == "not_executed" for arm in arms)
+    return {"scenario_id": scenario["scenario_id"], "category": scenario["category"],
+            "execution_order": order, "status": "interrupted" if interrupted else "completed", "arms": arms,
             "physical_calls": sum(arm["physical_calls"] for arm in arms)}
+
+
+def _not_executed_pair(scenario: dict, config: dict, execution_index: int, reason: str) -> dict:
+    order = _execution_order(config, execution_index)
+    return {"scenario_id": scenario["scenario_id"], "category": scenario["category"],
+            "execution_order": order, "status": "not_executed", "reason": reason,
+            "arms": [_not_executed_arm(scenario, version, reason) for version in order],
+            "physical_calls": 0}
+
+
+def _normalized_arms(record: dict) -> dict[str, dict]:
+    """Return both arm identities, safely filling an interrupted legacy omission."""
+    arms: dict[str, dict] = {}
+    for arm in record.get("arms", []):
+        version = arm.get("prompt_version")
+        if version not in {"v15", "v16"} or version in arms:
+            raise ValueError(f"record {record.get('scenario_id')} has invalid or duplicate prompt-version arms")
+        arms[version] = arm
+    reason = str(record.get("reason") or "arm was absent from the interrupted experiment record")
+    for version in ("v15", "v16"):
+        arms.setdefault(version, {"prompt_version": version, "status": "not_executed", "reason": reason,
+                                  "repair_attempted": False, "physical_calls": 0,
+                                  "initial_output": None, "post_repair_output": None})
+    return arms
 
 
 def _planning_prompts(manifest: dict, config: dict) -> list[dict]:
@@ -326,6 +384,9 @@ def dry_run(manifest: dict, config: dict) -> dict:
         blockers.append("a conservative repair prompt exceeds the input-token ceiling")
     if cost is None or not math.isfinite(cost) or cost < 0 or cost > config["max_cost_usd"]:
         blockers.append("worst-case reservation exceeds the configured cost ceiling")
+    schedule = [{"scenario_id": scenario["scenario_id"],
+                 "execution_order": _execution_order(config, index)}
+                for index, scenario in enumerate(manifest["scenarios"])]
     return {
         "adapter": ADAPTER, "manifest_sha256": manifest["manifest_sha256"],
         "config_sha256": canonical_sha256(config), "provider_calls_made": 0,
@@ -339,6 +400,9 @@ def dry_run(manifest: dict, config: dict) -> dict:
         "eligible_after_exact_owner_authorization": not blockers,
         "blockers": blockers,
         "single_arm_difference": {"field": "prompt_version", "prompt_versions": config["prompt_versions"]},
+        "execution_schedule": schedule,
+        "first_arm_counts": {version: sum(row["execution_order"][0] == version for row in schedule)
+                             for version in config["prompt_versions"]},
         "schemas": {
             "structured_answer_sha256": canonical_sha256(StructuredEvidenceAnswerV2.model_json_schema()),
             "repair_batch_sha256": canonical_sha256(V2RepairBatch.model_json_schema()),
@@ -451,13 +515,12 @@ async def run_paid_evaluation(manifest: dict, config: dict, *, authorization: di
         return result
 
     records = []
-    for scenario in manifest["scenarios"]:
+    for execution_index, scenario in enumerate(manifest["scenarios"]):
         if stopped:
-            records.append({"scenario_id": scenario["scenario_id"], "category": scenario["category"],
-                            "arms": [], "status": "not_executed", "reason": stopped})
+            records.append(_not_executed_pair(scenario, config, execution_index, stopped))
             continue
         usage_start = len(call_usage)
-        pair = await evaluate_pair(scenario, config=config, gateway=metered)
+        pair = await evaluate_pair(scenario, config=config, gateway=metered, execution_index=execution_index)
         pair_usage = call_usage[usage_start:]
         offset = 0
         for arm in pair["arms"]:
@@ -495,7 +558,11 @@ def build_public_report(records: list[dict], *, scores: dict | None,
     outcomes = {"v15": 0, "tie": 0, "v16": 0, "unscored": 0}
     rows, arm_totals = [], {version: Counter() for version in ("v15", "v16")}
     for record in sorted(records, key=lambda item: item["scenario_id"]):
+        normalized = _normalized_arms(record)
+        scorable = all(arm["status"] != "not_executed" for arm in normalized.values())
         score = scores.get(record["scenario_id"])
+        if score is not None and not scorable:
+            raise ValueError(f"owner score supplied for incomplete scenario {record['scenario_id']}")
         if isinstance(score, dict):
             unexpected = set(score) - {"winner", "metrics"}
             metrics = score.get("metrics", {})
@@ -511,8 +578,8 @@ def build_public_report(records: list[dict], *, scores: dict | None,
         outcome = winner if winner in {"v15", "v16", "tie"} else "unscored"
         outcomes[outcome] += 1
         arms = []
-        for arm in record.get("arms", []):
-            version = arm["prompt_version"]
+        for version in ("v15", "v16"):
+            arm = normalized[version]
             usage = arm.get("usage") or {}
             row = {"prompt_version": version, "status": arm["status"],
                    "repair_attempted": bool(arm.get("repair_attempted")),
@@ -522,7 +589,9 @@ def build_public_report(records: list[dict], *, scores: dict | None,
             if arm.get("failure_kind"):
                 row["failure_kind"] = arm["failure_kind"]
             arms.append(row)
-            arm_totals[version]["attempted"] += 1
+            arm_totals[version]["scheduled"] += 1
+            arm_totals[version]["attempted"] += arm["status"] != "not_executed"
+            arm_totals[version]["not_executed"] += arm["status"] == "not_executed"
             arm_totals[version]["completed"] += arm["status"] == "completed"
             arm_totals[version]["failures"] += arm["status"] == "failed"
             arm_totals[version]["repairs"] += bool(arm.get("repair_attempted"))
@@ -530,7 +599,8 @@ def build_public_report(records: list[dict], *, scores: dict | None,
             arm_totals[version]["abstentions"] += int(arm.get("unanswered_parts", 0) > 0)
             for status, count in (arm.get("claim_audit") or {}).get("summary", {}).items():
                 arm_totals[version][f"audit_{status}"] += int(count)
-        rows.append({"scenario_id": record["scenario_id"], "outcome": outcome, "arms": arms,
+        rows.append({"scenario_id": record["scenario_id"], "outcome": outcome, "scorable": scorable,
+                     "execution_order": record.get("execution_order"), "arms": arms,
                      "metric_scores": score.get("metrics", {}) if isinstance(score, dict) else {}})
     return {
         "schema": "scientific-rag-generation-eval-public-report/v1",
@@ -555,9 +625,8 @@ def build_blind_scoring_packet(manifest: dict, records: list[dict]) -> tuple[dic
         record = by_id.get(scenario["scenario_id"])
         if record is None:
             raise ValueError(f"missing attempted record for {scenario['scenario_id']}")
-        arms = {arm["prompt_version"]: arm for arm in record.get("arms", [])}
-        if set(arms) != {"v15", "v16"}:
-            raise ValueError(f"both arms are required for blind scoring of {scenario['scenario_id']}")
+        arms = _normalized_arms(record)
+        scorable = all(arm["status"] != "not_executed" for arm in arms.values())
         # Deterministic balancing without disclosing the version in the scoring packet.
         a_version = "v15" if int(canonical_sha256(scenario["scenario_id"]), 16) % 2 == 0 else "v16"
         b_version = "v16" if a_version == "v15" else "v15"
@@ -570,6 +639,7 @@ def build_blind_scoring_packet(manifest: dict, records: list[dict]) -> tuple[dic
                 "B": {"status": arms[b_version]["status"], "output": arms[b_version].get("post_repair_output"),
                       "failure_kind": arms[b_version].get("failure_kind")},
             },
+            "scorable": scorable,
             "score_fields": sorted(SCORE_METRICS),
         })
         keys.append({"scenario_id": scenario["scenario_id"], "A": a_version, "B": b_version})

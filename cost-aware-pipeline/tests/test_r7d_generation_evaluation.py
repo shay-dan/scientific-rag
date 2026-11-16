@@ -7,6 +7,7 @@ from unittest.mock import patch
 from app.benchmark.generation_evaluation import (
     AUTHORIZATION_SCHEMA,
     AuthorizationError,
+    EvaluationStopped,
     ManifestError,
     build_blind_scoring_packet,
     build_public_report,
@@ -131,6 +132,42 @@ class ManifestTests(unittest.TestCase):
 
 
 class AdapterTests(unittest.IsolatedAsyncioTestCase):
+    async def test_interrupted_pair_keeps_missing_arm_as_not_executed(self):
+        calls = 0
+
+        async def gateway(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            raise EvaluationStopped("authorized evaluation stopped")
+
+        for execution_index, expected_order in ((0, ["v15", "v16"]), (1, ["v16", "v15"])):
+            result = await evaluate_pair(
+                _manifest()["scenarios"][execution_index], config=_config(), gateway=gateway,
+                execution_index=execution_index,
+            )
+            self.assertEqual(expected_order, [arm["prompt_version"] for arm in result["arms"]])
+            self.assertEqual(["failed", "not_executed"], [arm["status"] for arm in result["arms"]])
+            self.assertEqual(0, result["arms"][1]["physical_calls"])
+        self.assertEqual(2, calls)
+
+    async def test_execution_order_is_counterbalanced_across_twenty_scenarios(self):
+        first_versions = []
+
+        async def gateway(*args, **kwargs):
+            return StructuredEvidenceAnswerV2(claims=[_claim()])
+
+        manifest = _manifest()
+        for index, scenario in enumerate(manifest["scenarios"]):
+            result = await evaluate_pair(
+                scenario, config=_config(), gateway=gateway, execution_index=index,
+            )
+            first_versions.append(result["arms"][0]["prompt_version"])
+            self.assertEqual({"v15", "v16"}, {arm["prompt_version"] for arm in result["arms"]})
+            self.assertEqual(2, result["physical_calls"])
+        self.assertEqual(10, first_versions.count("v15"))
+        self.assertEqual(10, first_versions.count("v16"))
+        self.assertEqual(["v15", "v16", "v15", "v16"], first_versions[:4])
+
     async def test_pair_uses_identical_evidence_and_only_prompt_version_differs(self):
         calls = []
 
@@ -225,6 +262,8 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(execution["budget"]["uncertain_reserved_usd"], 0)
         self.assertEqual("budget_or_accounting_stop", records[0]["arms"][0]["failure_kind"])
         self.assertEqual("not_executed", records[1]["status"])
+        self.assertEqual({"v15", "v16"}, {arm["prompt_version"] for arm in records[1]["arms"]})
+        self.assertTrue(all(arm["status"] == "not_executed" for arm in records[1]["arms"]))
 
     async def test_paid_entry_refuses_runtime_code_not_accepted_by_owner(self):
         manifest, config = _manifest(), _config()
@@ -289,6 +328,9 @@ class GateAndReportTests(unittest.TestCase):
         self.assertEqual(40, report["generation_calls_planned"])
         self.assertEqual(80, report["max_physical_calls"])
         self.assertEqual(["v15", "v16"], report["single_arm_difference"]["prompt_versions"])
+        self.assertEqual({"v15": 10, "v16": 10}, report["first_arm_counts"])
+        self.assertEqual(["v15", "v16"], report["execution_schedule"][0]["execution_order"])
+        self.assertEqual(["v16", "v15"], report["execution_schedule"][1]["execution_order"])
         self.assertEqual("194e586d95e1f6a0f07310ef27446ed5449370334d57769c7b42cb85c993f471",
                          report["schemas"]["structured_answer_sha256"])
 
@@ -392,6 +434,35 @@ class GateAndReportTests(unittest.TestCase):
             build_public_report(records[:1], scores={"D001": {
                 "winner": "tie", "metrics": {"coverage": {"v15": "private prose", "v16": 1}}
             }}, manifest_sha256="f" * 64, config_sha256="e" * 64)
+
+    def test_blind_packet_and_report_retain_incomplete_pair_without_scoring_it(self):
+        manifest = _manifest()
+        records = []
+        for scenario in manifest["scenarios"]:
+            records.append({"scenario_id": scenario["scenario_id"], "arms": [
+                {"prompt_version": "v15", "status": "completed", "post_repair_output": {"claims": []},
+                 "physical_calls": 1},
+                {"prompt_version": "v16", "status": "not_executed", "post_repair_output": None,
+                 "physical_calls": 0, "reason": "stopped"},
+            ]})
+        # A truncated persisted record is normalized to the same explicit two-arm shape.
+        records[0]["arms"] = records[0]["arms"][:1]
+        packet, _ = build_blind_scoring_packet(manifest, records)
+        self.assertEqual(20, len(packet["cases"]))
+        self.assertTrue(all(case["scorable"] is False for case in packet["cases"]))
+        report = build_public_report(
+            records, scores={}, manifest_sha256=manifest["manifest_sha256"], config_sha256="e" * 64,
+        )
+        self.assertEqual(20, report["attempted_scenarios"])
+        self.assertEqual(20, report["paired_outcomes"]["unscored"])
+        self.assertTrue(all(len(row["arms"]) == 2 for row in report["scenarios"]))
+        self.assertEqual(20, report["arms"]["v15"]["attempted"])
+        self.assertEqual(0, report["arms"]["v16"]["attempted"])
+        with self.assertRaises(ValueError):
+            build_public_report(
+                records, scores={"D001": {"winner": "v15", "metrics": {}}},
+                manifest_sha256=manifest["manifest_sha256"], config_sha256="e" * 64,
+            )
 
 
 if __name__ == "__main__":
