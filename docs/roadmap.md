@@ -1,6 +1,6 @@
 # Scientific RAG — engineering roadmap
 
-**Status:** authoritative planning document. Last updated 2026-11-15 (R7C complete; R7D-A in review).
+**Status:** authoritative planning document. Last updated 2026-11-16 (R7D-A complete; R7D-B exploratory pilot awaiting runtime dry run).
 **Origin:** owner-approved *Master Implementation Plan*, which consolidated an independent
 audit, a reconciled R0–R13 roadmap, a discovery/evidence-acquisition addendum, and the
 historical engineering handover. Changes to this file require owner approval and an entry
@@ -32,7 +32,7 @@ Operating rules for agents are in [`AGENTS.md`](../AGENTS.md). History, complete
 | R4 | Evaluation integrity and reproducibility | **complete** (PR #11, `359e02c`) | R0 |
 | R5 | Offline semantic-verifier evaluation harness | **complete** (PR #12, `b21bc37`) | R0 |
 | R6 | Human-reviewed evidence packs and labels | R6A **complete** (PR #13, `60b394a`); R6B **complete** (PR #14, `e6bf0ee`); R6C **complete** (PR #15, `693b7a5`); R6D **complete** (PR #16, `5328573`) | R4, R5; R3 preferred |
-| R7 | Deterministic claim checks, graceful degradation | R7A **complete** (PR #17, `d638e15`); R7B **complete** (PR #18, `45f85a9`); R7C **complete** (PR #19, `23560a7`); R7D-A **in review** (`agent/r7d-generation-eval`) | R5, R6 |
+| R7 | Deterministic claim checks, graceful degradation | R7A **complete** (PR #17, `d638e15`); R7B **complete** (PR #18, `45f85a9`); R7C **complete** (PR #19, `23560a7`); R7D-A **complete** (PR #20, `6710fc4`); R7D route hotfix **complete** (PR #21, `14938d9`); R7D-B **not started** (private manifest prepared; dry run pending) | R5, R6 |
 | R9-D | Discovery candidate pool, ranking, backfilling | not started | R6 pilot, R2 |
 | R9-P | PMC scientific-content extraction | conditional | R6 fixtures; R7 preferred |
 | R8 | Semantic-verifier calibration and release decision | not started | R3, R5, R6, R7 |
@@ -712,8 +712,9 @@ uncertainty. Expansion is a separate decision.
 
 ## R7 — Deterministic claim checks and graceful degradation
 
-**Status:** R7A, R7B and R7C complete; R7D-A offline preparation in review; no live
-evaluation authorized. **Priority:** high.
+**Status:** R7A–R7C complete; R7D-A offline harness complete; R7D-B owner-waived,
+AI-assisted exploratory development pilot prepared privately, with runtime dry run and
+paid comparison not yet executed. **Priority:** high.
 Independent of R9-D.
 
 R7 is split into separately authorized stages in this order:
@@ -730,13 +731,16 @@ R7 is split into separately authorized stages in this order:
    and attribution instructions as opt-in, versioned v16 behavior while preserving
    byte-identical v15 as the default. Contract:
    [scientific-generation-prompt-r7c.md](../cost-aware-pipeline/docs/scientific-generation-prompt-r7c.md).
-4. **R7D — small paid evaluation:** R7D-A prepares a label-free fixed-evidence manifest
-   contract, paired production-component adapter, blind scoring/reporting boundary and
-   fail-closed budget gate. The future comparison remains approximately 20 frozen
-   scenarios, at most 80 physical calls and a proposed $1.50 application ceiling. It
-   requires an eligible reviewed manifest, a verified dry run, and separate exact owner
-   execution authorization. Contract:
+4. **R7D — small paid evaluation:** R7D-A (PR #20, merged) supplies the fixed-evidence
+   manifest contract, paired production-component adapter, blind scoring/reporting and
+   fail-closed cost gate. PR #21 fixes the single-provider route's tuple comparison.
+   The future R7D-B run uses 20 frozen development scenarios, at most 80 physical calls,
+   and a $1.50 application ceiling. The owner waived independent human selection review
+   **for this exploratory pilot only**, without accepting gold labels or scientifically
+   validated accuracy claims. The actual runtime dry run and exact manifest/config/code
+   authorization are still required. Contract:
    [generation-evaluation-r7d.md](../cost-aware-pipeline/docs/generation-evaluation-r7d.md).
+   Execution instructions: [R7D exploratory runbook](r7d-exploratory-runbook.md).
 
 R7A never converts zero surviving claims to `insufficient_evidence`; that outcome
 remains reserved for the independent evidence-sufficiency gate. R7A merged in PR #17 as
@@ -751,9 +755,17 @@ integration tests. R7B remains audit-only and opt-in. R7C merged in PR #19 as `2
 main CI and Security passed, and its accepted Docker baseline ran 845 deterministic tests
 (787 passed, 58 skipped) plus 57/57 integration tests. R7C adds only the opt-in v16
 initial-generation instructions, persisted selection, and cache isolation; v15 remains
-the production default. R7D-A makes no provider call and does not authorize the future
-pilot. The repository has no eligible reviewed 20-scenario manifest, so the scientific
-dry run remains explicitly blocked rather than using invented cases.
+the production default. R7D-A merged in PR #20 as `6710fc4` with CI and Security green on `main`.
+The R7D paid-route correction merged in PR #21 as `14938d9` with post-merge CI and
+Security green. The owner then prepared a private, label-free, **unreviewed** frozen
+20-case R6B development subset (five per category; 76 passage segments), committed by
+manifest SHA-256 `3dc9e1073a1cea87edf3d328828533553e56dc9319ebf7a65d0e94119b1f5739`.
+All 20 sources are biomedical and the five attribution cases use single-paper packs;
+scientific suitability and redistribution permissions are not human-verified. The
+private files stay off GitHub. A source-equivalent offline estimate was $0.56904060
+for 80 maximum calls; **the production CLI dry run has not executed, and no provider
+calls or spending occurred**. The pilot is exploratory and must not be presented as
+a validated science or multi-domain benchmark.
 
 ## R9-D — Discovery candidate pool, ranking, and backfilling
 
@@ -920,6 +932,7 @@ load evidence; large synthetic evaluation sets presented as gold data.
 
 | Date | Decision | Evidence / reason |
 |---|---|---|
+| 2026-11-16 | Record R7D-A complete (PR #20, `6710fc4`) and the R7D paid-run route hotfix complete (PR #21, `14938d9`). Proceed toward the *R7D-B exploratory development* pilot with the owner's explicit one-pilot waiver of independent human selection review; do **not** describe this as gold, human-reviewed, or calibrated. Private manifest, labels, passage text, scoring materials and keys remain outside Git. A production zero-call dry run, exact code/config/manifest authorization and maximum $1.50 / 80 attempts remain enforced before any paid execution. | Both PRs merged with green post-merge CI and Security. Frozen private 20-case manifest commitment `3dc9e1073a1cea87edf3d328828533553e56dc9319ebf7a65d0e94119b1f5739`; 76 passages, 5 cases per category. Offline source-equivalent cost bound $0.56904060, **not** a production dry run. See [R7D exploratory runbook](r7d-exploratory-runbook.md). |
 | 2026-11-15 | Mark R7C complete (PR #19, `23560a7`) and begin R7D-A as offline-only fixed-evidence evaluation preparation. No live or paid execution is authorized; v15 remains the default. | R7C main CI and Security green. R7D-A requires exactly 20 reviewed label-free development scenarios, v15/v16 as the sole arm difference, owner-side blind scoring, at most 80 physical calls and a proposed $1.50 ceiling. The reviewed manifest is not in the repository and must not be invented. |
 | 2026-11-15 | Mark R7B complete (PR #18, `45f85a9`) and begin R7C with byte-identical v15 as the default and opt-in, persisted, cache-isolated v16 generation instructions. | R7B post-merge CI and Security green; accepted-main Docker baseline 828 deterministic tests (770 passed, 58 skipped) and 57/57 integration. R7C authorization requires a single-variable future comparison and no provider calls. |
 | 2026-11-15 | Mark R7A complete (PR #17, `d638e15`) and begin R7B as audit-only, opt-in deterministic numeric/quotation diagnostics. R7B reuses answer caches without changing their identity and never relabels an old cached result as audited; a newly audited result requires a fresh run. | R7A post-merge CI and Security green: 799 unit executed (741 passed, 58 skipped), 57/57 integration, legacy 13/13, migrations, health, provenance. Owner R7B authorization favors cache reuse and requires explicit cache limitations. |
