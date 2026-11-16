@@ -75,8 +75,12 @@ operator transfer (never reconstructed from the public docs):
    do **not** expose it to dry-run or logs.
 5. Verify current official Groq model availability, context window,
    input/output pricing, outbound `max_completion_tokens`/`max_tokens`
-   enforcement and account rate limits. Dated code pricing is not a
-   substitute for verification.
+   enforcement and account rate limits. A 2026-11-16 check of the official
+   [Groq GPT-OSS 120B model page](https://console.groq.com/docs/model/openai/gpt-oss-120b)
+   listed $0.15 per million input tokens, $0.60 per million output tokens,
+   131,072 context tokens and 65,536 maximum output tokens; the pilot asks
+   for a stricter 2,000-token output cap. Account-specific limits and actual
+   provider-side enforcement still require live-environment verification.
 
 ## Phase 1 — official CLI dry run (no provider or API key)
 
