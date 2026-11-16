@@ -525,7 +525,7 @@ class IncrementalExecutionTests(unittest.IsolatedAsyncioTestCase):
             "attempts": [attempt],
         }
 
-    async def _run(self, *, pairs, gateway, summaries, resume_after_rate_limit=False):
+    async def _run(self, *, pairs, gateway, summaries, resume_after_rate_limit=False, clock=None):
         with (patch("scientific_rag.llm_gateway.provider_order", return_value=("groq",)),
               patch("scientific_rag.llm_gateway.model_for", return_value="openai/gpt-oss-120b"),
               patch("scientific_rag.llm_gateway.begin_trace", return_value=object()),
@@ -536,6 +536,7 @@ class IncrementalExecutionTests(unittest.IsolatedAsyncioTestCase):
                 checkpoint_store=self.store, pairs=pairs, gateway=gateway,
                 resume_after_rate_limit=resume_after_rate_limit,
                 provenance_resolver=lambda: {"sha": "a" * 40, "source": "test"},
+                **({"clock": clock} if clock is not None else {}),
             )
 
     @staticmethod
@@ -545,6 +546,7 @@ class IncrementalExecutionTests(unittest.IsolatedAsyncioTestCase):
             "x-ratelimit-remaining-requests": "29",
             "x-ratelimit-limit-tokens": "8000",
             "x-ratelimit-remaining-tokens": "8000",
+            "x-ratelimit-reset-requests": "1h",
             "x-ratelimit-reset-tokens": "1m",
         }
 
@@ -584,10 +586,14 @@ class IncrementalExecutionTests(unittest.IsolatedAsyncioTestCase):
             calls += 1
             return StructuredEvidenceAnswerV2(claims=[_claim()])
 
-        await self._run(
+        checkpoint = await self._run(
             pairs=20, gateway=gateway,
             summaries=[self._summary(headers=self._headers()) for _ in range(40)],
         )
+        packet, blind_key = build_blind_scoring_packet(self.manifest, checkpoint["records"])
+        self.assertEqual(20, len(packet["cases"]))
+        self.assertEqual(20, len(blind_key["arms"]))
+        self.assertTrue(all(case["scorable"] for case in packet["cases"]))
         with self.assertRaisesRegex(CheckpointError, "no unexecuted pairs"):
             await self._run(pairs=1, gateway=gateway, summaries=[])
         self.assertEqual(40, calls)
@@ -606,6 +612,90 @@ class IncrementalExecutionTests(unittest.IsolatedAsyncioTestCase):
         record = checkpoint["records"][0]
         self.assertEqual("partial", record["status"])
         self.assertEqual(["v15"], [arm["prompt_version"] for arm in record["arms"]])
+        self.assertEqual("rate_limit_capacity_unknown", checkpoint["execution"]["stop_code"])
+        self.assertEqual(1, calls)
+
+    async def test_explicit_resume_uses_elapsed_token_reset_instead_of_stale_remaining(self):
+        now = [1_000.0]
+        calls = 0
+
+        async def gateway(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return StructuredEvidenceAnswerV2(claims=[_claim()])
+
+        exhausted = self._headers() | {
+            "x-ratelimit-remaining-tokens": "0",
+            "x-ratelimit-reset-tokens": "1m0.5s",
+        }
+        first = await self._run(
+            pairs=1, gateway=gateway, summaries=[self._summary(headers=exhausted)],
+            clock=lambda: now[0],
+        )
+        self.assertEqual("rate_limit", first["execution"]["stop_code"])
+        self.assertEqual(
+            1_060.5, first["execution"]["rate_limit_state"]["reset_at_unix"]["tokens"],
+        )
+        self.assertEqual(
+            4_600.0, first["execution"]["rate_limit_state"]["reset_at_unix"]["requests"],
+        )
+        self.assertEqual(1, calls)
+
+        now[0] += 61
+        resumed = await self._run(
+            pairs=1, gateway=gateway, summaries=[self._summary(headers=self._headers())],
+            resume_after_rate_limit=True, clock=lambda: now[0],
+        )
+        self.assertEqual("completed", resumed["records"][0]["status"])
+        self.assertEqual(2, resumed["execution"]["budget"]["provider_calls_charged"])
+        self.assertEqual(1, len(resumed["execution"]["rate_limit_continuations"]))
+        self.assertEqual(2, calls)
+
+    async def test_explicit_resume_before_reset_remains_stopped_without_a_call(self):
+        now = [1_000.0]
+        calls = 0
+
+        async def gateway(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return StructuredEvidenceAnswerV2(claims=[_claim()])
+
+        exhausted = self._headers() | {"x-ratelimit-remaining-tokens": "0"}
+        await self._run(
+            pairs=1, gateway=gateway, summaries=[self._summary(headers=exhausted)],
+            clock=lambda: now[0],
+        )
+        now[0] += 30
+        checkpoint = await self._run(
+            pairs=1, gateway=gateway, summaries=[], resume_after_rate_limit=True,
+            clock=lambda: now[0],
+        )
+        self.assertEqual("rate_limit", checkpoint["execution"]["stop_code"])
+        self.assertIn("has not elapsed", checkpoint["execution"]["stopped"])
+        self.assertEqual(1, calls)
+
+    async def test_malformed_reset_metadata_refuses_explicit_resume(self):
+        now = [1_000.0]
+        calls = 0
+
+        async def gateway(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return StructuredEvidenceAnswerV2(claims=[_claim()])
+
+        exhausted = self._headers() | {
+            "x-ratelimit-remaining-tokens": "0",
+            "x-ratelimit-reset-tokens": "tomorrow",
+        }
+        await self._run(
+            pairs=1, gateway=gateway, summaries=[self._summary(headers=exhausted)],
+            clock=lambda: now[0],
+        )
+        now[0] += 3_600
+        checkpoint = await self._run(
+            pairs=1, gateway=gateway, summaries=[], resume_after_rate_limit=True,
+            clock=lambda: now[0],
+        )
         self.assertEqual("rate_limit_capacity_unknown", checkpoint["execution"]["stop_code"])
         self.assertEqual(1, calls)
 
@@ -649,6 +739,11 @@ class IncrementalExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, calls)
         self.assertEqual(1, len(checkpoint["records"][0]["arms"]))
         self.assertEqual("failed", checkpoint["records"][0]["arms"][0]["status"])
+        with self.assertRaisesRegex(CheckpointError, "pre-transmission capacity stop"):
+            await self._run(
+                pairs=1, gateway=gateway, summaries=[], resume_after_rate_limit=True,
+            )
+        self.assertEqual(1, calls)
 
     async def test_checkpoint_rejects_prompt_and_billing_reconciliation_tampering(self):
         async def gateway(*args, **kwargs):

@@ -40,9 +40,21 @@ HTTP 429, quota exhaustion, cancellation, or a tampered/inconsistent checkpoint.
 The first authorized benchmark inference may establish Groq response headers; there is
 no unrelated quota-probe inference. Subsequent requests conservatively reserve prompt
 UTF-8 bytes plus the 2,000-token output ceiling against the provider-reported remaining
-token allowance and require a positive remaining-request allowance. The checkpoint also
-reports a campaign-only estimate against the published 200,000 TPD Free reference. That
-estimate is not an account-specific quota and cannot account for other API-key activity.
+token allowance and require a positive remaining-request allowance. Groq request/token
+reset durations (for example, `1m0.5s`) are parsed strictly and stored as absolute Unix
+deadlines alongside the observation time and original allowlisted headers.
+
+An exhausted saved allowance never refreshes automatically. A later invocation must use
+`--resume-after-rate-limit`, the relevant provider reset deadline must have elapsed, and
+the previously observed account-specific limit must fit one bounded request. This opt-in
+permits only unexecuted work; completed or failed attempts are not retried. The next
+benchmark response must provide fresh capacity metadata before further work can proceed.
+A provider 429 with incomplete usage is not eligible for this continuation path because
+its billing remains uncertain. Malformed or absent reset metadata remains fail-closed.
+
+The checkpoint also reports a campaign-only estimate against the published 200,000 TPD
+Free reference. That display is never used for admission, is not an account-specific
+quota, and cannot account for other API-key activity.
 
 ## Command
 
@@ -61,8 +73,25 @@ python scripts/generation_evaluation_r7d.py incremental-run \
 
 `--pairs` is the maximum number of pairs selected for that stage. A quota or accounting
 stop can leave the final selected pair partial. `--resume-after-rate-limit` is an explicit
-operator acknowledgement that may continue only absent arms after a recorded 429 stop;
-it never retries the failed attempt and still enforces the stored remaining capacity.
+operator acknowledgement for a recorded pre-transmission capacity stop after its reset;
+it never retries an attempt and still enforces the campaign-wide call and cost ledger.
+
+## Blind scoring packet
+
+A completed incremental checkpoint is also the private-records payload expected by the
+existing `blind-packet` command because it contains the same top-level `records` array.
+Generate the packet and keep its arm key separate with:
+
+```bash
+python scripts/generation_evaluation_r7d.py blind-packet \
+  --manifest /private/r7d-20-manifest.private.json \
+  --private-records /private/r7d-checkpoint.private.json \
+  --private-packet /private/r7d-blind-packet.private.json \
+  --private-key /separate-private/r7d-blind-key.private.json
+```
+
+Run this only after all 20 checkpoint records exist. The CLI validates the frozen
+manifest and refuses missing attempted records; it does not make provider calls.
 
 ## Rollback
 

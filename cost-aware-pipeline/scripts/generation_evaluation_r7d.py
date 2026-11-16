@@ -158,7 +158,7 @@ def parser() -> argparse.ArgumentParser:
     incremental.add_argument("--pairs", type=int, required=True)
     incremental.add_argument(
         "--resume-after-rate-limit", action="store_true",
-        help="explicitly continue only unexecuted work after a recorded 429/quota stop")
+        help="explicitly continue unexecuted work after a recorded capacity reset has elapsed")
     incremental.set_defaults(func=_incremental_run)
     blind = commands.add_parser("blind-packet", help="build private owner-scoring packet and separate key")
     blind.add_argument("--manifest", type=Path, required=True)

@@ -15,6 +15,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import stat
 import tempfile
 import time
@@ -48,6 +49,14 @@ SAFE_RATE_LIMIT_HEADERS = {
     "x-ratelimit-reset-tokens",
 }
 FREE_REFERENCE_TOKENS_PER_DAY = 200_000
+RESET_DURATION_RE = re.compile(
+    r"^(?:(?P<days>\d+(?:\.\d+)?)d)?"
+    r"(?:(?P<hours>\d+(?:\.\d+)?)h)?"
+    r"(?:(?P<minutes>\d+(?:\.\d+)?)m)?"
+    r"(?:(?P<seconds>\d+(?:\.\d+)?)s)?$",
+    re.IGNORECASE,
+)
+MAX_RESET_SECONDS = 7 * 24 * 60 * 60
 
 
 class CheckpointError(ValueError):
@@ -164,8 +173,10 @@ def new_checkpoint(manifest: dict, config: dict, authorization: dict, provenance
             "code": provenance,
             "stopped": None,
             "stop_code": None,
+            "stop_context": None,
             "calls": [],
             "rate_limit_state": {},
+            "rate_limit_continuations": [],
             "stages": [],
         },
     }
@@ -266,18 +277,83 @@ def _rate_headers(summary: dict) -> dict[str, str]:
     return captured
 
 
-def _capacity_refusal(checkpoint: dict, prompt: str, max_output_tokens: int) -> tuple[str, str] | None:
+def _reset_seconds(value: object) -> float | None:
+    """Parse Groq duration metadata such as ``1m0.5s`` without guessing units."""
+    if not isinstance(value, str):
+        return None
+    match = RESET_DURATION_RE.fullmatch(value.strip())
+    if match is None or not any(match.groupdict().values()):
+        return None
+    multipliers = {"days": 86_400, "hours": 3_600, "minutes": 60, "seconds": 1}
+    seconds = sum(float(match.group(name) or 0) * multiplier
+                  for name, multiplier in multipliers.items())
+    if not math.isfinite(seconds) or seconds < 0 or seconds > MAX_RESET_SECONDS:
+        return None
+    return seconds
+
+
+def _clock_now(clock: Callable[[], float]) -> float:
+    now = float(clock())
+    if not math.isfinite(now) or now < 0:
+        raise CheckpointError("clock must return a finite non-negative Unix timestamp")
+    return now
+
+
+def _rate_limit_state(headers: dict[str, str], observed_at: float) -> dict:
+    reset_at: dict[str, float] = {}
+    for dimension in ("requests", "tokens"):
+        seconds = _reset_seconds(headers.get(f"x-ratelimit-reset-{dimension}"))
+        if seconds is not None:
+            reset_at[dimension] = observed_at + seconds
+    return {
+        "headers": dict(headers),
+        "observed_at_unix": observed_at,
+        "reset_at_unix": reset_at,
+    }
+
+
+def _capacity_refusal(
+    checkpoint: dict,
+    prompt: str,
+    max_output_tokens: int,
+    *,
+    now: float,
+    allow_elapsed_reset: bool,
+) -> tuple[str, str, list[str]] | None:
     calls = checkpoint["execution"]["calls"]
     if not calls:  # the first authorized benchmark inference establishes provider headers
         return None
-    headers = checkpoint["execution"].get("rate_limit_state") or {}
+    state = checkpoint["execution"].get("rate_limit_state") or {}
+    headers = state.get("headers") if isinstance(state.get("headers"), dict) else {}
     remaining_requests = _number(headers.get("x-ratelimit-remaining-requests"))
     remaining_tokens = _number(headers.get("x-ratelimit-remaining-tokens"))
     if remaining_requests is None or remaining_tokens is None:
-        return "rate_limit_capacity_unknown", "provider remaining request/token capacity is unavailable"
+        return ("rate_limit_capacity_unknown",
+                "provider remaining request/token capacity is unavailable", [])
     conservative_tokens = len(prompt.encode("utf-8")) + max_output_tokens
-    if remaining_requests < 1 or remaining_tokens < conservative_tokens:
-        return "rate_limit", "known provider minute/request allowance cannot admit the next bounded attempt"
+    blocked = []
+    if remaining_requests < 1:
+        blocked.append("requests")
+    if remaining_tokens < conservative_tokens:
+        blocked.append("tokens")
+    if not blocked:
+        return None
+    if not allow_elapsed_reset:
+        return ("rate_limit", "known provider request/token allowance cannot admit the next bounded attempt",
+                blocked)
+    reset_at = state.get("reset_at_unix") if isinstance(state.get("reset_at_unix"), dict) else {}
+    required = {"requests": 1, "tokens": conservative_tokens}
+    for dimension in blocked:
+        deadline = reset_at.get(dimension)
+        limit = _number(headers.get(f"x-ratelimit-limit-{dimension}"))
+        if not isinstance(deadline, (int, float)) or not math.isfinite(deadline) or limit is None:
+            return ("rate_limit_capacity_unknown",
+                    f"provider {dimension} reset metadata or account-specific limit is unavailable", blocked)
+        if now < float(deadline):
+            return ("rate_limit", f"provider {dimension} reset has not elapsed", blocked)
+        if limit < required[dimension]:
+            return ("rate_limit_capacity_unknown",
+                    f"provider {dimension} limit cannot admit the next bounded attempt", blocked)
     return None
 
 
@@ -317,6 +393,7 @@ async def run_incremental_evaluation(
     gateway: Gateway | None = None,
     resume_after_rate_limit: bool = False,
     provenance_resolver: Callable[[], dict] | None = None,
+    clock: Callable[[], float] = time.time,
 ) -> dict:
     """Execute at most ``pairs`` frozen pairs and persist every provider attempt."""
     if type(pairs) is not int or pairs <= 0:
@@ -342,12 +419,21 @@ async def run_incremental_evaluation(
         ledger = BudgetLedger(config["max_calls"], config["max_cost_usd"])
     stopped = checkpoint["execution"].get("stopped")
     stop_code = checkpoint["execution"].get("stop_code")
+    reset_continuation_authorized = False
     if stopped:
         if not (resume_after_rate_limit and stop_code == "rate_limit"):
             raise CheckpointError(f"campaign checkpoint is stopped ({stop_code}): {stopped}")
+        stop_context = checkpoint["execution"].get("stop_context") or {}
+        if stop_context.get("kind") != "preflight_capacity":
+            raise CheckpointError(
+                "rate-limit continuation is allowed only after a pre-transmission capacity stop")
+        reset_continuation_authorized = True
         checkpoint["execution"]["stopped"] = None
         checkpoint["execution"]["stop_code"] = None
+        checkpoint["execution"]["stop_context"] = None
         checkpoint = checkpoint_store.write(checkpoint)
+    elif resume_after_rate_limit:
+        raise CheckpointError("--resume-after-rate-limit requires a recorded rate-limit stop")
 
     scenarios = manifest["scenarios"]
     records = _record_map(checkpoint)
@@ -361,19 +447,39 @@ async def run_incremental_evaluation(
         "requested_pairs": pairs,
         "selected_scenario_indices": selected,
         "completed_pairs": 0,
+        "rate_limit_continuation": reset_continuation_authorized,
         "stopped": None,
     }
     checkpoint["execution"]["stages"].append(stage)
     checkpoint = checkpoint_store.write(checkpoint)
 
     async def metered(role, temperature, prompt, schema, *, max_output_tokens):
-        refusal = _capacity_refusal(checkpoint, prompt, max_output_tokens)
+        nonlocal checkpoint, reset_continuation_authorized
+        now = _clock_now(clock)
+        refusal = _capacity_refusal(
+            checkpoint, prompt, max_output_tokens, now=now,
+            allow_elapsed_reset=reset_continuation_authorized,
+        )
         if refusal:
-            code, reason = refusal
+            code, reason, blocked = refusal
             checkpoint["execution"]["stop_code"] = code
             checkpoint["execution"]["stopped"] = reason
+            checkpoint["execution"]["stop_context"] = {
+                "kind": "preflight_capacity",
+                "blocked_dimensions": blocked,
+                "observed_at_unix": now,
+            }
             checkpoint_store.write(checkpoint)
             raise EvaluationStopped(reason)
+        if reset_continuation_authorized:
+            checkpoint["execution"]["rate_limit_continuations"].append({
+                "authorized_at_unix": now,
+                "stage_number": stage["stage_number"],
+                "next_scenario_index": checkpoint["active_arm"]["scenario_index"],
+                "next_prompt_version": checkpoint["active_arm"]["prompt_version"],
+            })
+            reset_continuation_authorized = False
+            checkpoint = checkpoint_store.write(checkpoint)
         input_ceiling = len(prompt.encode("utf-8"))
         if input_ceiling > config["max_input_tokens"]:
             reason = "conservative input-token ceiling reached before the call"
@@ -413,13 +519,15 @@ async def run_incremental_evaluation(
             usage = _usage_from_trace(summary, reserved)
             usage["latency_ms"] = round((time.perf_counter() - started) * 1000, 1)
             usage["rate_limit_headers"] = _rate_headers(summary)
+            usage["rate_limit_observed_at_unix"] = _clock_now(clock)
             usage["phase"] = phase
             usage["scenario_id"] = checkpoint["active_arm"]["scenario_id"]
             usage["prompt_version"] = checkpoint["active_arm"]["prompt_version"]
             ledger.settle(reserved, usage)
             checkpoint["execution"]["budget"] = ledger.snapshot()
             checkpoint["execution"]["calls"].append(usage)
-            checkpoint["execution"]["rate_limit_state"] = usage["rate_limit_headers"]
+            checkpoint["execution"]["rate_limit_state"] = _rate_limit_state(
+                usage["rate_limit_headers"], usage["rate_limit_observed_at_unix"])
             checkpoint["active_arm"]["attempts"].append({
                 **usage,
                 "result": _dump(result) if result is not None else None,
@@ -430,6 +538,10 @@ async def run_incremental_evaluation(
             if _quota_error(error, summary):
                 checkpoint["execution"]["stop_code"] = "rate_limit"
                 checkpoint["execution"]["stopped"] = "provider returned a rate-limit or quota-exhaustion response"
+                checkpoint["execution"]["stop_context"] = {
+                    "kind": "provider_rate_limit",
+                    "call_index": len(checkpoint["execution"]["calls"]) - 1,
+                }
             elif any(model != allowed for model in usage["provider_models"]):
                 checkpoint["execution"]["stop_code"] = "model_drift"
                 checkpoint["execution"]["stopped"] = "a call used a provider/model outside the authorization"
