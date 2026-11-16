@@ -466,7 +466,7 @@ async def run_paid_evaluation(manifest: dict, config: dict, *, authorization: di
     from scientific_rag import llm_gateway
     from scientific_rag.costing import calculate_cost
     route = llm_gateway.provider_order("expert")
-    if route != [config["provider"]] or llm_gateway.model_for(config["provider"], "expert") != config["model"]:
+    if route != (config["provider"],) or llm_gateway.model_for(config["provider"], "expert") != config["model"]:
         raise AuthorizationError("expert gateway route is not pinned to the authorized provider/model")
     gateway = gateway or llm_gateway.ainvoke_structured
     ledger = ledger if ledger is not None else BudgetLedger(config["max_calls"], config["max_cost_usd"])

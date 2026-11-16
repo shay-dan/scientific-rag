@@ -248,7 +248,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         incomplete = {"token_usage_complete": False, "estimated_cost_usd": None,
                       "provider_calls": 1, "input_tokens": None, "output_tokens": None,
                       "by_model": {"groq:openai/gpt-oss-120b": {}}}
-        with (patch("scientific_rag.llm_gateway.provider_order", return_value=["groq"]),
+        with (patch("scientific_rag.llm_gateway.provider_order", return_value=("groq",)),
               patch("scientific_rag.llm_gateway.model_for", return_value="openai/gpt-oss-120b"),
               patch("scientific_rag.llm_gateway.begin_trace", return_value=object()),
               patch("scientific_rag.llm_gateway.end_trace", return_value=[]),
@@ -280,6 +280,32 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
                 await run_paid_evaluation(manifest, config, authorization=authorization, gateway=gateway)
         self.assertEqual(0, calls)
 
+    async def test_paid_entry_rejects_fallback_routes_and_wrong_model_before_gateway(self):
+        manifest, config = _manifest(), _config()
+        authorization = GateAndReportTests()._authorization(manifest, config)
+        calls = 0
+
+        async def gateway(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+
+        # provider_order() returns a tuple. Extra fallback providers, a different
+        # provider, or a drifted expert model must fail before any provider call.
+        for route, model in (
+            (("groq", "openrouter"), "openai/gpt-oss-120b"),
+            (("openrouter",), "openai/gpt-oss-120b"),
+            (("groq",), "openai/gpt-oss-20b"),
+        ):
+            with (patch("scientific_rag.llm_gateway.provider_order", return_value=route),
+                  patch("scientific_rag.llm_gateway.model_for", return_value=model),
+                  patch("app.evaluation_report.resolve_git_provenance",
+                        return_value={"sha": "a" * 40, "source": "test"})):
+                with self.assertRaisesRegex(AuthorizationError, "gateway route is not pinned"):
+                    await run_paid_evaluation(
+                        manifest, config, authorization=authorization, gateway=gateway,
+                    )
+        self.assertEqual(0, calls)
+
     async def test_cancellation_keeps_reserved_cost_and_propagates(self):
         manifest, config = _manifest(), _config()
         authorization = GateAndReportTests()._authorization(manifest, config)
@@ -291,7 +317,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         incomplete = {"token_usage_complete": False, "estimated_cost_usd": None,
                       "provider_calls": 1, "input_tokens": None, "output_tokens": None,
                       "by_model": {"groq:openai/gpt-oss-120b": {}}}
-        with (patch("scientific_rag.llm_gateway.provider_order", return_value=["groq"]),
+        with (patch("scientific_rag.llm_gateway.provider_order", return_value=("groq",)),
               patch("scientific_rag.llm_gateway.model_for", return_value="openai/gpt-oss-120b"),
               patch("scientific_rag.llm_gateway.begin_trace", return_value=object()),
               patch("scientific_rag.llm_gateway.end_trace", return_value=[]),
