@@ -67,7 +67,7 @@ class Wire:
         return [json.loads(request.content) for request in self.requests]
 
 
-def invoke(wire: Wire, schema=StructuredEvidenceAnswerV2, *, capture=True, **kwargs):
+def invoke(wire: Wire, schema=StructuredEvidenceAnswerV2, *, capture=True, env=None, **kwargs):
     async def go():
         token = llm_gateway.begin_trace(capture_rate_limits=capture)
         error = result = None
@@ -78,7 +78,8 @@ def invoke(wire: Wire, schema=StructuredEvidenceAnswerV2, *, capture=True, **kwa
         finally:
             attempts = llm_gateway.end_trace(token)
         return result, error, attempts
-    with patch.dict(os.environ, ENV), patch.object(llm_gateway, "_outbound_transport", wire.transport, create=True):
+    with patch.dict(os.environ, {**ENV, **(env or {})}), \
+            patch.object(llm_gateway, "_outbound_transport", wire.transport, create=True):
         return asyncio.run(go())
 
 
@@ -126,9 +127,18 @@ class SerializedRequestContractTests(unittest.TestCase):
         wire = Wire()
         invoke(wire, max_output_tokens=2000)
         self.assertNotIn("reasoning_effort", wire.bodies()[0])
-        wire = Wire()
-        invoke(wire)                                                   # unbounded production call
+        # Unbounded production call: the client is built exactly as before, with no reasoning setting.
+        wire, built = Wire(), []
+
+        def factory(**kwargs):
+            built.append(dict(kwargs))
+            return ChatOpenAI(**kwargs, http_async_client=httpx.AsyncClient(transport=wire.transport()))
+        with patch.object(llm_gateway, "ChatOpenAI", factory):
+            invoke(wire)
+        self.assertEqual(1, len(wire.requests))
         self.assertNotIn("reasoning_effort", wire.bodies()[0])
+        self.assertEqual({"model", "api_key", "base_url", "timeout", "max_retries", "temperature",
+                          "include_response_headers"}, set(built[0]))
 
     def test_unsupported_reasoning_routes_are_refused_before_any_request(self):
         for env, kwargs in (({"LLM_PROVIDER_ORDER_EXPERT": "openrouter", "OPENROUTER_API_KEY": "k"},
@@ -138,8 +148,8 @@ class SerializedRequestContractTests(unittest.TestCase):
                             ({}, {"max_output_tokens": 2000, "reasoning_effort": "minimal"}),
                             ({}, {"reasoning_effort": "low"})):      # reasoning needs a verified bounded request
             wire = Wire()
-            with self.subTest(env=env, kwargs=kwargs), patch.dict(os.environ, env):
-                _, error, _ = invoke(wire, **kwargs)
+            with self.subTest(env=env, kwargs=kwargs):
+                _, error, _ = invoke(wire, env=env, **kwargs)
                 self.assertIsInstance(error, llm_gateway.UnsupportedReasoningEffort)
                 self.assertEqual([], wire.requests)
 

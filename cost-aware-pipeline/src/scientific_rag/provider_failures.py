@@ -73,7 +73,7 @@ def _status_error(error: BaseException) -> BaseException | None:
         status = getattr(item, "status_code", None)
         if status is None:
             status = getattr(getattr(item, "response", None), "status_code", None)
-        if type(status) is int:
+        if type(status) is int and status >= 400:   # a successful response is not a provider error
             return item
     return None
 
