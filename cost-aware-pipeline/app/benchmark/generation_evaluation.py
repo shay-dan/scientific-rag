@@ -17,6 +17,9 @@ from typing import Awaitable, Callable
 
 from langchain_core.documents import Document
 
+from scientific_rag import provider_failures as pf
+from scientific_rag.provider_capabilities import UnsupportedReasoningEffort, validate_reasoning_effort
+
 from ..claim_checks import audit_answer_claims
 from ..weak_model_synthesis import (
     EvidenceBlock,
@@ -33,6 +36,18 @@ from .production_verifier_replay import BudgetLedger, output_limit_status
 MANIFEST_SCHEMA = "scientific-rag-generation-eval-manifest/v1"
 CONFIG_SCHEMA = "scientific-rag-generation-eval-config/v1"
 AUTHORIZATION_SCHEMA = "scientific-rag-generation-eval-authorization/v1"
+# R7D-C: v2 binds reasoning effort and a predeclared completion-budget failure policy; its
+# max_calls / max_cost_usd are cumulative benchmark-program ceilings (program ledger).
+CONFIG_SCHEMA_V2 = "scientific-rag-generation-eval-config/v2"
+AUTHORIZATION_SCHEMA_V2 = "scientific-rag-generation-eval-authorization/v2"
+CONFIG_SCHEMAS = (CONFIG_SCHEMA, CONFIG_SCHEMA_V2)
+COMPLETION_BUDGET_POLICIES = ("stop", "score_as_failure")
+V1_CONFIG_FIELDS = frozenset({
+    "schema", "code_sha", "provider", "model", "temperature", "model_context_tokens", "max_input_tokens",
+    "max_output_tokens", "max_calls", "max_cost_usd", "semantic_verification_mode", "claim_recovery_mode",
+    "claim_audit_mode", "prompt_versions",
+})
+V2_CONFIG_FIELDS = V1_CONFIG_FIELDS | {"reasoning_effort", "completion_budget_failure_policy"}
 ADAPTER = "paired_structured_generation_v15_v16"
 ALLOWED_CATEGORIES = {"numeric_fidelity", "attribution", "study_design", "coverage"}
 FORBIDDEN_LABEL_FIELDS = {
@@ -100,6 +115,47 @@ class _ModelOutputFailure(Exception):
 # Arm outcomes. Only ``completed`` and ``failed`` (a model-output failure) are valid terminal
 # model outcomes and may enter paired evaluation. ``interrupted`` (runner stop, quota pause,
 # provider/network/billing failure) and ``not_executed`` never count as prompt quality.
+# R7D-C decision table: each failure class across the five independent outcome dimensions.
+# ``scored_failure_if_policy`` means scored only when the config's predeclared
+# completion_budget_failure_policy is ``score_as_failure``; otherwise excluded and terminal.
+FAILURE_DECISION_TABLE = {
+    pf.COMPLETION_BUDGET_EXHAUSTED: {
+        "generation_outcome": "generation_failed_completion_budget", "scoring": "scored_failure_if_policy",
+        "continuation": "continue_if_policy_else_stop_terminal", "transmission": "confirmed",
+        "accounting": "complete_or_uncertain_reserved"},
+    pf.PROVIDER_STRUCTURED_GENERATION_FAILURE: {
+        "generation_outcome": "generation_failed_unconfirmed_cause", "scoring": "excluded",
+        "continuation": "stop_terminal", "transmission": "confirmed", "accounting": "complete_or_uncertain_reserved"},
+    pf.LOCAL_STRUCTURED_OUTPUT_FAILURE: {
+        "generation_outcome": "response_failed_local_schema", "scoring": "scored_failure",
+        "continuation": "continue_if_accounting_complete", "transmission": "confirmed",
+        "accounting": "complete_else_stop_billing_unknown"},
+    pf.LOCAL_EVIDENCE_VALIDATION_FAILURE: {
+        "generation_outcome": "response_failed_evidence_validation", "scoring": "one_bounded_repair_then_scored",
+        "continuation": "continue", "transmission": "confirmed", "accounting": "complete_else_stop_billing_unknown"},
+    pf.AUTHENTICATION_OR_CONFIGURATION_FAILURE: {
+        "generation_outcome": "no_generation", "scoring": "excluded", "continuation": "stop_terminal",
+        "transmission": "confirmed_or_not_transmitted", "accounting": "uncertain_reserved_if_transmitted"},
+    pf.PROVIDER_RATE_LIMIT: {
+        "generation_outcome": "no_generation", "scoring": "excluded", "continuation": "stop_terminal",
+        "transmission": "confirmed", "accounting": "uncertain_reserved"},
+    pf.PRE_TRANSMISSION_CAPACITY_PAUSE: {
+        "generation_outcome": "not_attempted", "scoring": "pending", "continuation": "resumable_after_reset",
+        "transmission": "not_transmitted", "accounting": "not_charged"},
+    pf.TRANSIENT_INFRASTRUCTURE_FAILURE: {
+        "generation_outcome": "unknown", "scoring": "excluded", "continuation": "stop_terminal",
+        "transmission": "confirmed_or_uncertain", "accounting": "uncertain_reserved"},
+    pf.UNKNOWN_PROVIDER_FAILURE: {
+        "generation_outcome": "unknown", "scoring": "excluded", "continuation": "stop_terminal",
+        "transmission": "uncertain", "accounting": "uncertain_reserved"},
+}
+_LOCAL_FAILURE_KINDS = {
+    "invalid_structured_output": pf.LOCAL_STRUCTURED_OUTPUT_FAILURE,
+    "invalid_repair_response": pf.LOCAL_EVIDENCE_VALIDATION_FAILURE,
+    "validation_failed_after_repair": pf.LOCAL_EVIDENCE_VALIDATION_FAILURE,
+    pf.COMPLETION_BUDGET_EXHAUSTED: pf.COMPLETION_BUDGET_EXHAUSTED,
+}
+
 SCORABLE_ARM_STATUSES = frozenset({"completed", "failed"})
 MODEL_OUTPUT = "model_output"
 INFRASTRUCTURE = "infrastructure"
@@ -221,8 +277,13 @@ def validate_manifest(manifest: dict) -> dict:
 
 
 def validate_config(config: dict) -> dict:
-    if not isinstance(config, dict) or config.get("schema") != CONFIG_SCHEMA:
-        raise ValueError(f"config must use {CONFIG_SCHEMA}")
+    if not isinstance(config, dict) or config.get("schema") not in CONFIG_SCHEMAS:
+        raise ValueError(f"config must use {CONFIG_SCHEMA} or {CONFIG_SCHEMA_V2}")
+    if config["schema"] == CONFIG_SCHEMA:
+        if set(config) & (V2_CONFIG_FIELDS - V1_CONFIG_FIELDS):
+            raise ValueError(f"reasoning and completion-budget settings require {CONFIG_SCHEMA_V2}")
+    elif set(config) != V2_CONFIG_FIELDS:
+        raise ValueError(f"{CONFIG_SCHEMA_V2} fields must be exactly: {', '.join(sorted(V2_CONFIG_FIELDS))}")
     if not re.fullmatch(r"[0-9a-f]{40}", str(config.get("code_sha") or "")):
         raise ValueError("config code_sha must be an exact commit SHA")
     for field in ("provider", "model"):
@@ -248,7 +309,55 @@ def validate_config(config: dict) -> dict:
         raise ValueError("config exceeds the proposed R7D pilot ceiling")
     if config["max_input_tokens"] + config["max_output_tokens"] > config["model_context_tokens"]:
         raise ValueError("input and output ceilings exceed the pinned model context window")
+    if config["schema"] == CONFIG_SCHEMA_V2:
+        if config.get("reasoning_effort") is None:
+            raise ValueError("config reasoning_effort is required and must be explicit")
+        try:
+            validate_reasoning_effort(config["provider"], config["model"], config["reasoning_effort"])
+        except UnsupportedReasoningEffort as error:
+            raise ValueError(str(error)) from None
+        if config.get("completion_budget_failure_policy") not in COMPLETION_BUDGET_POLICIES:
+            raise ValueError("completion_budget_failure_policy must be stop or score_as_failure")
     return config
+
+
+def generation_settings(config: dict) -> dict:
+    """Settings sent with BOTH the initial generation and the repair of every arm (v15 and v16)."""
+    settings = {"max_output_tokens": config["max_output_tokens"]}
+    if config.get("schema") == CONFIG_SCHEMA_V2:
+        settings["reasoning_effort"] = config["reasoning_effort"]
+    return settings
+
+
+def _scores_completion_budget_failures(config: dict) -> bool:
+    return (config.get("schema") == CONFIG_SCHEMA_V2
+            and config.get("completion_budget_failure_policy") == "score_as_failure")
+
+
+def outcome_dimensions(arm: dict, attempts: list[dict]) -> dict:
+    """The five independent outcome dimensions of one finalized arm (see FAILURE_DECISION_TABLE)."""
+    provider_failure = arm.get("provider_failure") or {}
+    if not attempts:
+        accounting = "not_charged"
+    elif all(item.get("cost_status") == "complete" for item in attempts):
+        accounting = "complete"
+    else:
+        accounting = "uncertain_reserved"
+    transmission = provider_failure.get("transmission") or ("confirmed" if attempts else "not_transmitted")
+    status = arm.get("status")
+    if status == "completed":
+        generation = "valid_after_repair" if arm.get("repair_attempted") else "valid"
+        scoring, continuation = "scored", "continue"
+    elif status == "failed":
+        generation = _LOCAL_FAILURE_KINDS.get(arm.get("failure_kind"), str(arm.get("failure_kind")))
+        scoring, continuation = "scored_failure", "continue"
+    else:
+        interruption = arm.get("interruption") or {}
+        generation = arm.get("provider_failure_class") or str(arm.get("failure_kind") or status)
+        scoring = "pending" if interruption.get("resumable") else "excluded"
+        continuation = "resumable" if interruption.get("resumable") else "stop_terminal"
+    return {"generation_outcome": generation, "scoring": scoring, "continuation": continuation,
+            "transmission": transmission, "accounting": accounting}
 
 
 def _blocks_and_context(scenario: dict) -> tuple[list[EvidenceBlock], str]:
@@ -317,17 +426,30 @@ async def _evaluate_arm(scenario: dict, prompt_version: str, config: dict, gatew
         "initial_output": None, "post_repair_output": None, "validation_errors": {},
     }
     phase = "initial"
+    settings = generation_settings(config)
+    provider_failure: dict = {}
 
     async def call(call_prompt: str, schema: type):
         try:
-            raw = await gateway("expert", 0, call_prompt, schema, max_output_tokens=config["max_output_tokens"])
+            raw = await gateway("expert", 0, call_prompt, schema, **settings)
         except (EvaluationStopped, ResumeIntegrityError):
             raise
         except Exception as error:
             if _is_model_output_error(error):
                 raise _ModelOutputFailure("invalid_structured_output", error) from error
+            provider_failure.clear()
+            provider_failure.update(pf.describe_provider_failure(error, schema))
+            if (provider_failure["failure_class"] == pf.COMPLETION_BUDGET_EXHAUSTED
+                    and _scores_completion_budget_failures(config)):
+                raise _ModelOutputFailure(pf.COMPLETION_BUDGET_EXHAUSTED, error) from error
             raise
         return _parsed(raw, schema)
+
+    def sanitized(error: BaseException) -> str:
+        # Provider error bodies can echo prompts or failed generations: keep only typed facts.
+        if provider_failure:
+            return f"{type(error).__name__}: {provider_failure['failure_class']}"
+        return str(error)
 
     try:
         if resume is None:
@@ -382,7 +504,7 @@ async def _evaluate_arm(scenario: dict, prompt_version: str, config: dict, gatew
         raise
     except _ModelOutputFailure as failure:
         result.update(status="failed", failure_class=MODEL_OUTPUT, failure_kind=failure.kind,
-                      failure_phase=phase, error_type=type(failure.cause).__name__, error=str(failure.cause))
+                      failure_phase=phase, error_type=type(failure.cause).__name__, error=sanitized(failure.cause))
     except EvaluationStopped as stop:
         result.update(status="interrupted", failure_class=EXECUTION_STOP,
                       failure_kind="capacity_pause" if stop.resumable else "budget_or_accounting_stop",
@@ -391,10 +513,16 @@ async def _evaluate_arm(scenario: dict, prompt_version: str, config: dict, gatew
                                     "resumable": stop.resumable})
     except Exception as error:
         # Provider, network or gateway failure: not evidence about the prompt.
+        if not provider_failure:
+            provider_failure.update(pf.describe_provider_failure(error))
         result.update(status="interrupted", failure_class=INFRASTRUCTURE, failure_kind="gateway_failure",
-                      failure_phase=phase, error_type=type(error).__name__, error=str(error),
-                      interruption={"phase": phase, "code": "infrastructure", "transmitted": True,
+                      failure_phase=phase, error_type=type(error).__name__, error=sanitized(error),
+                      interruption={"phase": phase, "code": "infrastructure",
+                                    "transmitted": provider_failure.get("transmission") != pf.TRANSMISSION_NOT_SENT,
                                     "resumable": False})
+    if provider_failure:
+        result["provider_failure"] = dict(provider_failure)
+        result["provider_failure_class"] = provider_failure["failure_class"]
     return result
 
 
@@ -498,10 +626,12 @@ def dry_run(manifest: dict, config: dict) -> dict:
         blockers.append("a conservative repair prompt exceeds the input-token ceiling")
     if cost is None or not math.isfinite(cost) or cost < 0 or cost > config["max_cost_usd"]:
         blockers.append("worst-case reservation exceeds the configured cost ceiling")
+    if config["schema"] == CONFIG_SCHEMA_V2 and config["max_output_tokens"] >= REFERENCE_FREE_TOKENS_PER_MINUTE:
+        blockers.append("output-token limit cannot fit the published Groq Free tokens-per-minute sample")
     schedule = [{"scenario_id": scenario["scenario_id"],
                  "execution_order": _execution_order(config, index)}
                 for index, scenario in enumerate(manifest["scenarios"])]
-    return {
+    plan = {
         "adapter": ADAPTER, "manifest_sha256": manifest["manifest_sha256"],
         "config_sha256": canonical_sha256(config), "provider_calls_made": 0,
         "scenarios": len(manifest["scenarios"]), "generation_calls_planned": generation_calls,
@@ -524,6 +654,12 @@ def dry_run(manifest: dict, config: dict) -> dict:
         "capacity_admission": _capacity_admission_plan(prompts, config),
         "prompt_contracts": prompts,
     }
+    if config["schema"] == CONFIG_SCHEMA_V2:
+        plan["generation_settings"] = {
+            "reasoning_effort": config["reasoning_effort"], "max_output_tokens": config["max_output_tokens"],
+            "applies_to": ["initial_generation", "repair"],
+            "completion_budget_failure_policy": config["completion_budget_failure_policy"]}
+    return plan
 
 
 def _capacity_admission_plan(prompts: list[dict], config: dict) -> dict:
@@ -546,11 +682,17 @@ def _capacity_admission_plan(prompts: list[dict], config: dict) -> dict:
 
 
 def check_paid_authorization(authorization: dict | None, *, manifest: dict, config: dict) -> dict:
-    """Bind future authorization to content, accepted code, full config and hard ceilings."""
+    """Bind future authorization to content, accepted code, full config and hard ceilings.
+
+    A v2 config requires a v2 authorization, which also binds the reasoning effort, the
+    completion-budget policy and the exact cumulative program baseline (program ledger).
+    """
     validate_manifest(manifest)
     validate_config(config)
-    if not isinstance(authorization, dict) or authorization.get("schema") != AUTHORIZATION_SCHEMA:
-        raise AuthorizationError(f"paid execution requires future owner authorization ({AUTHORIZATION_SCHEMA})")
+    v2 = config["schema"] == CONFIG_SCHEMA_V2
+    required_schema = AUTHORIZATION_SCHEMA_V2 if v2 else AUTHORIZATION_SCHEMA
+    if not isinstance(authorization, dict) or authorization.get("schema") != required_schema:
+        raise AuthorizationError(f"paid execution requires future owner authorization ({required_schema})")
     expected = {
         "manifest_sha256": manifest["manifest_sha256"], "accepted_code_sha": config["code_sha"],
         "config_sha256": canonical_sha256(config), "provider": config["provider"], "model": config["model"],
@@ -558,7 +700,13 @@ def check_paid_authorization(authorization: dict | None, *, manifest: dict, conf
         "model_context_tokens": config["model_context_tokens"], "max_input_tokens": config["max_input_tokens"],
         "max_output_tokens": config["max_output_tokens"],
     }
-    missing = [field for field in ("authorization_id", "approved_by") if not str(authorization.get(field) or "").strip()]
+    required = ["authorization_id", "approved_by"] + (["program_id"] if v2 else [])
+    missing = [field for field in required if not str(authorization.get(field) or "").strip()]
+    if v2:
+        expected.update(reasoning_effort=config["reasoning_effort"],
+                        completion_budget_failure_policy=config["completion_budget_failure_policy"])
+        if not re.fullmatch(r"[0-9a-f]{64}", str(authorization.get("program_baseline_sha256") or "")):
+            missing.append("program_baseline_sha256")
     mismatched = [field for field, value in expected.items() if authorization.get(field) != value]
     if missing or mismatched:
         raise AuthorizationError("authorization missing or mismatched: " + ", ".join(missing + mismatched))
@@ -593,6 +741,9 @@ async def run_paid_evaluation(manifest: dict, config: dict, *, authorization: di
                               ledger: BudgetLedger | None = None) -> tuple[list[dict], dict]:
     """Future live entry point. R7D-A callers receive a refusal without exact authorization."""
     auth = check_paid_authorization(authorization, manifest=manifest, config=config)
+    if config["schema"] == CONFIG_SCHEMA_V2:
+        raise AuthorizationError("v2 configurations run only through the incremental runner, which carries "
+                                 "the cumulative program ledger")
     from ..evaluation_report import resolve_git_provenance
     provenance = resolve_git_provenance()
     if provenance.get("sha") != config["code_sha"]:
@@ -771,6 +922,8 @@ def build_public_report(records: list[dict], *, scores: dict | None,
 
 def _initial_outcome(arm: dict) -> str:
     if arm.get("initial_output") is None:
+        if arm.get("failure_kind") == pf.COMPLETION_BUDGET_EXHAUSTED:
+            return pf.COMPLETION_BUDGET_EXHAUSTED
         return "invalid_structured_output"
     return "structurally_valid" if arm.get("initial_structurally_valid") else "structurally_invalid"
 
@@ -852,7 +1005,8 @@ def unblind_owner_scores(blind_scores: dict, key: dict) -> dict:
 
 
 __all__ = [
-    "ADAPTER", "AUTHORIZATION_SCHEMA", "AuthorizationError", "EvaluationStopped", "ManifestError",
+    "ADAPTER", "AUTHORIZATION_SCHEMA", "AUTHORIZATION_SCHEMA_V2", "CONFIG_SCHEMA_V2", "COMPLETION_BUDGET_POLICIES",
+    "FAILURE_DECISION_TABLE", "generation_settings", "outcome_dimensions", "AuthorizationError", "EvaluationStopped", "ManifestError",
     "ResumeIntegrityError", "SCORABLE_ARM_STATUSES", "pair_is_scorable", "schema_bytes",
     "build_blind_scoring_packet", "build_public_report", "canonical_sha256", "check_paid_authorization", "dry_run", "evaluate_pair",
     "manifest_hash", "question_context_hash", "run_paid_evaluation", "unblind_owner_scores", "validate_config", "validate_manifest",
