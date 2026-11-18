@@ -284,6 +284,22 @@ class RealProviderEntryPointTests(_Corrections):
                         pairs=1, gateway=gateway, provenance_resolver=lambda: {"sha": "a" * 40, "source": "t"})
         self.assertFalse((self.directory / "r7d-checkpoint.private.json").exists())
 
+    async def test_an_internal_error_before_transmission_fails_closed(self):
+        def broken_clock():
+            raise RuntimeError("clock failure")
+        provider = ScriptedProvider()
+        config = base._config()
+        authorization = base.GateAndReportTests()._authorization(self.manifest, config)
+        patches = _trace_patches(provider)
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            checkpoint = await run_incremental_evaluation(
+                self.manifest, config, authorization=authorization, checkpoint_store=self.checkpoint(), pairs=1,
+                gateway=provider.gateway, provenance_resolver=lambda: {"sha": "a" * 40, "source": "t"},
+                clock=broken_clock)
+        self.assertEqual("internal_error", checkpoint["execution"]["stop_code"])
+        self.assertEqual([], provider.requests)
+        self.assertEqual(0, checkpoint["execution"]["budget"]["provider_calls_charged"])
+
     async def test_injected_test_gateways_keep_historical_v1_behavior(self):
         checkpoint = await self.run_v1(ScriptedProvider(), self.checkpoint())
         self.assertEqual(2, checkpoint["execution"]["budget"]["provider_calls_charged"])

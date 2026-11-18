@@ -13,10 +13,21 @@ Accounting categories kept apart:
 5. actual provider billing: not available here; internal values are estimates/reservations.
 
 Rules: historical checkpoints are only read (never modified); an import is idempotent by
-checkpoint checksum and refuses a different state of a recorded campaign; unknown usage is
-never zero (unresolved and unsettled reservations become uncertain charges); at most one
-campaign is open; a campaign id is never reused; a closed campaign never runs again; a new
-campaign starts from the exact baseline its owner authorization names.
+checkpoint checksum, refuses a different state of a recorded campaign, and is refused while
+a campaign is open (it would change that campaign's baseline); unknown usage is never zero
+(unresolved and unsettled reservations become uncertain charges); at most one campaign is
+open; a campaign id is never reused; a closed campaign never runs again; a new campaign
+starts from the exact baseline its owner authorization names.
+
+Single authoritative execution state (R7D-C review P0.1). An open campaign is bound to one
+checkpoint path. Before every transmission the runner records a high-water mark (checkpoint
+revision, checksum and cumulative budget, reservation included) in the ledger, so:
+- another path, or a missing checkpoint after recorded progress, is refused;
+- an older copy of the checkpoint (revision below the mark, or same revision with another
+  checksum) is refused as stale, for execution and for closing;
+- a per-campaign lock (independent of the checkpoint path) serializes execution and closing.
+These protect against accidental duplicate execution, stale state and ordinary concurrent
+application processes. They do not defend against deliberate tampering with private files.
 """
 from __future__ import annotations
 
@@ -111,6 +122,27 @@ class ProgramLedgerStore:
                 fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as error:
                 raise ProgramLedgerLocked("another process is using this program ledger") from error
+            yield
+        finally:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
+
+    @contextmanager
+    def campaign_lock(self, campaign_id: str) -> Iterator[None]:
+        """Per-campaign execution lock, independent of any checkpoint path. Non-blocking."""
+        _private_parent(self.path)
+        digest = hashlib.sha256(str(campaign_id).encode("utf-8")).hexdigest()[:24]
+        lock_path = self.path.with_name(f"{self.path.name}.campaign-{digest}.lock")
+        descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        os.fchmod(descriptor, 0o600)
+        try:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as error:
+                from .incremental_generation_evaluation import CampaignLocked
+                raise CampaignLocked("another process is executing or closing this campaign") from error
             yield
         finally:
             try:
@@ -257,6 +289,9 @@ def import_campaign(store: ProgramLedgerStore, checkpoint_path: Path) -> dict:
     """Record a pre-ledger campaign (read-only) as closed. Idempotent for identical checkpoints."""
     with store.locked():
         ledger = store.load()
+        if any(item["state"] == "open" for item in ledger["campaigns"]):
+            raise ProgramLedgerError("a campaign is open; importing history now would change its baseline "
+                                     "(close it first)")
         checkpoint, file_sha256 = _read_checkpoint(checkpoint_path)
         if checkpoint.get("program") is not None:
             raise ProgramLedgerError("this checkpoint belongs to a ledger campaign; close it instead of importing")
@@ -319,8 +354,13 @@ def program_baseline(ledger: dict) -> dict:
     }
 
 
-def open_campaign(store: ProgramLedgerStore, *, authorization: dict, config: dict, manifest_sha256: str) -> dict:
-    """Register a new campaign from the exact authorized baseline; returns that baseline."""
+def _path(value) -> str:
+    return str(Path(value).resolve())
+
+
+def open_campaign(store: ProgramLedgerStore, *, authorization: dict, config: dict, manifest_sha256: str,
+                  checkpoint_path) -> dict:
+    """Register a new campaign, bound to one checkpoint path, from the exact authorized baseline."""
     with store.locked():
         ledger = store.load()
         baseline = program_baseline(ledger)
@@ -336,30 +376,89 @@ def open_campaign(store: ProgramLedgerStore, *, authorization: dict, config: dic
                     "authorization_sha256": canonical_sha256(authorization), "baseline_sha256": baseline["sha256"]}
         if existing is not None:
             if existing["state"] == "open" and all(existing.get(key) == value for key, value in identity.items()):
-                return baseline   # opened, then interrupted before its checkpoint existed
+                if existing.get("checkpoint_path") != _path(checkpoint_path):
+                    raise ProgramLedgerError("this campaign's authoritative checkpoint is registered at another path")
+                if existing.get("mark") is not None:
+                    raise ProgramLedgerError("the authoritative checkpoint is missing after recorded progress; "
+                                             "it is never recreated (close the campaign from its ledger mark)")
+                return baseline   # registered, then interrupted before its checkpoint was written
             raise ProgramLedgerError("campaign identity is already recorded; an authorization is never reused")
         if any(item["state"] == "open" for item in ledger["campaigns"]):
             raise ProgramLedgerError("another campaign is already open; close it before opening a new one")
         ledger["campaigns"].append({"campaign_id": campaign_id, "state": "open", "source": "opened",
-                                    "code_sha": config["code_sha"], "baseline": baseline["budget"], **identity})
+                                    "code_sha": config["code_sha"], "baseline": baseline["budget"],
+                                    "checkpoint_path": _path(checkpoint_path), "mark": None, **identity})
         store.write(ledger)
         return baseline
 
 
-def require_runnable_campaign(store: ProgramLedgerStore, campaign_id: str) -> dict:
-    """The ledger entry of an existing campaign checkpoint; refuses closed or unknown campaigns."""
+def _check_authoritative(entry: dict, checkpoint_path, checkpoint: dict | None) -> None:
+    """Refuse any checkpoint state other than the campaign's current authoritative one."""
+    if entry.get("checkpoint_path") != _path(checkpoint_path):
+        raise ProgramLedgerError("not this campaign's authoritative checkpoint (registered at another path)")
+    mark = entry.get("mark")
+    if checkpoint is None:
+        if mark is not None:
+            raise ProgramLedgerError("the authoritative checkpoint is missing after recorded progress; "
+                                     "it is never recreated (close the campaign from its ledger mark)")
+        return
+    program = checkpoint.get("program") if isinstance(checkpoint.get("program"), dict) else {}
+    identity = {"config_sha256": checkpoint.get("config_sha256"), "manifest_sha256": checkpoint.get("manifest_sha256"),
+                "authorization_sha256": checkpoint.get("authorization_sha256"),
+                "baseline_sha256": program.get("baseline_sha256")}
+    if checkpoint.get("authorization_id") != entry["campaign_id"] or any(
+            entry.get(key) != value for key, value in identity.items()) or program.get("baseline") != entry["baseline"]:
+        raise ProgramLedgerError("checkpoint does not match the ledger's open campaign identity and baseline")
+    if mark is not None:
+        revision = checkpoint.get("checkpoint_revision")
+        if type(revision) is not int or revision < mark["revision"] or (
+                revision == mark["revision"] and checkpoint.get("checkpoint_sha256") != mark["checkpoint_sha256"]):
+            raise ProgramLedgerError("stale checkpoint: older than the state recorded before the last transmission")
+
+
+def require_runnable_campaign(store: ProgramLedgerStore, campaign_id: str, checkpoint_path,
+                              checkpoint: dict | None) -> dict:
+    """The open campaign's entry, if ``checkpoint`` (None: missing) is its authoritative state."""
     ledger = store.load()
     entry = _campaign(ledger, campaign_id)
     if entry is None:
         raise ProgramLedgerError("campaign is not recorded in this program ledger")
     if entry["state"] != "open":
         raise ProgramLedgerError("campaign is closed; a closed campaign never runs again")
+    _check_authoritative(entry, checkpoint_path, checkpoint)
     return entry
 
 
+def record_checkpoint_mark(store: ProgramLedgerStore, campaign_id: str, checkpoint_path, checkpoint: dict) -> dict:
+    """High-water mark of the authoritative checkpoint; recorded before every transmission."""
+    with store.locked():
+        ledger = store.load()
+        entry = _campaign(ledger, campaign_id)
+        if entry is None or entry["state"] != "open":
+            raise ProgramLedgerError("campaign is not open in this program ledger")
+        _check_authoritative(entry, checkpoint_path, checkpoint)
+        entry["mark"] = {"revision": checkpoint["checkpoint_revision"],
+                         "checkpoint_sha256": checkpoint["checkpoint_sha256"],
+                         "budget": dict(checkpoint["execution"]["budget"])}
+        store.write(ledger)
+        return entry["mark"]
+
+
+def _consumed(cumulative: dict, base: dict) -> dict:
+    consumed = {"provider_calls_charged": cumulative["provider_calls_charged"] - base["provider_calls_charged"]}
+    for key in BUDGET_FIELDS[1:]:
+        consumed[key] = _round(cumulative[key] - base[key])
+    return consumed
+
+
 def close_campaign(store: ProgramLedgerStore, checkpoint_store) -> dict:
-    """Close the open campaign, recording its consumption. Its checkpoint is not modified."""
-    with store.locked(), checkpoint_store.locked():
+    """Close the open campaign from its authoritative checkpoint (not modified).
+
+    Lock order: campaign, then ledger, then checkpoint. All locks are non-blocking, so a
+    contended close is refused rather than deadlocked.
+    """
+    campaign_id = _read_checkpoint(checkpoint_store.path)[0].get("authorization_id")
+    with store.campaign_lock(str(campaign_id)), store.locked(), checkpoint_store.locked():
         ledger = store.load()
         checkpoint, file_sha256 = _read_checkpoint(checkpoint_store.path)
         program = checkpoint.get("program")
@@ -372,16 +471,40 @@ def close_campaign(store: ProgramLedgerStore, checkpoint_store) -> dict:
             if entry.get("checkpoint_sha256") == checkpoint["checkpoint_sha256"]:
                 return entry
             raise ProgramLedgerError("campaign is already closed with a different checkpoint state")
-        if program.get("baseline_sha256") != entry["baseline_sha256"] or program.get("baseline") != entry["baseline"]:
-            raise ProgramLedgerError("checkpoint baseline does not match the ledger's open campaign")
+        _check_authoritative(entry, checkpoint_store.path, checkpoint)
         cumulative, unresolved = _budget_from_checkpoint(checkpoint)
         _reconcile(checkpoint, _checkpoint_budget(checkpoint), entry["baseline"])
-        base = entry["baseline"]
-        consumed = {"provider_calls_charged": cumulative["provider_calls_charged"] - base["provider_calls_charged"]}
-        for key in BUDGET_FIELDS[1:]:
-            consumed[key] = _round(cumulative[key] - base[key])
-        closed = _closed_entry(checkpoint, file_sha256, consumed, unresolved, "opened")
-        closed.update({key: entry[key] for key in ("authorization_sha256", "baseline_sha256", "baseline")})
+        closed = _closed_entry(checkpoint, file_sha256, _consumed(cumulative, entry["baseline"]), unresolved, "opened")
+        closed.update({key: entry[key] for key in ("authorization_sha256", "baseline_sha256", "baseline",
+                                                   "checkpoint_path", "mark")})
+        ledger["campaigns"][ledger["campaigns"].index(entry)] = closed
+        store.write(ledger)
+        return closed
+
+
+def close_lost_campaign(store: ProgramLedgerStore, campaign_id: str) -> dict:
+    """Close an open campaign whose authoritative checkpoint no longer exists.
+
+    Its consumption is the last ledger mark, recorded before the last transmission with that
+    request's reservation included, so it does not understate what could have been sent
+    (unsettled reservations count as uncertain).
+    """
+    with store.campaign_lock(campaign_id), store.locked():
+        ledger = store.load()
+        entry = _campaign(ledger, campaign_id)
+        if entry is None or entry["state"] != "open":
+            raise ProgramLedgerError("campaign is not open in this program ledger")
+        if Path(entry["checkpoint_path"]).exists():
+            raise ProgramLedgerError("the authoritative checkpoint exists; close the campaign from it")
+        mark = entry.get("mark")
+        cumulative = (_budget_from_checkpoint({"execution": {"budget": mark["budget"]}, "active_attempt": None})[0]
+                      if mark is not None else dict(entry["baseline"]))
+        closed = {key: entry[key] for key in ("campaign_id", "source", "code_sha", "config_sha256", "manifest_sha256",
+                                              "authorization_sha256", "baseline_sha256", "baseline",
+                                              "checkpoint_path", "mark")}
+        closed.update(state="closed", closed_from_ledger_mark=True, checkpoint_sha256=None,
+                      unresolved_attempt=mark is not None and mark["budget"]["unsettled_reserved_usd"] > 0,
+                      consumed=_consumed(cumulative, entry["baseline"]))
         ledger["campaigns"][ledger["campaigns"].index(entry)] = closed
         store.write(ledger)
         return closed
@@ -414,28 +537,47 @@ def record_diagnostic(store: ProgramLedgerStore, source_path: Path, *, label: st
 
 
 def accounting_summary(ledger: dict, checkpoint: dict | None = None) -> dict:
-    """The five accounting categories, kept separate."""
+    """Accounting views kept separate: closed baseline, current experiment, cumulative,
+    diagnostics and (unavailable) actual provider billing.
+
+    The current experiment comes from ``checkpoint`` when it is the open campaign's, otherwise
+    from the ledger mark (recorded before each transmission, reservation included).
+    """
     baseline = program_baseline(ledger)
-    program = dict(baseline["budget"])
-    experiment = None
-    attempts = None
-    if checkpoint is not None and isinstance(checkpoint.get("program"), dict):
-        cumulative = checkpoint["execution"]["budget"]
-        base = checkpoint["program"]["baseline"]
-        experiment = {"provider_calls_charged": cumulative["provider_calls_charged"] - base["provider_calls_charged"]}
-        for key in BUDGET_FIELDS[1:]:
-            experiment[key] = _round(cumulative[key] - base[key])
-        program = dict(cumulative)
-        attempts = len(checkpoint["execution"].get("calls") or [])
+    ceilings = baseline["ceilings"]
+    open_entry = next((item for item in ledger["campaigns"] if item["state"] == "open"), None)
+    current = None
+    if open_entry is not None:
+        source = None
+        if (checkpoint is not None and checkpoint.get("authorization_id") == open_entry["campaign_id"]
+                and isinstance(checkpoint.get("program"), dict)):
+            source, basis = checkpoint["execution"]["budget"], "checkpoint"
+        elif open_entry.get("mark") is not None:
+            source, basis = open_entry["mark"]["budget"], "ledger_mark"
+        if source is not None:
+            converted = _budget_from_checkpoint({"execution": {"budget": source}, "active_attempt": None})[0]
+            current = {**_consumed(converted, open_entry["baseline"]), "campaign_id": open_entry["campaign_id"],
+                       "basis": basis}
+        else:
+            current = {**_consumed(open_entry["baseline"], open_entry["baseline"]),
+                       "campaign_id": open_entry["campaign_id"], "basis": "no_transmission_recorded"}
+    cumulative = dict(baseline["budget"])
+    if current is not None:
+        for key in BUDGET_FIELDS:
+            cumulative[key] = (cumulative[key] + current[key] if key == "provider_calls_charged"
+                               else _round(cumulative[key] + current[key]))
     diagnostics = ledger["diagnostics"]
     return {
-        "provider_attempts": {"campaign_call_records": attempts,
+        "provider_attempts": {"campaign_call_records": len(checkpoint["execution"].get("calls") or [])
+                              if checkpoint is not None else None,
                               "campaigns": [{"campaign_id": item["campaign_id"], "state": item["state"]}
                                             for item in ledger["campaigns"]]},
-        "experiment": experiment,
-        "program": {**program, "ceilings": baseline["ceilings"],
-                    "remaining_calls": baseline["ceilings"]["max_calls"] - program["provider_calls_charged"],
-                    "remaining_cost_usd": _round(baseline["ceilings"]["max_cost_usd"] - program["budget_charged_usd"])},
+        "closed_baseline": {**baseline["budget"], "closed_campaigns": baseline["closed_campaigns"],
+                            "baseline_sha256": baseline["sha256"]},
+        "current_experiment": current,
+        "cumulative": {**cumulative, "ceilings": ceilings,
+                       "remaining_calls": ceilings["max_calls"] - cumulative["provider_calls_charged"],
+                       "remaining_cost_usd": _round(ceilings["max_cost_usd"] - cumulative["budget_charged_usd"])},
         "diagnostics": {"entries": len(diagnostics), "requests": sum(item["requests"] for item in diagnostics),
                         "estimated_cost_usd": _round(sum(item["estimated_cost_usd"] for item in diagnostics)),
                         "uncertain_reserved_usd": _round(sum(item["uncertain_reserved_usd"] for item in diagnostics)),
@@ -448,6 +590,6 @@ def accounting_summary(ledger: dict, checkpoint: dict | None = None) -> dict:
 
 __all__ = [
     "PROGRAM_LEDGER_SCHEMA", "ProgramLedgerError", "ProgramLedgerLocked", "ProgramLedgerStore",
-    "accounting_summary", "close_campaign", "import_campaign", "initialize_program_ledger", "open_campaign",
-    "program_baseline", "record_diagnostic", "require_runnable_campaign",
+    "accounting_summary", "close_campaign", "close_lost_campaign", "import_campaign", "initialize_program_ledger",
+    "open_campaign", "program_baseline", "record_checkpoint_mark", "record_diagnostic", "require_runnable_campaign",
 ]

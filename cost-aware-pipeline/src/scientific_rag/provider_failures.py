@@ -52,7 +52,21 @@ _LOCAL_OUTPUT_NAMES = ("InvalidStructured", "ValidationError", "OutputParserExce
 _NOT_TRANSMITTED_NAMES = ("OutputTokenLimit", "UnsupportedOutputTokenLimit", "ReasoningEffort")
 _TRANSIENT_NAMES = ("Timeout", "ConnectError", "ConnectionError", "APIConnectionError", "ReadError",
                     "RemoteProtocolError", "WriteError", "PoolTimeout")
-_REQUEST_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+# R7D-C review P1.3: identifier-shaped text is not necessarily safe (a credential or private
+# text can look like a code). Only known provider identifiers are kept; anything else becomes
+# "other". Request ids are kept only in the provider's ``req_`` + ULID-like form.
+KNOWN_ERROR_CODES = frozenset({
+    "json_validate_failed", "invalid_api_key", "rate_limit_exceeded", "model_not_found", "model_decommissioned",
+    "context_length_exceeded", "request_too_large", "insufficient_quota", "invalid_request_error",
+    "unknown_url", "permission_denied", "organization_restricted", "service_unavailable",
+    "internal_server_error", "bad_request", "not_found",
+})
+KNOWN_ERROR_TYPES = frozenset({
+    "invalid_request_error", "authentication_error", "permission_error", "not_found_error",
+    "rate_limit_error", "tokens", "requests", "api_error", "server_error", "service_unavailable",
+    "internal_server_error", "overloaded_error",
+})
+_REQUEST_ID = re.compile(r"^req_[0-9a-z]{16,40}$")
 
 
 def _chain(error: BaseException):
@@ -90,11 +104,11 @@ def _error_body(item: BaseException) -> dict:
     return {}
 
 
-def _text(value: Any, limit: int = 64) -> str | None:
-    """Short machine identifiers only (codes, types); never free text."""
-    if not isinstance(value, str) or not value or len(value) > limit:
+def _known(value: Any, allowed: frozenset) -> str | None:
+    """A known provider identifier, ``other`` for any other present value, or None."""
+    if value is None or value == "":
         return None
-    return value if re.fullmatch(r"[A-Za-z0-9_.:/-]+", value) else None
+    return value if isinstance(value, str) and value in allowed else "other"
 
 
 def _request_id(item: BaseException) -> str | None:
@@ -162,8 +176,10 @@ def describe_provider_failure(error: BaseException, response_schema: Any = None)
         return description
     status = _status(status_error)
     body = _error_body(status_error)
-    code = _text(body.get("code")) or _text(getattr(status_error, "code", None))
-    kind = _text(body.get("type")) or _text(getattr(status_error, "type", None))
+    raw_code = body.get("code") if body.get("code") is not None else getattr(status_error, "code", None)
+    raw_kind = body.get("type") if body.get("type") is not None else getattr(status_error, "type", None)
+    code = _known(raw_code, KNOWN_ERROR_CODES)
+    kind = _known(raw_kind, KNOWN_ERROR_TYPES)
     description.update(http_status=status, provider_error_code=code, provider_error_type=kind,
                        request_id=_request_id(status_error), transmission=TRANSMISSION_CONFIRMED)
     description.update(_failed_generation_facts(body, response_schema))

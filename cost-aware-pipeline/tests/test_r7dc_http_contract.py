@@ -169,7 +169,7 @@ class SerializedRequestContractTests(unittest.TestCase):
 
 class ProviderErrorContractTests(unittest.TestCase):
     def failing(self, status, body=None, *, content=None, headers=None):
-        headers = {"x-request-id": "req_01test", **(headers or {})}
+        headers = {"x-request-id": "req_01jabcdefghjkmnpqrstvwxyz0", **(headers or {})}
         if content is not None:
             return Wire(httpx.Response(status, content=content, headers=headers))
         return Wire(httpx.Response(status, json=body, headers=headers))
@@ -186,7 +186,7 @@ class ProviderErrorContractTests(unittest.TestCase):
         self.assertEqual(["limitations", "unanswered_parts"], description["missing_top_level_fields"])
         diagnostics = attempts[0]["diagnostics"]
         self.assertEqual((400, "json_validate_failed", "invalid_request_error", "completion_budget_exhausted",
-                          "req_01test", True, len(FAILED_GENERATION), True, "medium", 2000, False, "confirmed"),
+                          "req_01jabcdefghjkmnpqrstvwxyz0", True, len(FAILED_GENERATION), True, "medium", 2000, False, "confirmed"),
                          (diagnostics["http_status"], diagnostics["provider_error_code"],
                           diagnostics["provider_error_type"], diagnostics["failure_class"],
                           diagnostics["request_id"], diagnostics["failed_generation_returned"],

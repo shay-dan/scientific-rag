@@ -51,6 +51,11 @@ structured facts:
   top-level schema fields are missing.
 
 It never returns message text, error bodies, prompts, generated text or credentials.
+Identifier-shaped text is not assumed to be safe. Error codes and types are kept only when
+they are known provider identifiers; anything else becomes `other`. Request ids are kept only
+in Groq's `req_` + lowercase-ULID form. Stored arm errors are reduced to
+`<ExceptionType>: <failure class>`, and local Pydantic failures add only their error
+*types* (for example `missing`), never locations, inputs or messages.
 Truncation is recognised only for HTTP 400 + `json_validate_failed` + the provider's explicit
 completion-budget wording. Other `json_validate_failed` responses, and other 400s, are not
 truncation.
@@ -75,6 +80,16 @@ class as the stop code. v1 campaigns keep their historical stop codes, with the 
 added. Safety stops (quota, model drift, unexpected retry, output limit) keep their PR #24
 precedence. Quota text heuristics no longer read typed provider error bodies.
 
+**Execution-integrity stops always outrank scoring** (review P0.3). A confirmed truncation
+that coincides with an unexpected retry, model drift, an output-ceiling breach, a measured
+cost above its reservation, or the cumulative cost ceiling becomes an `execution_stop`
+interruption. It is excluded from pairing and terminal. Only a confirmed truncation whose
+sole irregularity is unreported usage is scored under `score_as_failure`, and its full
+reservation stays charged as uncertain.
+
+An internal error before any transmission (nothing sent or spent) stops the campaign with
+`internal_error`, rather than leaving the stage looking successful.
+
 **Why scoring a confirmed truncation is valid:** the completion ceiling and reasoning effort
 are fixed by the config hash and identical for both arms. Exhausting that budget is therefore
 a property of the prompt under the declared contract, not an infrastructure accident. The
@@ -94,26 +109,85 @@ non-blocking advisory lock. No database is used.
   - a different state of a recorded campaign is refused;
   - the call audit must reconcile with the checkpoint's budget;
   - unsettled or unresolved reservations become uncertain charges, never zero.
+- **Import** is refused while a campaign is open, because it would change that campaign's
+  baseline.
 - **Open** (by `incremental-run` for v2):
   - requires the authorization's exact `program_baseline_sha256`;
   - only one campaign can be open, and a campaign id is never reused;
-  - an open interrupted before its checkpoint existed can be completed.
-- **Run:** the checkpoint binds the baseline and its budget starts there, so every
-  reservation is checked against the cumulative remaining allowance **before transmission**.
-  A closed campaign never runs again.
-- **Close:** takes both locks, records per-experiment consumption, and does not modify the
-  checkpoint. It is idempotent for the same final checkpoint.
+  - binds the campaign to **one authoritative checkpoint path**.
+- **Run:**
+  - the checkpoint binds the baseline and its budget starts there, so every reservation is
+    checked against the cumulative remaining allowance **before transmission**;
+  - before every transmission the runner records a **ledger mark**: checkpoint revision,
+    checksum and cumulative budget, including that request's reservation;
+  - execution must use the registered path, match the ledger entry's identity and baseline,
+    and not be older than the mark;
+  - v2 execution holds a **per-campaign lock** that is independent of the checkpoint path;
+  - a closed campaign never runs again.
+- **Close:**
+  - takes the campaign, ledger and checkpoint locks;
+  - accepts only the authoritative, non-stale checkpoint;
+  - records per-experiment consumption, keeping unsettled reservations as uncertain;
+  - does not modify the checkpoint, and is idempotent for the same final checkpoint.
+- **Close a lost campaign** (`ledger-close-lost`): if the authoritative checkpoint no longer
+  exists, the campaign closes from its last mark. That mark was taken before the last
+  transmission with the reservation included, so it does not understate what could have
+  been sent. A lost checkpoint is never recreated after recorded progress.
 - **Diagnostics:** recorded separately by source-file hash, and never counted against
   benchmark ceilings or as benchmark pairs. They are still reported, so their quota use and
   potential expense stay visible.
 
-`ledger-summary` reports five separate categories:
-1. provider attempts;
-2. the current experiment;
-3. the cumulative program;
-4. diagnostics;
-5. actual provider billing, which is always reported as `not_available`: internal values are
-   token-based estimates and reservations.
+`ledger-summary` keeps these views separate:
+- `closed_baseline`: closed campaigns only;
+- `current_experiment`: the open campaign's consumption, from its checkpoint or otherwise its
+  last ledger mark (`basis` says which);
+- `cumulative`: the two together, with remaining allowance;
+- `diagnostics`: never counted against the ceilings;
+- `actual_provider_billing`: always `not_available`, because internal values are token-based
+  estimates and reservations.
+
+An open campaign's spending is never hidden behind the closed baseline.
+
+### Single authoritative state and crash behavior (review P0.1/P0.2)
+
+This protects against accidental duplicate execution, stale state and ordinary concurrent
+application processes. It does **not** defend against deliberate tampering with private
+files. All locks are non-blocking, so contention is refused rather than deadlocked. The lock
+order is campaign → ledger → checkpoint.
+
+| Crash point | State on disk | Next invocation |
+|---|---|---|
+| After ledger registration, before the checkpoint exists | Open entry with path P and no mark | Same path P creates the checkpoint; any other path is refused |
+| After the checkpoint is created, before its first mark | Checkpoint at P, no mark | Accepted (nothing was sent), then marked |
+| After a reservation is written, before its mark | Checkpoint with an `active_attempt` | Refused as unresolved (PR #24); close keeps it as uncertain |
+| After the mark, during transmission | Mark covers the reservation | Refused as unresolved; a lost checkpoint closes from the mark |
+| After settlement | Settled checkpoint, newer than the mark | Accepted |
+| An older copy restored at P, or used from another path | Revision below the mark, or another path | Refused as stale, or as not authoritative |
+| During close | Atomic ledger replace | The campaign is either still open or closed |
+
+### Real-provider entry points (review P1.1)
+
+The real gateway (default or `llm_gateway.ainvoke_structured`) runs only through
+`run_incremental_evaluation`, and only with a v2 config and the program ledger.
+`run_paid_evaluation` refuses it outright. Injected test gateways keep historical v1
+behavior for offline tests, and v1 configs remain valid for dry runs and checkpoint reading.
+
+### Monetary reservation basis (review P1.2)
+
+| Config | Reservation input basis |
+|---|---|
+| v1 (historical, unchanged) | prompt UTF-8 bytes |
+| v2 | prompt bytes + provider-facing JSON schema bytes (initial or repair) + 512 framing tokens |
+
+In both cases the output basis is the completion ceiling, and the cost uses the built-in
+price. Text tokenizes to at most one token per UTF-8 byte, but providers render schemas and
+chat templates in their own formats. **The reservation is therefore a conservative
+estimate, not a guaranteed provider-independent bound.** Two checks fail closed:
+- a measured cost above its reservation stops with `reservation_exceeded`;
+- a settled cumulative charge above the ceiling stops with `cost_ceiling_exceeded`.
+
+In both cases the measured consumption is kept and never replaced by zero or by the
+reservation. The dry-run planning bound uses the same basis.
 
 ### Recovery state machine (implemented scope)
 
@@ -152,7 +226,9 @@ changes the config (reasoning effort), so it cannot continue the old campaign an
 - Program totals equal the sum of closed campaigns plus the open campaign beyond its baseline.
 - Unknown usage is charged as its full reservation, never as zero.
 - Remaining allowance is checked before transmission. Concurrent ledger operations are
-  exclusive, and a campaign checkpoint cannot be closed while it is running.
+  exclusive, and a campaign cannot be closed while it is running.
+- One authorization runs through exactly one checkpoint path. Older copies are stale, and a
+  lost checkpoint is never recreated after progress.
 
 The owner's known history reconciles as follows when imported:
 
@@ -165,6 +241,30 @@ The owner's known history reconciles as follows when imported:
 That is $0.00545370 accounted, leaving 76 requests and $1.49454630. A full fresh 20-pair
 worst case (80 requests) exceeds the remaining 76. The dry run reports this as a warning, and
 execution stops at the ceiling. **No ceiling is raised without explicit owner approval.**
+
+## First-stage live acceptance test (proposal; not implemented, not authorized)
+
+This is a separate PR after R7D-C is accepted. It uses synthetic, non-benchmark cases only.
+
+| Dimension | Values |
+|---|---|
+| Cases | 3 challenging synthetic cases (multi-source numerical, attribution/causality, incomplete evidence and abstention) |
+| Prompts | v15 and v16 |
+| Configurations | low reasoning at 2,000 and at 3,000 completion tokens |
+| Initial generations | 3 × 2 × 2 = 12 |
+| Bounded repairs | at most 12 (one per generation, only when validation fails) |
+| Repair-schema checks | at most 2 dedicated calls (one per configuration) |
+| **Maximum requests** | **26** |
+
+- **Cost:** at most about $0.08 reserved (26 × about $0.003: $0.15 per million input tokens
+  on a ~8K-token conservative basis, plus $0.60 per million output tokens on 3,000); about
+  $0.02–0.03 expected.
+  It is recorded as diagnostics, never against the benchmark ceilings.
+- **Capacity:** at most about 26 × 11K ≈ 290K reserved tokens. That exceeds one day of the
+  published Free 200K tokens per day, so it may need two days; it is paced under the
+  8K tokens-per-minute limit.
+- **Further repetitions** only if this first result is inconclusive, and only with
+  separate approval.
 
 ## Authenticated preflight (opt-in)
 
@@ -193,6 +293,8 @@ docker @run ledger-import --ledger /private/r7d-program-ledger.private.json --ch
 docker @run ledger-import --ledger /private/r7d-program-ledger.private.json --checkpoint /private/<replacement-campaign-checkpoint>.json
 docker @run ledger-record-diagnostic --ledger /private/r7d-program-ledger.private.json --source /private/<diagnostic>.jsonl --label config-discovery-20261118 --requests 20 --estimated-cost-usd <x> --uncertain-reserved-usd <y>
 docker @run ledger-summary --ledger /private/r7d-program-ledger.private.json
+# Only if an open campaign's authoritative checkpoint was lost (closes from its last ledger mark):
+# docker @run ledger-close-lost --ledger /private/r7d-program-ledger.private.json --campaign-id <authorization_id>
 
 # 2. Zero-call dry run of a v2 config with the cumulative allowance
 docker @run dry-run --manifest /private/r7d-20-manifest.private.json --config /private/r7d-config.v2.private.json --program-ledger /private/r7d-program-ledger.private.json --out /private/r7d-dry-run.v2.private.json

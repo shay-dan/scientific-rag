@@ -844,6 +844,38 @@ R7 is split into separately authorized stages in this order:
    - A full fresh 20-pair worst case (80) exceeds the remaining 76 requests. No ceiling is
      raised without explicit approval.
 
+   **Independent review of PR #25 at `f1c58f6` (2026-11-18): not approved for merge.**
+   Every finding was reproduced first (`b49b495`; 16 failures and 6 errors; the two control
+   tests passed) and then corrected in the same PR:
+   - **P0.1 duplicate or stale execution under one authorization.** A missing alternate
+     checkpoint path could restart from the original baseline. Now:
+     - an open campaign is bound to one checkpoint path, with a per-campaign lock;
+     - a ledger mark is recorded before every transmission, so older copies are refused as
+       stale for execution and for closing;
+     - a lost checkpoint is never recreated after progress; it is closed from its last mark.
+   - **P0.2** Historical imports are refused while a campaign is open. Execution and close
+     verify the ledger entry's identity and baseline. Unresolved reservations survive crashes
+     and closure.
+   - **P0.3** A confirmed truncation with an unexpected retry, model drift or an
+     output-ceiling breach is an execution-integrity stop, never scored. Only truncation with
+     incomplete usage alone is scored under the predeclared policy.
+   - **P1.1** The real provider gateway runs only through the incremental runner with a v2
+     config and the program ledger. The one-shot runner refuses it. Injected test gateways
+     keep historical v1 behavior.
+   - **P1.2** v2 reservations add schema bytes and 512 framing tokens. This is documented as
+     an estimate, not a guaranteed bound. A measured cost above its reservation, or above the
+     cumulative ceiling, stops the campaign and is preserved. v1 is unchanged.
+   - **P1.3** Error codes and types are kept only when they are known provider identifiers;
+     request ids only in Groq's form; stored errors are typed only.
+   - **P2** Summaries separate the closed baseline, the open experiment (checkpoint or ledger
+     mark), cumulative consumption and diagnostics. Provider-reported reasoning tokens and
+     finish reason are recorded per call, never estimated.
+   - **Also found:** an internal error before transmission was silently treated as an
+     untransmitted pending arm. It now stops with `internal_error`.
+   - **Revised live acceptance proposal** (separate PR, not authorized): 3 challenging
+     synthetic cases × v15/v16 × low reasoning at 2,000 and 3,000 tokens; 12 initial
+     generations, at most 12 repairs and 2 repair-schema checks, at most 26 requests.
+
 R7A never converts zero surviving claims to `insufficient_evidence`; that outcome
 remains reserved for the independent evidence-sufficiency gate. R7A merged in PR #17 as
 `d638e15`. Its post-merge CI and Security runs passed: 799 unit tests executed (741

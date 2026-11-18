@@ -68,7 +68,7 @@ def ledger_module():
 class FakeStatusError(Exception):
     """Shaped like ``openai.APIStatusError``; ``str()`` echoes the body as the SDK does."""
 
-    def __init__(self, status, body=None, *, request_id="req_test_1"):
+    def __init__(self, status, body=None, *, request_id="req_01jabcdefghjkmnpqrstvwxyz0"):
         self.status_code = status
         self.body = body
         self.code = body.get("code") if isinstance(body, dict) else None
@@ -125,7 +125,7 @@ class ProviderFailureClassificationTests(unittest.TestCase):
         self.assertEqual(len(INCOMPLETE_GENERATION), description["failed_generation_chars"])
         self.assertTrue(description["failed_generation_parses_as_json"])
         self.assertEqual(["limitations", "unanswered_parts"], description["missing_top_level_fields"])
-        self.assertEqual(("confirmed", "req_test_1"), (description["transmission"], description["request_id"]))
+        self.assertEqual(("confirmed", "req_01jabcdefghjkmnpqrstvwxyz0"), (description["transmission"], description["request_id"]))
 
     def test_truncation_with_syntactically_truncated_json(self):
         description = self.classify(truncation_error(generation='{"claims": [{"text": "unterminated'))
@@ -641,8 +641,9 @@ class ProgramLedgerTests(_CampaignHarness):
         self.assertAlmostEqual(0.003552, budget["uncertain_reserved_usd"], places=8)
         self.assertEqual(4, checkpoint["program"]["baseline"]["provider_calls_charged"])
         state = ledger_module().accounting_summary(ledger_store.load(), checkpoint)
-        self.assertEqual(2, state["experiment"]["provider_calls_charged"])
-        self.assertEqual(6, state["program"]["provider_calls_charged"])
+        self.assertEqual(2, state["current_experiment"]["provider_calls_charged"])
+        self.assertEqual(6, state["cumulative"]["provider_calls_charged"])
+        self.assertEqual(4, state["closed_baseline"]["provider_calls_charged"])
         self.assertEqual("not_available", state["actual_provider_billing"]["status"])
 
     async def test_v2_campaigns_require_the_program_ledger_and_an_exact_baseline(self):
@@ -693,7 +694,7 @@ class ProgramLedgerTests(_CampaignHarness):
         module.close_campaign(ledger_store, store)            # idempotent for the same final checkpoint
         with self.assertRaisesRegex(module.ProgramLedgerError, "closed"):
             await self.run_v2(provider, store, ledger_store)   # a closed campaign never runs again
-        with self.assertRaisesRegex(module.ProgramLedgerError, "already recorded"):
+        with self.assertRaisesRegex(module.ProgramLedgerError, "closed|already recorded"):
             await self.run_v2(provider, self.checkpoint("replay.json"), ledger_store,
                               authorization=v2_authorization(self.manifest, v2_config(),
                                                              baseline_sha256=module.program_baseline(
@@ -709,7 +710,7 @@ class ProgramLedgerTests(_CampaignHarness):
         baseline = module.program_baseline(ledger_store.load())
         authorization = v2_authorization(self.manifest, config, baseline_sha256=baseline["sha256"])
         module.open_campaign(ledger_store, authorization=authorization, config=config,
-                             manifest_sha256=self.manifest["manifest_sha256"])
+                             manifest_sha256=self.manifest["manifest_sha256"], checkpoint_path=self.checkpoint().path)
         provider = ScriptedProvider()
         checkpoint = await self.run_v2(provider, self.checkpoint(), ledger_store, authorization=authorization)
         self.assertEqual(2, checkpoint["execution"]["budget"]["provider_calls_charged"])
@@ -743,8 +744,8 @@ class ProgramLedgerTests(_CampaignHarness):
         self.assertEqual(0, module.program_baseline(ledger)["budget"]["provider_calls_charged"])
         summary = module.accounting_summary(ledger)
         self.assertEqual(20, summary["diagnostics"]["requests"])
-        self.assertEqual({"provider_attempts", "experiment", "program", "diagnostics", "actual_provider_billing"},
-                         set(summary))
+        self.assertEqual({"provider_attempts", "closed_baseline", "current_experiment", "cumulative", "diagnostics",
+                          "actual_provider_billing"}, set(summary))
 
     def test_a_tampered_ledger_is_refused(self):
         module = ledger_module()

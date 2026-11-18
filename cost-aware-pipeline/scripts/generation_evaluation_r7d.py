@@ -113,8 +113,8 @@ def _incremental_run(args) -> int:
         "checkpoint_sha256": checkpoint["checkpoint_sha256"],
         "completed_pairs": sum(record.get("status") == "completed" for record in records),
         "physical_requests": checkpoint["execution"]["budget"]["provider_calls_charged"],
-        "experiment": accounting["experiment"],
-        "program": accounting["program"],
+        "current_experiment": accounting["current_experiment"],
+        "cumulative": accounting["cumulative"],
         "stopped": checkpoint["execution"].get("stopped"),
         "stop_code": checkpoint["execution"].get("stop_code"),
         "pending_arm": ({key: checkpoint["active_arm"].get(key) for key in ("scenario_id", "prompt_version", "phase")}
@@ -145,6 +145,13 @@ def _ledger_import(args) -> int:
 
 def _ledger_close(args) -> int:
     entry = programs.close_campaign(_ledger(args), AtomicCheckpoint(_private(args.checkpoint, "checkpoint")))
+    print(json.dumps({"closed": entry, "baseline": programs.program_baseline(_ledger(args).load())},
+                     sort_keys=True))
+    return 0
+
+
+def _ledger_close_lost(args) -> int:
+    entry = programs.close_lost_campaign(_ledger(args), args.campaign_id)
     print(json.dumps({"closed": entry, "baseline": programs.program_baseline(_ledger(args).load())},
                      sort_keys=True))
     return 0
@@ -250,6 +257,12 @@ def parser() -> argparse.ArgumentParser:
     close.add_argument("--ledger", type=Path, required=True)
     close.add_argument("--checkpoint", type=Path, required=True)
     close.set_defaults(func=_ledger_close)
+    lost = commands.add_parser("ledger-close-lost",
+                               help="close an open campaign whose authoritative checkpoint is missing, from its "
+                                    "last ledger mark")
+    lost.add_argument("--ledger", type=Path, required=True)
+    lost.add_argument("--campaign-id", required=True)
+    lost.set_defaults(func=_ledger_close_lost)
     diagnostic = commands.add_parser("ledger-record-diagnostic",
                                      help="record separate diagnostic requests (never benchmark pairs)")
     diagnostic.add_argument("--ledger", type=Path, required=True)

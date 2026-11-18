@@ -48,6 +48,13 @@ V1_CONFIG_FIELDS = frozenset({
     "claim_audit_mode", "prompt_versions",
 })
 V2_CONFIG_FIELDS = V1_CONFIG_FIELDS | {"reasoning_effort", "completion_budget_failure_policy"}
+# R7D-C (review P1.2): v2 monetary reservations count the provider-facing JSON schema and a
+# fixed allowance for chat/protocol framing in addition to the prompt, at one token per byte.
+# This is a conservative ESTIMATE, not a guaranteed provider-independent bound: providers
+# render schemas and templates in their own formats. A measured cost above a reservation, or
+# a settled cumulative cost above the ceiling, stops the campaign (fail closed). v1 keeps its
+# historical prompt-bytes basis so earlier plans and checkpoints keep their meaning.
+RESERVATION_FRAMING_TOKENS = 512
 ADAPTER = "paired_structured_generation_v15_v16"
 ALLOWED_CATEGORIES = {"numeric_fidelity", "attribution", "study_design", "coverage"}
 FORBIDDEN_LABEL_FIELDS = {
@@ -321,6 +328,13 @@ def validate_config(config: dict) -> dict:
     return config
 
 
+def reservation_input_tokens(config: dict, prompt_bytes: int, schema: type) -> int:
+    """Input tokens charged by the conservative monetary reservation of one request."""
+    if config.get("schema") == CONFIG_SCHEMA_V2:
+        return prompt_bytes + schema_bytes(schema) + RESERVATION_FRAMING_TOKENS
+    return prompt_bytes
+
+
 def generation_settings(config: dict) -> dict:
     """Settings sent with BOTH the initial generation and the repair of every arm (v15 and v16)."""
     settings = {"max_output_tokens": config["max_output_tokens"]}
@@ -445,11 +459,11 @@ async def _evaluate_arm(scenario: dict, prompt_version: str, config: dict, gatew
             raise
         return _parsed(raw, schema)
 
-    def sanitized(error: BaseException) -> str:
-        # Provider error bodies can echo prompts or failed generations: keep only typed facts.
-        if provider_failure:
-            return f"{type(error).__name__}: {provider_failure['failure_class']}"
-        return str(error)
+    def sanitized(error: BaseException, failure_class: str | None = None) -> str:
+        # Provider error bodies and local validation messages can echo prompts, evidence or
+        # generated text: store only typed facts, never the message.
+        failure_class = failure_class or (provider_failure or {}).get("failure_class") or "unclassified"
+        return f"{type(error).__name__}: {failure_class}"
 
     try:
         if resume is None:
@@ -504,7 +518,9 @@ async def _evaluate_arm(scenario: dict, prompt_version: str, config: dict, gatew
         raise
     except _ModelOutputFailure as failure:
         result.update(status="failed", failure_class=MODEL_OUTPUT, failure_kind=failure.kind,
-                      failure_phase=phase, error_type=type(failure.cause).__name__, error=sanitized(failure.cause))
+                      failure_phase=phase, error_type=type(failure.cause).__name__,
+                      error=sanitized(failure.cause, _LOCAL_FAILURE_KINDS.get(failure.kind)),
+                      validation_error_types=_validation_error_types(failure.cause))
     except EvaluationStopped as stop:
         result.update(status="interrupted", failure_class=EXECUTION_STOP,
                       failure_kind="capacity_pause" if stop.resumable else "budget_or_accounting_stop",
@@ -608,6 +624,9 @@ def dry_run(manifest: dict, config: dict) -> dict:
     maximum_calls = generation_calls * 2
     initial_input = sum(item["prompt_bytes"] for item in prompts)
     repair_input = sum(item["prompt_bytes"] + REPAIR_PROMPT_ADDITIONAL_CHARS_CEILING for item in prompts)
+    if config["schema"] == CONFIG_SCHEMA_V2:
+        initial_input += generation_calls * (schema_bytes(StructuredEvidenceAnswerV2) + RESERVATION_FRAMING_TOKENS)
+        repair_input += generation_calls * (schema_bytes(V2RepairBatch) + RESERVATION_FRAMING_TOKENS)
     reserved_input = initial_input + repair_input
     reserved_output = maximum_calls * config["max_output_tokens"]
     cost, source = calculate_cost(config["provider"], config["model"], reserved_input, reserved_output)
@@ -744,6 +763,12 @@ async def run_paid_evaluation(manifest: dict, config: dict, *, authorization: di
     if config["schema"] == CONFIG_SCHEMA_V2:
         raise AuthorizationError("v2 configurations run only through the incremental runner, which carries "
                                  "the cumulative program ledger")
+    from scientific_rag import llm_gateway as _gateway_module
+    if gateway is None or gateway is _gateway_module.ainvoke_structured:
+        # R7D-C: the one-shot runner has no program ledger; real-provider execution must use
+        # the incremental runner. Injected gateways remain for offline tests.
+        raise AuthorizationError("real-provider execution requires the incremental runner with the program "
+                                 "ledger (cumulative accounting)")
     from ..evaluation_report import resolve_git_provenance
     provenance = resolve_git_provenance()
     if provenance.get("sha") != config["code_sha"]:
@@ -920,6 +945,22 @@ def build_public_report(records: list[dict], *, scores: dict | None,
     }
 
 
+def _validation_error_types(error: BaseException) -> list[str] | None:
+    """Pydantic error *types* only (e.g. ``missing``); never locations, inputs or messages."""
+    current, seen = error, set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        errors = getattr(current, "errors", None)
+        if callable(errors) and type(current).__name__ == "ValidationError":
+            try:
+                kinds = sorted({str(item.get("type")) for item in errors(include_input=False, include_url=False)})
+            except Exception:   # noqa: BLE001
+                return None
+            return [kind for kind in kinds if re.fullmatch(r"[a-z_]{1,40}", kind)]
+        current = current.__cause__ or current.__context__
+    return None
+
+
 def _initial_outcome(arm: dict) -> str:
     if arm.get("initial_output") is None:
         if arm.get("failure_kind") == pf.COMPLETION_BUDGET_EXHAUSTED:
@@ -1006,7 +1047,8 @@ def unblind_owner_scores(blind_scores: dict, key: dict) -> dict:
 
 __all__ = [
     "ADAPTER", "AUTHORIZATION_SCHEMA", "AUTHORIZATION_SCHEMA_V2", "CONFIG_SCHEMA_V2", "COMPLETION_BUDGET_POLICIES",
-    "FAILURE_DECISION_TABLE", "generation_settings", "outcome_dimensions", "AuthorizationError", "EvaluationStopped", "ManifestError",
+    "FAILURE_DECISION_TABLE", "RESERVATION_FRAMING_TOKENS", "generation_settings", "outcome_dimensions",
+    "reservation_input_tokens", "AuthorizationError", "EvaluationStopped", "ManifestError",
     "ResumeIntegrityError", "SCORABLE_ARM_STATUSES", "pair_is_scorable", "schema_bytes",
     "build_blind_scoring_packet", "build_public_report", "canonical_sha256", "check_paid_authorization", "dry_run", "evaluate_pair",
     "manifest_hash", "question_context_hash", "run_paid_evaluation", "unblind_owner_scores", "validate_config", "validate_manifest",

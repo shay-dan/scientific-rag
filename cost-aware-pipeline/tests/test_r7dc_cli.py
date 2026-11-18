@@ -83,7 +83,7 @@ class CommandLineTests(unittest.TestCase):
                      "--requests", 20, "--estimated-cost-usd", 0.01, "--uncertain-reserved-usd", 0.002)
         code, output = self.run_cli("ledger-summary", "--ledger", ledger)
         summary = json.loads(output)
-        self.assertEqual((76, 20), (summary["accounting"]["program"]["remaining_calls"],
+        self.assertEqual((76, 20), (summary["accounting"]["cumulative"]["remaining_calls"],
                                     summary["accounting"]["diagnostics"]["requests"]))
         plan_path = self.private / "plan.json"
         code, output = self.run_cli("dry-run", "--manifest", self.write("m.json", base._manifest()),
