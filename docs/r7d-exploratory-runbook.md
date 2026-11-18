@@ -118,8 +118,10 @@ deviation.
 
 > **Staged execution uses `incremental-run`**, per
 > [generation-evaluation-r7d-incremental.md](../cost-aware-pipeline/docs/generation-evaluation-r7d-incremental.md)
-> (checkpoint v2, durable pending repairs, verified continuation). The one-shot `paid-run`
-> below is kept only for completeness; it records nothing until the whole invocation returns.
+> (checkpoint v2, durable pending repairs, verified continuation). Since R7D-C the one-shot
+> `paid-run` below is **refused** (it has no cumulative program accounting); it is kept here
+> only as a historical record. New campaigns need a v2 config and the program ledger, see
+> [generation-reliability-r7d-c.md](../cost-aware-pipeline/docs/generation-reliability-r7d-c.md).
 
 - Obtain or confirm the owner's **exact** authorization for *this* manifest,
   code SHA, canonical config SHA, provider `groq`, model
