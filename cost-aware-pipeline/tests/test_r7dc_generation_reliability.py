@@ -33,12 +33,14 @@ from app.benchmark.generation_evaluation import (
     validate_config,
 )
 from app.benchmark.incremental_generation_evaluation import (
+    CHECKPOINT_SCHEMA,
     AtomicCheckpoint,
     CampaignLocked,
     CheckpointError,
     run_incremental_evaluation,
 )
 from app.weak_model_synthesis import StructuredEvidenceAnswerV2, V2RepairBatch
+from tests import test_r7d_execution_safety_reproduction as repro
 from tests import test_r7d_generation_evaluation as base
 
 GROQ_ROUTE = "groq:openai/gpt-oss-120b"
@@ -334,7 +336,7 @@ class ScriptedProvider:
             "output_tokens": 2000 if action == "truncate_with_usage" else (600 if complete else None),
             "by_model": {GROQ_ROUTE: {}},
             "attempts": [{"provider": "groq", "model": "openai/gpt-oss-120b", "status_code": status,
-                          "rate_limit_headers": {}}],
+                          "rate_limit_headers": repro._headers(repro.TPM_LIMIT)}],
         }
 
 
@@ -535,7 +537,7 @@ def _historical_checkpoint(path: Path, *, authorization_id, calls, active_attemp
     if active_attempt is not None:
         ledger.reserve(active_attempt["reserved_cost_usd"])
     value = {
-        "schema": "scientific-rag-generation-eval-incremental-checkpoint/v2",
+        "schema": CHECKPOINT_SCHEMA,
         "checkpoint_revision": 0, "manifest_sha256": "3dc9e107" + "0" * 56,
         "config_sha256": HISTORICAL_V1_CONFIG_SHA256, "authorization_sha256": "c" * 64,
         "authorization_id": authorization_id, "code_sha": "796e0d265df3419702df07830dec24034d71c062",
