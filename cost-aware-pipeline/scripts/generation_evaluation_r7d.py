@@ -95,6 +95,7 @@ def _incremental_run(args) -> int:
         checkpoint = asyncio.run(run_incremental_evaluation(
             manifest, config, authorization=authorization, checkpoint_store=store,
             pairs=args.pairs, resume_after_rate_limit=args.resume_after_rate_limit,
+            wait_for_token_reset=args.wait_for_token_reset,
         ))
     records = checkpoint["records"]
     print(json.dumps({
@@ -103,6 +104,8 @@ def _incremental_run(args) -> int:
         "physical_requests": checkpoint["execution"]["budget"]["provider_calls_charged"],
         "stopped": checkpoint["execution"].get("stopped"),
         "stop_code": checkpoint["execution"].get("stop_code"),
+        "pending_arm": ({key: checkpoint["active_arm"].get(key) for key in ("scenario_id", "prompt_version", "phase")}
+                        if checkpoint.get("active_arm") else None),
     }, sort_keys=True))
     return 0
 
@@ -159,6 +162,10 @@ def parser() -> argparse.ArgumentParser:
     incremental.add_argument(
         "--resume-after-rate-limit", action="store_true",
         help="explicitly continue unexecuted work after a recorded capacity reset has elapsed")
+    incremental.add_argument(
+        "--wait-for-token-reset", action="store_true",
+        help="opt-in: wait in-process for a known per-minute token reset of at most 65 seconds; "
+             "never for request-per-day or unknown limits")
     incremental.set_defaults(func=_incremental_run)
     blind = commands.add_parser("blind-packet", help="build private owner-scoring packet and separate key")
     blind.add_argument("--manifest", type=Path, required=True)

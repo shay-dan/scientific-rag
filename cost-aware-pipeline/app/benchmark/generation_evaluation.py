@@ -50,6 +50,13 @@ INPUT_BYTES_PER_TOKEN_CEILING = 1
 # conservatively covers their serialized text/quotes, targets and validation messages
 # in the single repair prompt; actual calls are always reserved from actual prompt size.
 REPAIR_PROMPT_ADDITIONAL_CHARS_CEILING = 70_000
+# Per-minute capacity admission (incremental runner). This is an estimate, never a bound:
+# input tokens are calibrated from provider-reported usage per response schema, then
+# multiplied by (1 + ADMISSION_MARGIN). The cost ledger keeps its own byte-per-token bound.
+ADMISSION_MARGIN = 0.25
+# Opt-in in-process wait: only a known per-minute token reset this close is waited for.
+MAX_TOKEN_RESET_WAIT_SECONDS = 65
+REFERENCE_FREE_TOKENS_PER_MINUTE = 8_000   # published Groq Free sample; display only
 Gateway = Callable[..., Awaitable[object]]
 SCORE_METRICS = {
     "critical_error", "numeric_fidelity", "attribution", "study_design_causality",
@@ -66,11 +73,51 @@ class AuthorizationError(PermissionError):
 
 
 class EvaluationStopped(RuntimeError):
-    """Budget or accounting uncertainty stopped execution before another provider call."""
+    """The runner, not the model, stopped an arm: capacity, budget, ceilings or accounting.
+
+    ``transmitted`` tells whether the stopped operation reached the provider. A resumable
+    stop is a pre-transmission capacity pause whose operation may run after a verified reset.
+    """
+
+    def __init__(self, reason: str = "evaluation stopped", *, code: str = "stopped",
+                 transmitted: bool = False, resumable: bool = False) -> None:
+        super().__init__(reason)
+        self.code, self.transmitted, self.resumable = code, bool(transmitted), bool(resumable)
+
+
+class ResumeIntegrityError(RuntimeError):
+    """Saved arm state does not reproduce the frozen prompt, output or validation exactly."""
+
+
+class _ModelOutputFailure(Exception):
+    """A provider answered, and the answer itself failed the structured contract."""
+
+    def __init__(self, kind: str, cause: BaseException) -> None:
+        super().__init__(str(cause))
+        self.kind, self.cause = kind, cause
+
+
+# Arm outcomes. Only ``completed`` and ``failed`` (a model-output failure) are valid terminal
+# model outcomes and may enter paired evaluation. ``interrupted`` (runner stop, quota pause,
+# provider/network/billing failure) and ``not_executed`` never count as prompt quality.
+SCORABLE_ARM_STATUSES = frozenset({"completed", "failed"})
+MODEL_OUTPUT = "model_output"
+INFRASTRUCTURE = "infrastructure"
+EXECUTION_STOP = "execution_stop"
+
+
+def pair_is_scorable(arms: dict[str, dict]) -> bool:
+    """A pair is comparable only when both arms reached a valid terminal model outcome."""
+    return all(arm.get("status") in SCORABLE_ARM_STATUSES for arm in arms.values())
 
 
 def canonical_json(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+
+
+def schema_bytes(schema: type) -> int:
+    """UTF-8 size of a response schema's canonical JSON (its request overhead proxy)."""
+    return len(canonical_json(schema.model_json_schema()).encode("utf-8"))
 
 
 def canonical_sha256(value: object) -> str:
@@ -222,13 +269,9 @@ def _dump(value: object) -> object:
     return value.model_dump(mode="json") if hasattr(value, "model_dump") else value
 
 
-def _failure_kind(error: BaseException) -> str:
+def _is_model_output_error(error: BaseException) -> bool:
     name = type(error).__name__
-    if "InvalidStructured" in name or "ValidationError" in name:
-        return "invalid_structured_output"
-    if isinstance(error, EvaluationStopped):
-        return "budget_or_accounting_stop"
-    return "gateway_failure"
+    return "InvalidStructured" in name or "ValidationError" in name
 
 
 def _not_executed_arm(scenario: dict, prompt_version: str, reason: str) -> dict:
@@ -252,51 +295,121 @@ def _execution_order(config: dict, execution_index: int) -> list[str]:
     return versions if execution_index % 2 == 0 else list(reversed(versions))
 
 
-async def _evaluate_arm(scenario: dict, prompt_version: str, config: dict, gateway: Gateway) -> dict:
+async def _evaluate_arm(scenario: dict, prompt_version: str, config: dict, gateway: Gateway, *,
+                        resume: dict | None = None,
+                        before_repair: Callable[[dict], Awaitable[None]] | None = None) -> dict:
+    """Run one arm: one generation, then at most one repair.
+
+    ``before_repair`` (incremental runner) durably records the pending repair before it is
+    sent. ``resume`` continues an arm from saved results without repeating a transmitted
+    request: ``initial_output`` (and optionally ``repair_output``) are restored, and the
+    saved prompt fingerprints and validation errors must reproduce exactly.
+    """
     blocks, context = _blocks_and_context(scenario)
     prompt = generation_prompt_v2(scenario["question"], context, prompt_version=prompt_version)
+    prompt_sha256 = canonical_sha256(prompt)
     result = {
         "prompt_version": prompt_version,
         "question_context_sha256": scenario["question_context_sha256"],
         "evidence_sha256": [item["evidence_sha256"] for item in scenario["evidence"]],
-        "prompt_sha256": canonical_sha256(prompt),
+        "prompt_sha256": prompt_sha256,
         "status": "failed", "repair_attempted": False, "physical_calls": 0,
         "initial_output": None, "post_repair_output": None, "validation_errors": {},
     }
+    phase = "initial"
+
+    async def call(call_prompt: str, schema: type):
+        try:
+            raw = await gateway("expert", 0, call_prompt, schema, max_output_tokens=config["max_output_tokens"])
+        except (EvaluationStopped, ResumeIntegrityError):
+            raise
+        except Exception as error:
+            if _is_model_output_error(error):
+                raise _ModelOutputFailure("invalid_structured_output", error) from error
+            raise
+        return _parsed(raw, schema)
+
     try:
-        result["physical_calls"] += 1
-        raw = await gateway("expert", 0, prompt, StructuredEvidenceAnswerV2,
-                            max_output_tokens=config["max_output_tokens"])
-        answer = raw if isinstance(raw, StructuredEvidenceAnswerV2) else StructuredEvidenceAnswerV2.model_validate(raw)
+        if resume is None:
+            result["physical_calls"] += 1
+            answer = await call(prompt, StructuredEvidenceAnswerV2)
+        else:
+            if resume.get("prompt_sha256") != prompt_sha256:
+                raise ResumeIntegrityError("saved generation prompt fingerprint does not match the frozen prompt")
+            answer = _restored(StructuredEvidenceAnswerV2, resume.get("initial_output"), "initial output")
+            result["physical_calls"] = 1
         result["initial_output"] = _dump(answer)
         errors = validate_answer_v2(answer, blocks)
         result["initial_structurally_valid"] = not errors
         result["validation_errors"] = {key: list(value) for key, value in errors.items()}
+        if resume is not None and resume.get("validation_errors") is not None \
+                and resume["validation_errors"] != result["validation_errors"]:
+            raise ResumeIntegrityError("saved validation errors do not reproduce from the saved initial output")
         audit = {"preserved": [], "repaired": [], "dropped": []}
         if errors:
+            phase = "repair"
             result["repair_attempted"] = True
-            result["physical_calls"] += 1
-            repair_raw = await gateway(
-                "expert", 0, repair_prompt_v2(scenario["question"], context, answer, errors), V2RepairBatch,
-                max_output_tokens=config["max_output_tokens"],
-            )
-            batch = repair_raw if isinstance(repair_raw, V2RepairBatch) else V2RepairBatch.model_validate(repair_raw)
+            repair_prompt = repair_prompt_v2(scenario["question"], context, answer, errors)
+            result["repair_prompt_sha256"] = canonical_sha256(repair_prompt)
+            expected = (resume or {}).get("repair_prompt_sha256")
+            if expected is not None and expected != result["repair_prompt_sha256"]:
+                raise ResumeIntegrityError("saved repair prompt fingerprint does not match the rebuilt repair prompt")
+            if resume is not None and resume.get("repair_output") is not None:
+                batch = _restored(V2RepairBatch, resume["repair_output"], "repair output")
+                result["physical_calls"] = 2
+            else:
+                if before_repair is not None:
+                    await before_repair({"initial_output": result["initial_output"],
+                                         "validation_errors": result["validation_errors"],
+                                         "repair_prompt_sha256": result["repair_prompt_sha256"]})
+                result["physical_calls"] += 1
+                batch = await call(repair_prompt, V2RepairBatch)
             result["repair_output"] = _dump(batch)
-            answer, audit, remaining = merge_v2_repairs(answer, batch, blocks)
+            try:
+                answer, audit, remaining = merge_v2_repairs(answer, batch, blocks)
+            except ValueError as error:
+                raise _ModelOutputFailure("invalid_repair_response", error) from error
             if remaining:
-                raise ValueError(f"structured validation failed after bounded repair: {sorted(remaining)}")
+                raise _ModelOutputFailure("validation_failed_after_repair", ValueError(
+                    f"structured validation failed after bounded repair: {sorted(remaining)}"))
         result["post_repair_output"] = _dump(answer)
         result["unanswered_parts"] = len(answer.unanswered_parts)
         result["repair_audit"] = audit
         if config["claim_audit_mode"] == "audit":
             result["claim_audit"] = audit_answer_claims(answer, blocks)
         result["status"] = "completed"
+    except ResumeIntegrityError:
+        raise
+    except _ModelOutputFailure as failure:
+        result.update(status="failed", failure_class=MODEL_OUTPUT, failure_kind=failure.kind,
+                      failure_phase=phase, error_type=type(failure.cause).__name__, error=str(failure.cause))
+    except EvaluationStopped as stop:
+        result.update(status="interrupted", failure_class=EXECUTION_STOP,
+                      failure_kind="capacity_pause" if stop.resumable else "budget_or_accounting_stop",
+                      failure_phase=phase, error_type=type(stop).__name__, error=str(stop),
+                      interruption={"phase": phase, "code": stop.code, "transmitted": stop.transmitted,
+                                    "resumable": stop.resumable})
     except Exception as error:
-        result["failure_kind"] = _failure_kind(error)
-        result["error_type"] = type(error).__name__
-        # Messages are retained privately for diagnosis, but omitted by build_public_report.
-        result["error"] = str(error)
+        # Provider, network or gateway failure: not evidence about the prompt.
+        result.update(status="interrupted", failure_class=INFRASTRUCTURE, failure_kind="gateway_failure",
+                      failure_phase=phase, error_type=type(error).__name__, error=str(error),
+                      interruption={"phase": phase, "code": "infrastructure", "transmitted": True,
+                                    "resumable": False})
     return result
+
+
+def _parsed(raw: object, schema: type):
+    try:
+        return raw if isinstance(raw, schema) else schema.model_validate(raw)
+    except Exception as error:
+        raise _ModelOutputFailure("invalid_structured_output", error) from error
+
+
+def _restored(schema: type, value: object, label: str):
+    try:
+        return schema.model_validate(value)
+    except Exception as error:
+        raise ResumeIntegrityError(f"saved {label} does not match its schema") from error
 
 
 async def evaluate_pair(scenario: dict, *, config: dict, gateway: Gateway,
@@ -310,11 +423,12 @@ async def evaluate_pair(scenario: dict, *, config: dict, gateway: Gateway,
     for position, version in enumerate(order):
         arm = await _evaluate_arm(scenario, version, config, gateway)
         arms.append(arm)
-        if arm.get("failure_kind") == "budget_or_accounting_stop":
+        if arm.get("failure_class") in {EXECUTION_STOP, INFRASTRUCTURE}:
+            # A stop or a provider/network failure ends the pair: no later request is sent.
             arms.extend(_not_executed_arm(scenario, pending, arm.get("error") or "evaluation stopped")
                         for pending in order[position + 1:])
             break
-    interrupted = any(arm["status"] == "not_executed" for arm in arms)
+    interrupted = any(arm["status"] in {"not_executed", "interrupted"} for arm in arms)
     return {"scenario_id": scenario["scenario_id"], "category": scenario["category"],
             "execution_order": order, "status": "interrupted" if interrupted else "completed", "arms": arms,
             "physical_calls": sum(arm["physical_calls"] for arm in arms)}
@@ -407,7 +521,27 @@ def dry_run(manifest: dict, config: dict) -> dict:
             "structured_answer_sha256": canonical_sha256(StructuredEvidenceAnswerV2.model_json_schema()),
             "repair_batch_sha256": canonical_sha256(V2RepairBatch.model_json_schema()),
         },
+        "capacity_admission": _capacity_admission_plan(prompts, config),
         "prompt_contracts": prompts,
+    }
+
+
+def _capacity_admission_plan(prompts: list[dict], config: dict) -> dict:
+    """Informational: per-minute admission cannot be checked offline (account limits are unknown)."""
+    largest = max((item["prompt_bytes"] for item in prompts), default=0) + schema_bytes(StructuredEvidenceAnswerV2)
+    uncalibrated = largest + config["max_output_tokens"]
+    warnings = []
+    if uncalibrated > REFERENCE_FREE_TOKENS_PER_MINUTE:
+        warnings.append("before calibration, the largest request's one-token-per-byte requirement exceeds the "
+                        "published Free tokens-per-minute sample; the first measured call calibrates admission")
+    return {
+        "method": "provider-reported input tokens per response schema x (1 + margin) + output limit; estimate, "
+                  "not an upper bound",
+        "margin": ADMISSION_MARGIN,
+        "largest_initial_request_bytes": largest,
+        "uncalibrated_requirement_tokens": uncalibrated,
+        "reference_free_tokens_per_minute": REFERENCE_FREE_TOKENS_PER_MINUTE,
+        "warnings": warnings,
     }
 
 
@@ -476,15 +610,15 @@ async def run_paid_evaluation(manifest: dict, config: dict, *, authorization: di
     async def metered(role, temperature, prompt, schema, *, max_output_tokens):
         nonlocal stopped
         if stopped:
-            raise EvaluationStopped(stopped)
+            raise EvaluationStopped(stopped, code="stopped")
         input_ceiling = len(prompt.encode("utf-8"))
         if input_ceiling > config["max_input_tokens"]:
             stopped = "conservative input-token ceiling reached before the call"
-            raise EvaluationStopped(stopped)
+            raise EvaluationStopped(stopped, code="input_ceiling")
         reserved, _ = calculate_cost(config["provider"], config["model"], input_ceiling, max_output_tokens)
         if reserved is None or not ledger.reserve(reserved):
             stopped = "authorized call or cost ceiling reached before the call"
-            raise EvaluationStopped(stopped)
+            raise EvaluationStopped(stopped, code="budget")
         token = llm_gateway.begin_trace()
         started = time.perf_counter()
         result = None
@@ -508,10 +642,14 @@ async def run_paid_evaluation(manifest: dict, config: dict, *, authorization: di
                 stopped = "an unexpected retry or fallback was observed"
             elif isinstance(usage["output_tokens"], int) and usage["output_tokens"] > max_output_tokens:
                 stopped = "provider reported output beyond the enforced output-token limit"
-        if error is not None:
+            elif isinstance(error, Exception) and not _is_model_output_error(error):
+                # Provider/network failure: stop; no later request is sent.
+                stopped = "the provider request failed; execution stopped"
+        if error is not None and (not isinstance(error, Exception) or not _is_model_output_error(error)
+                                  or stopped is None):
             raise error
-        if stopped is not None:
-            raise EvaluationStopped(stopped)
+        if stopped is not None:   # accounting stops take precedence over model-output classification
+            raise EvaluationStopped(stopped, code="accounting", transmitted=True) from error
         return result
 
     records = []
@@ -557,9 +695,20 @@ def build_public_report(records: list[dict], *, scores: dict | None,
         raise ValueError("owner scores contain scenario IDs absent from the attempted records")
     outcomes = {"v15": 0, "tie": 0, "v16": 0, "unscored": 0}
     rows, arm_totals = [], {version: Counter() for version in ("v15", "v16")}
+    initial_outcomes = {version: Counter() for version in ("v15", "v16")}
+    post_repair_outcomes = {version: Counter() for version in ("v15", "v16")}
+    excluded = Counter()
     for record in sorted(records, key=lambda item: item["scenario_id"]):
         normalized = _normalized_arms(record)
-        scorable = all(arm["status"] != "not_executed" for arm in normalized.values())
+        scorable = pair_is_scorable(normalized)
+        if scorable:
+            for version, arm in normalized.items():
+                initial_outcomes[version][_initial_outcome(arm)] += 1
+                post_repair_outcomes[version][_post_repair_outcome(arm)] += 1
+        else:
+            excluded["pairs"] += 1
+            for arm in normalized.values():
+                excluded[f"arms_{arm['status']}"] += 1
         score = scores.get(record["scenario_id"])
         if score is not None and not scorable:
             raise ValueError(f"owner score supplied for incomplete scenario {record['scenario_id']}")
@@ -586,14 +735,18 @@ def build_public_report(records: list[dict], *, scores: dict | None,
                    "physical_calls": int(arm.get("physical_calls", 0)),
                    "input_tokens": usage.get("input_tokens"), "output_tokens": usage.get("output_tokens"),
                    "latency_ms": usage.get("latency_ms"), "cost_usd": usage.get("cost_usd")}
-            if arm.get("failure_kind"):
-                row["failure_kind"] = arm["failure_kind"]
+            for field in ("failure_kind", "failure_class", "failure_phase", "initial_structurally_valid"):
+                if arm.get(field) is not None:
+                    row[field] = arm[field]
             arms.append(row)
             arm_totals[version]["scheduled"] += 1
             arm_totals[version]["attempted"] += arm["status"] != "not_executed"
             arm_totals[version]["not_executed"] += arm["status"] == "not_executed"
             arm_totals[version]["completed"] += arm["status"] == "completed"
-            arm_totals[version]["failures"] += arm["status"] == "failed"
+            arm_totals[version]["failures"] += arm["status"] == "failed"   # model-output failures only
+            arm_totals[version]["interrupted"] += arm["status"] == "interrupted"
+            arm_totals[version]["infrastructure_failures"] += arm.get("failure_class") == INFRASTRUCTURE
+            arm_totals[version]["execution_stops"] += arm.get("failure_class") == EXECUTION_STOP
             arm_totals[version]["repairs"] += bool(arm.get("repair_attempted"))
             arm_totals[version]["physical_calls"] += int(arm.get("physical_calls", 0))
             arm_totals[version]["abstentions"] += int(arm.get("unanswered_parts", 0) > 0)
@@ -607,9 +760,25 @@ def build_public_report(records: list[dict], *, scores: dict | None,
         "manifest_sha256": manifest_sha256, "config_sha256": config_sha256,
         "attempted_scenarios": len(records), "paired_outcomes": outcomes,
         "arms": {version: dict(sorted(total.items())) for version, total in arm_totals.items()},
+        # Comparable pairs only: both arms reached a valid terminal model outcome.
+        "initial_generation": {version: dict(sorted(total.items())) for version, total in initial_outcomes.items()},
+        "post_repair": {version: dict(sorted(total.items())) for version, total in post_repair_outcomes.items()},
+        "excluded_from_pairing": dict(sorted(excluded.items())),
         "scenarios": rows,
         "privacy": "contains opaque IDs and aggregate/operational results only; no source text, model text, or references",
     }
+
+
+def _initial_outcome(arm: dict) -> str:
+    if arm.get("initial_output") is None:
+        return "invalid_structured_output"
+    return "structurally_valid" if arm.get("initial_structurally_valid") else "structurally_invalid"
+
+
+def _post_repair_outcome(arm: dict) -> str:
+    if arm["status"] == "completed":
+        return "completed_after_repair" if arm.get("repair_attempted") else "completed_without_repair"
+    return str(arm.get("failure_kind") or "failed")
 
 
 def build_blind_scoring_packet(manifest: dict, records: list[dict]) -> tuple[dict, dict]:
@@ -626,7 +795,7 @@ def build_blind_scoring_packet(manifest: dict, records: list[dict]) -> tuple[dic
         if record is None:
             raise ValueError(f"missing attempted record for {scenario['scenario_id']}")
         arms = _normalized_arms(record)
-        scorable = all(arm["status"] != "not_executed" for arm in arms.values())
+        scorable = pair_is_scorable(arms)
         # Deterministic balancing without disclosing the version in the scoring packet.
         a_version = "v15" if int(canonical_sha256(scenario["scenario_id"]), 16) % 2 == 0 else "v16"
         b_version = "v16" if a_version == "v15" else "v15"
@@ -684,6 +853,7 @@ def unblind_owner_scores(blind_scores: dict, key: dict) -> dict:
 
 __all__ = [
     "ADAPTER", "AUTHORIZATION_SCHEMA", "AuthorizationError", "EvaluationStopped", "ManifestError",
+    "ResumeIntegrityError", "SCORABLE_ARM_STATUSES", "pair_is_scorable", "schema_bytes",
     "build_blind_scoring_packet", "build_public_report", "canonical_sha256", "check_paid_authorization", "dry_run", "evaluate_pair",
     "manifest_hash", "question_context_hash", "run_paid_evaluation", "unblind_owner_scores", "validate_config", "validate_manifest",
 ]

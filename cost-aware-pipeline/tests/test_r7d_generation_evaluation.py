@@ -155,7 +155,8 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
                 execution_index=execution_index,
             )
             self.assertEqual(expected_order, [arm["prompt_version"] for arm in result["arms"]])
-            self.assertEqual(["failed", "not_executed"], [arm["status"] for arm in result["arms"]])
+            # R7D correction: a runner stop is an interruption, never a failed model answer.
+            self.assertEqual(["interrupted", "not_executed"], [arm["status"] for arm in result["arms"]])
             self.assertEqual(0, result["arms"][1]["physical_calls"])
         self.assertEqual(2, calls)
 
@@ -220,9 +221,14 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
             raise TimeoutError("provider timeout")
 
         result = await evaluate_pair(_manifest()["scenarios"][0], config=_config(), gateway=gateway)
-        self.assertEqual(2, calls)
-        self.assertTrue(all(arm["status"] == "failed" for arm in result["arms"]))
-        self.assertTrue(all(arm["failure_kind"] == "gateway_failure" for arm in result["arms"]))
+        # R7D correction: provider/network failures are infrastructure interruptions, not
+        # model-output failures, so they can never count against a prompt version, and they
+        # end the pair: the second arm is never sent.
+        self.assertEqual(1, calls)
+        self.assertEqual(["interrupted", "not_executed"], [arm["status"] for arm in result["arms"]])
+        self.assertEqual(("gateway_failure", "infrastructure"),
+                         (result["arms"][0]["failure_kind"], result["arms"][0]["failure_class"]))
+        self.assertEqual("interrupted", result["status"])
 
     async def test_no_retrieval_mining_or_embedding_dependency_is_needed(self):
         async def gateway(*args, **kwargs):
@@ -738,7 +744,7 @@ class IncrementalExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("rate_limit", checkpoint["execution"]["stop_code"])
         self.assertEqual(1, calls)
         self.assertEqual(1, len(checkpoint["records"][0]["arms"]))
-        self.assertEqual("failed", checkpoint["records"][0]["arms"][0]["status"])
+        self.assertEqual("interrupted", checkpoint["records"][0]["arms"][0]["status"])   # R7D correction
         with self.assertRaisesRegex(CheckpointError, "pre-transmission capacity stop"):
             await self._run(
                 pairs=1, gateway=gateway, summaries=[], resume_after_rate_limit=True,
