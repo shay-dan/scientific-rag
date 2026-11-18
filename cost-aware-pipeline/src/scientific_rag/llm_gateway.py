@@ -215,6 +215,14 @@ RATE_LIMIT_HEADER_NAMES = (
     "x-ratelimit-remaining-tokens",
     "x-ratelimit-reset-requests",
     "x-ratelimit-reset-tokens",
+    # Separate input/output token limits, when a provider or account reports them. Captured
+    # only in the opt-in rate-limit capture mode used by the R7D evaluation runner.
+    "x-ratelimit-limit-input-tokens",
+    "x-ratelimit-remaining-input-tokens",
+    "x-ratelimit-reset-input-tokens",
+    "x-ratelimit-limit-output-tokens",
+    "x-ratelimit-remaining-output-tokens",
+    "x-ratelimit-reset-output-tokens",
 )
 
 

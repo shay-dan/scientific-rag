@@ -1,10 +1,20 @@
 """Opt-in, resumable R7D execution with private atomic checkpoints.
 
-The existing one-shot runner remains unchanged.  This module adds a deliberately small
-stage runner that executes whole pairs in frozen-manifest order, writes a durable
-write-ahead record before every provider attempt, and refuses to resume an unresolved
-attempt.  That refusal is intentional: without provider idempotency, repeating an
-attempt after process death could duplicate a billable request.
+A deliberately small stage runner executes whole pairs in frozen-manifest order, writes a
+durable write-ahead record before every provider attempt, and refuses to resume an
+unresolved attempt: without provider idempotency, repeating an attempt after process death
+could duplicate a billable request.
+
+Checkpoint v2 (R7D execution-safety correction) makes the arm itself durable. Before a
+repair is sent, the arm is saved as ``repair_pending`` with its initial output, validation
+errors and repair-prompt fingerprint. A pre-transmission capacity pause therefore leaves the
+arm pending instead of failed, and a verified continuation sends only that repair. A crash
+between writes resumes from saved results; nothing that reached the provider is repeated.
+
+Per-minute capacity admission is separate from cost accounting. The cost ledger keeps its
+conservative byte-per-token reservation. Admission uses an *estimate* calibrated from
+provider-reported input tokens for each response schema, with a safety margin; it is never
+treated as an upper bound. An under-estimate surfaces as a provider 429, which is terminal.
 """
 from __future__ import annotations
 
@@ -19,12 +29,16 @@ import re
 import stat
 import tempfile
 import time
-from typing import Callable, Iterator
+from typing import Awaitable, Callable, Iterator
 
 from .generation_evaluation import (
+    ADMISSION_MARGIN,
+    EXECUTION_STOP,
+    MAX_TOKEN_RESET_WAIT_SECONDS,
     AuthorizationError,
     EvaluationStopped,
     Gateway,
+    ResumeIntegrityError,
     _dump,
     _evaluate_arm,
     _execution_order,
@@ -32,21 +46,21 @@ from .generation_evaluation import (
     _usage_from_trace,
     canonical_sha256,
     check_paid_authorization,
+    schema_bytes,
     validate_config,
     validate_manifest,
 )
 from .production_verifier_replay import BudgetLedger
 
 
-CHECKPOINT_SCHEMA = "scientific-rag-generation-eval-checkpoint/v1"
-SAFE_RATE_LIMIT_HEADERS = {
-    "retry-after",
-    "x-ratelimit-limit-requests",
-    "x-ratelimit-limit-tokens",
-    "x-ratelimit-remaining-requests",
-    "x-ratelimit-remaining-tokens",
-    "x-ratelimit-reset-requests",
-    "x-ratelimit-reset-tokens",
+CHECKPOINT_SCHEMA = "scientific-rag-generation-eval-checkpoint/v2"
+LEGACY_CHECKPOINT_SCHEMAS = {"scientific-rag-generation-eval-checkpoint/v1"}
+# Capacity dimensions: Groq documents ``requests`` (per day) and ``tokens`` (per minute).
+# Separate input/output token limits are enforced only when the provider reports them.
+TOKEN_DIMENSIONS = ("tokens", "input-tokens", "output-tokens")
+CAPACITY_DIMENSIONS = ("requests",) + TOKEN_DIMENSIONS
+SAFE_RATE_LIMIT_HEADERS = {"retry-after"} | {
+    f"x-ratelimit-{kind}-{dimension}" for kind in ("limit", "remaining", "reset") for dimension in CAPACITY_DIMENSIONS
 }
 FREE_REFERENCE_TOKENS_PER_DAY = 200_000
 RESET_DURATION_RE = re.compile(
@@ -112,6 +126,11 @@ class AtomicCheckpoint:
         if mode & 0o077:
             raise CheckpointError("checkpoint permissions must not grant group or other access")
         value = json.loads(self.path.read_text(encoding="utf-8"), parse_constant=self._reject_constant)
+        if isinstance(value, dict) and value.get("schema") in LEGACY_CHECKPOINT_SCHEMAS:
+            raise CheckpointError(
+                f"checkpoint uses {value['schema']}, written by an earlier accepted code version; this code "
+                f"requires {CHECKPOINT_SCHEMA}. The file was not modified; it stays bound to its original "
+                "authorization and code SHA.")
         if not isinstance(value, dict) or value.get("schema") != CHECKPOINT_SCHEMA:
             raise CheckpointError(f"checkpoint must use {CHECKPOINT_SCHEMA}")
         if value.get("checkpoint_sha256") != _checkpoint_hash(value):
@@ -182,8 +201,96 @@ def new_checkpoint(manifest: dict, config: dict, authorization: dict, provenance
     }
 
 
+UNRESOLVED_MESSAGE = "checkpoint contains an unresolved provider attempt or arm; refusing a duplicate request"
+REPAIR_SCHEMA = "V2RepairBatch"
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
+
+
 def _record_map(checkpoint: dict) -> dict[str, dict]:
     return {record["scenario_id"]: record for record in checkpoint["records"]}
+
+
+def _next_arm(checkpoint: dict, config: dict, scenarios: list[dict]) -> tuple[int, str] | None:
+    """The next unexecuted arm in frozen manifest and execution order."""
+    records = _record_map(checkpoint)
+    for index, scenario in enumerate(scenarios):
+        done = {arm["prompt_version"] for arm in records.get(scenario["scenario_id"], {}).get("arms", [])}
+        for version in _execution_order(config, index):
+            if version not in done:
+                return index, version
+    return None
+
+
+def _resolved_attempt(attempt: object) -> bool:
+    """A response was received and fully accounted: it may be reused, never re-sent."""
+    return (isinstance(attempt, dict) and attempt.get("result") is not None and attempt.get("error_type") is None
+            and attempt.get("cost_status") == "complete" and attempt.get("provider_calls") == 1
+            and isinstance(attempt.get("prompt_sha256"), str) and bool(_HEX64.match(attempt["prompt_sha256"])))
+
+
+def _verify_active_arm(checkpoint: dict, config: dict, scenarios: list[dict], prompt_hashes: dict) -> None:
+    """Accept a saved in-progress arm only if every recorded attempt is resolved.
+
+    Anything that may have reached the provider without a recorded, fully accounted response
+    is refused (fail closed). A resumable arm is the next arm in frozen order, in phase
+    ``initial_pending`` (no response, or one response not yet validated) or
+    ``repair_pending`` (initial response saved with its errors and repair fingerprint).
+    """
+    active = checkpoint.get("active_arm")
+    if active is None:
+        return
+    unsafe = CheckpointError(UNRESOLVED_MESSAGE)
+    if not isinstance(active, dict) or not isinstance(active.get("attempts"), list):
+        raise unsafe
+    expected = _next_arm(checkpoint, config, scenarios)
+    if (expected is None or (active.get("scenario_index"), active.get("prompt_version")) != expected
+            or active.get("scenario_id") != scenarios[expected[0]]["scenario_id"]):
+        raise unsafe
+    attempts = active["attempts"]
+    if [attempt.get("phase") if isinstance(attempt, dict) else None for attempt in attempts] not in (
+            [], ["initial"], ["initial", "repair"]):
+        raise unsafe
+    if not all(_resolved_attempt(attempt) for attempt in attempts):
+        raise unsafe
+    key = (active["scenario_id"], active["prompt_version"])
+    if attempts and attempts[0]["prompt_sha256"] != prompt_hashes[key]:
+        raise CheckpointError(f"checkpoint prompt fingerprint drifted for {key[0]}/{key[1]}")
+    phase = active.get("phase")
+    if phase == "initial_pending":
+        if len(attempts) > 1:
+            raise unsafe
+    elif phase == "repair_pending":
+        initial, pending = active.get("initial"), active.get("pending_operation")
+        if (not attempts or not isinstance(initial, dict) or initial.get("output") != attempts[0]["result"]
+                or not isinstance(initial.get("validation_errors"), dict) or not initial["validation_errors"]
+                or not isinstance(pending, dict) or pending.get("phase") != "repair"
+                or pending.get("schema") != REPAIR_SCHEMA
+                or not isinstance(pending.get("prompt_sha256"), str) or not _HEX64.match(pending["prompt_sha256"])):
+            raise unsafe
+        if len(attempts) == 2 and attempts[1]["prompt_sha256"] != pending["prompt_sha256"]:
+            raise unsafe
+    else:
+        raise unsafe
+    audited = {(call.get("scenario_id"), call.get("prompt_version"), call.get("phase"), call.get("prompt_sha256"))
+               for call in checkpoint["execution"].get("calls") or [] if isinstance(call, dict)}
+    for attempt in attempts:
+        if (key[0], key[1], attempt["phase"], attempt["prompt_sha256"]) not in audited:
+            raise unsafe
+
+
+def _resume_state(active: dict | None) -> dict | None:
+    """Saved results for ``_evaluate_arm``; None when nothing reached the provider."""
+    if not active or not active.get("attempts"):
+        return None
+    attempts = active["attempts"]
+    resume = {"prompt_sha256": attempts[0]["prompt_sha256"], "initial_output": attempts[0]["result"]}
+    if active.get("phase") == "repair_pending":
+        resume["validation_errors"] = active["initial"]["validation_errors"]
+        resume["repair_prompt_sha256"] = active["pending_operation"]["prompt_sha256"]
+    if len(attempts) == 2:
+        resume["repair_output"] = attempts[1]["result"]
+        resume["repair_prompt_sha256"] = attempts[1]["prompt_sha256"]
+    return resume
 
 
 def verify_checkpoint(checkpoint: dict, manifest: dict, config: dict, authorization: dict) -> BudgetLedger:
@@ -203,9 +310,8 @@ def verify_checkpoint(checkpoint: dict, manifest: dict, config: dict, authorizat
     mismatched = [key for key, value in expected.items() if checkpoint.get(key) != value]
     if mismatched:
         raise CheckpointError("checkpoint binding mismatch: " + ", ".join(mismatched))
-    if checkpoint.get("active_attempt") is not None or checkpoint.get("active_arm") is not None:
-        raise CheckpointError(
-            "checkpoint contains an unresolved provider attempt or arm; refusing a duplicate request")
+    if checkpoint.get("active_attempt") is not None:
+        raise CheckpointError(UNRESOLVED_MESSAGE)
     execution = checkpoint.get("execution")
     if not isinstance(execution, dict) or execution.get("authorization_id") != auth["authorization_id"]:
         raise CheckpointError("checkpoint execution identity does not match the authorization")
@@ -239,6 +345,7 @@ def verify_checkpoint(checkpoint: dict, manifest: dict, config: dict, authorizat
                 raise CheckpointError(f"checkpoint prompt fingerprint drifted for {scenario_id}/{version}")
         if recorded_versions != _execution_order(config, index)[:len(recorded_versions)]:
             raise CheckpointError(f"checkpoint arm order drifted for {scenario_id}")
+    _verify_active_arm(checkpoint, config, scenarios, prompt_hashes)
     calls = execution.get("calls")
     if not isinstance(calls, list):
         raise CheckpointError("checkpoint call audit must be a list")
@@ -301,7 +408,7 @@ def _clock_now(clock: Callable[[], float]) -> float:
 
 def _rate_limit_state(headers: dict[str, str], observed_at: float) -> dict:
     reset_at: dict[str, float] = {}
-    for dimension in ("requests", "tokens"):
+    for dimension in CAPACITY_DIMENSIONS:
         seconds = _reset_seconds(headers.get(f"x-ratelimit-reset-{dimension}"))
         if seconds is not None:
             reset_at[dimension] = observed_at + seconds
@@ -312,49 +419,103 @@ def _rate_limit_state(headers: dict[str, str], observed_at: float) -> dict:
     }
 
 
-def _capacity_refusal(
-    checkpoint: dict,
-    prompt: str,
-    max_output_tokens: int,
-    *,
-    now: float,
-    allow_elapsed_reset: bool,
-) -> tuple[str, str, list[str]] | None:
-    calls = checkpoint["execution"]["calls"]
-    if not calls:  # the first authorized benchmark inference establishes provider headers
+def _token_calibration(calls: list[dict]) -> dict[str, float]:
+    """Highest observed provider input tokens per request byte, per response schema."""
+    ratios: dict[str, float] = {}
+    for call in calls:
+        if not isinstance(call, dict):
+            continue
+        tokens, request = call.get("input_tokens"), call.get("request_bytes")
+        if (call.get("cost_status") == "complete" and call.get("provider_calls") == 1
+                and type(tokens) is int and tokens > 0 and type(request) is int and request > 0
+                and isinstance(call.get("schema"), str)):
+            ratios[call["schema"]] = max(ratios.get(call["schema"], 0.0), tokens / request)
+    return ratios
+
+
+def admission_estimate(calls: list[dict], *, prompt_bytes: int, schema_name: str, schema_size: int,
+                       max_output_tokens: int) -> dict:
+    """Per-minute admission requirement. An estimate, never an upper bound.
+
+    Same schema observed: calibrated ratio x request bytes x (1 + margin).
+    Other schema observed only: calibrated text, plus this schema at one token per byte.
+    Nothing observed: one token per request byte.
+    """
+    ratios = _token_calibration(calls)
+    request = prompt_bytes + schema_size
+    if schema_name in ratios:
+        method = "calibrated_same_schema"
+        input_tokens = math.ceil(ratios[schema_name] * request * (1 + ADMISSION_MARGIN))
+    elif ratios:
+        method = "calibrated_text_unobserved_schema_one_token_per_byte"
+        input_tokens = math.ceil(max(ratios.values()) * prompt_bytes * (1 + ADMISSION_MARGIN)) + schema_size
+    else:
+        method = "uncalibrated_one_token_per_byte"
+        input_tokens = request
+    return {
+        "method": method, "upper_bound": False, "margin": ADMISSION_MARGIN,
+        "request_bytes": request, "estimated_input_tokens": input_tokens,
+        "required": {"requests": 1, "tokens": input_tokens + max_output_tokens,
+                     "input-tokens": input_tokens, "output-tokens": max_output_tokens},
+    }
+
+
+def _capacity_check(checkpoint: dict, estimate: dict, *, now: float, allow_elapsed_reset: bool) -> dict | None:
+    """None when the next request may be sent; otherwise a pre-transmission refusal."""
+    if not checkpoint["execution"]["calls"]:   # the first authorized inference establishes provider headers
         return None
     state = checkpoint["execution"].get("rate_limit_state") or {}
     headers = state.get("headers") if isinstance(state.get("headers"), dict) else {}
-    remaining_requests = _number(headers.get("x-ratelimit-remaining-requests"))
-    remaining_tokens = _number(headers.get("x-ratelimit-remaining-tokens"))
-    if remaining_requests is None or remaining_tokens is None:
-        return ("rate_limit_capacity_unknown",
-                "provider remaining request/token capacity is unavailable", [])
-    conservative_tokens = len(prompt.encode("utf-8")) + max_output_tokens
-    blocked = []
-    if remaining_requests < 1:
-        blocked.append("requests")
-    if remaining_tokens < conservative_tokens:
-        blocked.append("tokens")
+    remaining = {dimension: _number(headers.get(f"x-ratelimit-remaining-{dimension}"))
+                 for dimension in CAPACITY_DIMENSIONS}
+    token_capacity_known = remaining["tokens"] is not None or (
+        remaining["input-tokens"] is not None and remaining["output-tokens"] is not None)
+    if remaining["requests"] is None or not token_capacity_known:
+        return {"code": "rate_limit_capacity_unknown", "blocked": [],
+                "reason": "provider remaining request/token capacity is unavailable"}
+    required = estimate["required"]
+    blocked = [dimension for dimension in CAPACITY_DIMENSIONS
+               if remaining[dimension] is not None and remaining[dimension] < required[dimension]]
     if not blocked:
         return None
     if not allow_elapsed_reset:
-        return ("rate_limit", "known provider request/token allowance cannot admit the next bounded attempt",
-                blocked)
+        return {"code": "rate_limit", "blocked": blocked,
+                "reason": "known provider allowance cannot admit the next bounded attempt (estimated requirement)"}
     reset_at = state.get("reset_at_unix") if isinstance(state.get("reset_at_unix"), dict) else {}
-    required = {"requests": 1, "tokens": conservative_tokens}
     for dimension in blocked:
         deadline = reset_at.get(dimension)
         limit = _number(headers.get(f"x-ratelimit-limit-{dimension}"))
         if not isinstance(deadline, (int, float)) or not math.isfinite(deadline) or limit is None:
-            return ("rate_limit_capacity_unknown",
-                    f"provider {dimension} reset metadata or account-specific limit is unavailable", blocked)
+            return {"code": "rate_limit_capacity_unknown", "blocked": blocked,
+                    "reason": f"provider {dimension} reset metadata or account-specific limit is unavailable"}
         if now < float(deadline):
-            return ("rate_limit", f"provider {dimension} reset has not elapsed", blocked)
+            return {"code": "rate_limit", "blocked": blocked, "reason": f"provider {dimension} reset has not elapsed"}
         if limit < required[dimension]:
-            return ("rate_limit_capacity_unknown",
-                    f"provider {dimension} limit cannot admit the next bounded attempt", blocked)
+            return {"code": "rate_limit_capacity_unknown", "blocked": blocked,
+                    "reason": f"provider {dimension} limit cannot admit the next bounded attempt (estimated requirement)"}
     return None
+
+
+def _short_token_wait(checkpoint: dict, refusal: dict, estimate: dict, now: float) -> float | None:
+    """Seconds to wait for a known, short per-minute token reset; None when waiting is not allowed."""
+    blocked = refusal.get("blocked") or []
+    if refusal.get("code") != "rate_limit" or not blocked or any(item not in TOKEN_DIMENSIONS for item in blocked):
+        return None   # never wait for request-per-day or unknown limits
+    state = checkpoint["execution"].get("rate_limit_state") or {}
+    headers = state.get("headers") if isinstance(state.get("headers"), dict) else {}
+    reset_at = state.get("reset_at_unix") if isinstance(state.get("reset_at_unix"), dict) else {}
+    delays = []
+    for dimension in blocked:
+        deadline = reset_at.get(dimension)
+        limit = _number(headers.get(f"x-ratelimit-limit-{dimension}"))
+        if (not isinstance(deadline, (int, float)) or not math.isfinite(deadline) or limit is None
+                or limit < estimate["required"][dimension]):
+            return None
+        delay = float(deadline) - now
+        if delay > MAX_TOKEN_RESET_WAIT_SECONDS:
+            return None
+        delays.append(max(0.0, delay))
+    return max(delays) + 1.0
 
 
 def _quota_error(error: BaseException | None, summary: dict) -> bool:
@@ -394,10 +555,20 @@ async def run_incremental_evaluation(
     resume_after_rate_limit: bool = False,
     provenance_resolver: Callable[[], dict] | None = None,
     clock: Callable[[], float] = time.time,
+    wait_for_token_reset: bool = False,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> dict:
-    """Execute at most ``pairs`` frozen pairs and persist every provider attempt."""
+    """Execute at most ``pairs`` frozen pairs and persist every provider attempt.
+
+    ``wait_for_token_reset`` (off by default) lets a pre-transmission per-minute token pause
+    wait in-process for a known reset of at most ``MAX_TOKEN_RESET_WAIT_SECONDS``. The pause
+    is recorded durably before waiting, so a restart during the wait requires the normal
+    ``resume_after_rate_limit`` continuation. Request-per-day and unknown limits never wait.
+    """
     if type(pairs) is not int or pairs <= 0:
         raise ValueError("pairs must be a positive integer")
+    if type(wait_for_token_reset) is not bool:
+        raise ValueError("wait_for_token_reset must be a boolean")
     auth = check_paid_authorization(authorization, manifest=manifest, config=config)
     from ..evaluation_report import resolve_git_provenance
     from scientific_rag import llm_gateway
@@ -448,60 +619,81 @@ async def run_incremental_evaluation(
         "selected_scenario_indices": selected,
         "completed_pairs": 0,
         "rate_limit_continuation": reset_continuation_authorized,
+        "resumed_active_arm": _resume_state(checkpoint.get("active_arm")) is not None,
+        "wait_for_token_reset": wait_for_token_reset,
         "stopped": None,
     }
     checkpoint["execution"]["stages"].append(stage)
     checkpoint = checkpoint_store.write(checkpoint)
 
+    def record_stop(code: str, reason: str, context: dict | None = None) -> None:
+        checkpoint["execution"]["stop_code"] = code
+        checkpoint["execution"]["stopped"] = reason
+        checkpoint["execution"]["stop_context"] = context
+
     async def metered(role, temperature, prompt, schema, *, max_output_tokens):
         nonlocal checkpoint, reset_continuation_authorized
+        schema_name = getattr(schema, "__name__", str(schema))
+        phase = "initial" if schema_name == "StructuredEvidenceAnswerV2" else "repair"
+        prompt_bytes = len(prompt.encode("utf-8"))
+        estimate = admission_estimate(checkpoint["execution"]["calls"], prompt_bytes=prompt_bytes,
+                                      schema_name=schema_name, schema_size=schema_bytes(schema),
+                                      max_output_tokens=max_output_tokens)
         now = _clock_now(clock)
-        refusal = _capacity_refusal(
-            checkpoint, prompt, max_output_tokens, now=now,
-            allow_elapsed_reset=reset_continuation_authorized,
-        )
+        refusal = _capacity_check(checkpoint, estimate, now=now, allow_elapsed_reset=reset_continuation_authorized)
+        continuation_kind = "operator_resume_after_reset" if reset_continuation_authorized else None
+        if refusal and wait_for_token_reset:
+            delay = _short_token_wait(checkpoint, refusal, estimate, now)
+            if delay is not None:
+                # Durable before waiting: a restart here needs the normal verified continuation.
+                record_stop("rate_limit", refusal["reason"], {
+                    "kind": "preflight_capacity", "blocked_dimensions": refusal["blocked"],
+                    "observed_at_unix": now, "phase": phase, "waiting_until_unix": now + delay,
+                    "admission": estimate})
+                checkpoint = checkpoint_store.write(checkpoint)
+                await sleep(delay)
+                now = _clock_now(clock)
+                record_stop(None, None, None)
+                checkpoint = checkpoint_store.write(checkpoint)
+                refusal = _capacity_check(checkpoint, estimate, now=now, allow_elapsed_reset=True)
+                continuation_kind = "in_process_token_reset_wait"
         if refusal:
-            code, reason, blocked = refusal
-            checkpoint["execution"]["stop_code"] = code
-            checkpoint["execution"]["stopped"] = reason
-            checkpoint["execution"]["stop_context"] = {
-                "kind": "preflight_capacity",
-                "blocked_dimensions": blocked,
-                "observed_at_unix": now,
-            }
+            resumable = refusal["code"] == "rate_limit"
+            record_stop(refusal["code"], refusal["reason"], {
+                "kind": "preflight_capacity", "blocked_dimensions": refusal["blocked"],
+                "observed_at_unix": now, "phase": phase, "admission": estimate})
             checkpoint_store.write(checkpoint)
-            raise EvaluationStopped(reason)
-        if reset_continuation_authorized:
+            raise EvaluationStopped(refusal["reason"], code=refusal["code"], resumable=resumable)
+        if continuation_kind is not None:
             checkpoint["execution"]["rate_limit_continuations"].append({
+                "kind": continuation_kind,
                 "authorized_at_unix": now,
                 "stage_number": stage["stage_number"],
                 "next_scenario_index": checkpoint["active_arm"]["scenario_index"],
                 "next_prompt_version": checkpoint["active_arm"]["prompt_version"],
+                "next_phase": phase,
             })
             reset_continuation_authorized = False
             checkpoint = checkpoint_store.write(checkpoint)
-        input_ceiling = len(prompt.encode("utf-8"))
-        if input_ceiling > config["max_input_tokens"]:
+        if prompt_bytes > config["max_input_tokens"]:
             reason = "conservative input-token ceiling reached before the call"
-            checkpoint["execution"]["stop_code"] = "input_ceiling"
-            checkpoint["execution"]["stopped"] = reason
+            record_stop("input_ceiling", reason)
             checkpoint_store.write(checkpoint)
-            raise EvaluationStopped(reason)
-        reserved, _ = calculate_cost(config["provider"], config["model"], input_ceiling, max_output_tokens)
+            raise EvaluationStopped(reason, code="input_ceiling")
+        reserved, _ = calculate_cost(config["provider"], config["model"], prompt_bytes, max_output_tokens)
         if reserved is None or not ledger.reserve(reserved):
             reason = "authorized call or cost ceiling reached before the call"
-            checkpoint["execution"]["stop_code"] = "budget"
-            checkpoint["execution"]["stopped"] = reason
+            record_stop("budget", reason)
             checkpoint_store.write(checkpoint)
-            raise EvaluationStopped(reason)
-        phase = "initial" if getattr(schema, "__name__", "") == "StructuredEvidenceAnswerV2" else "repair"
+            raise EvaluationStopped(reason, code="budget")
+        prompt_sha256 = canonical_sha256(prompt)
         checkpoint["execution"]["budget"] = ledger.snapshot()
         checkpoint["active_attempt"] = {
             "scenario_id": checkpoint["active_arm"]["scenario_id"],
             "scenario_index": checkpoint["active_arm"]["scenario_index"],
             "prompt_version": checkpoint["active_arm"]["prompt_version"],
             "phase": phase,
-            "prompt_sha256": canonical_sha256(prompt),
+            "prompt_sha256": prompt_sha256,
             "reserved_cost_usd": reserved,
             "state": "reserved",
         }
@@ -521,6 +713,11 @@ async def run_incremental_evaluation(
             usage["rate_limit_headers"] = _rate_headers(summary)
             usage["rate_limit_observed_at_unix"] = _clock_now(clock)
             usage["phase"] = phase
+            usage["schema"] = schema_name
+            usage["prompt_sha256"] = prompt_sha256
+            usage["prompt_bytes"] = prompt_bytes
+            usage["request_bytes"] = estimate["request_bytes"]
+            usage["admission"] = estimate
             usage["scenario_id"] = checkpoint["active_arm"]["scenario_id"]
             usage["prompt_version"] = checkpoint["active_arm"]["prompt_version"]
             ledger.settle(reserved, usage)
@@ -536,30 +733,32 @@ async def run_incremental_evaluation(
             checkpoint["active_attempt"] = None
             allowed = f"{config['provider']}:{config['model']}"
             if _quota_error(error, summary):
-                checkpoint["execution"]["stop_code"] = "rate_limit"
-                checkpoint["execution"]["stopped"] = "provider returned a rate-limit or quota-exhaustion response"
-                checkpoint["execution"]["stop_context"] = {
-                    "kind": "provider_rate_limit",
-                    "call_index": len(checkpoint["execution"]["calls"]) - 1,
-                }
+                record_stop("rate_limit", "provider returned a rate-limit or quota-exhaustion response", {
+                    "kind": "provider_rate_limit", "call_index": len(checkpoint["execution"]["calls"]) - 1})
             elif any(model != allowed for model in usage["provider_models"]):
-                checkpoint["execution"]["stop_code"] = "model_drift"
-                checkpoint["execution"]["stopped"] = "a call used a provider/model outside the authorization"
+                record_stop("model_drift", "a call used a provider/model outside the authorization")
             elif usage["cost_status"] != "complete":
-                checkpoint["execution"]["stop_code"] = "billing_unknown"
-                checkpoint["execution"]["stopped"] = "provider usage was incomplete; spend is uncertain"
+                record_stop("billing_unknown", "provider usage was incomplete; spend is uncertain")
             elif usage["provider_calls"] != 1:
-                checkpoint["execution"]["stop_code"] = "unexpected_retry"
-                checkpoint["execution"]["stopped"] = "an unexpected retry or fallback was observed"
+                record_stop("unexpected_retry", "an unexpected retry or fallback was observed")
             elif isinstance(usage["output_tokens"], int) and usage["output_tokens"] > max_output_tokens:
-                checkpoint["execution"]["stop_code"] = "output_limit"
-                checkpoint["execution"]["stopped"] = "provider reported output beyond the output-token limit"
+                record_stop("output_limit", "provider reported output beyond the output-token limit")
             checkpoint_store.write(checkpoint)
         if error is not None:
             raise error
         if checkpoint["execution"].get("stopped"):
-            raise EvaluationStopped(checkpoint["execution"]["stopped"])
+            raise EvaluationStopped(checkpoint["execution"]["stopped"],
+                                    code=checkpoint["execution"]["stop_code"], transmitted=True)
         return result
+
+    async def persist_repair_pending(state: dict) -> None:
+        nonlocal checkpoint
+        checkpoint["active_arm"]["phase"] = "repair_pending"
+        checkpoint["active_arm"]["initial"] = {"output": state["initial_output"],
+                                               "validation_errors": state["validation_errors"]}
+        checkpoint["active_arm"]["pending_operation"] = {"phase": "repair", "schema": REPAIR_SCHEMA,
+                                                         "prompt_sha256": state["repair_prompt_sha256"]}
+        checkpoint = checkpoint_store.write(checkpoint)
 
     try:
         for scenario_index in selected:
@@ -583,24 +782,37 @@ async def run_incremental_evaluation(
             for version in record["execution_order"]:
                 if version in completed_versions:
                     continue
-                checkpoint["active_arm"] = {
-                    "scenario_id": scenario_id,
-                    "scenario_index": scenario_index,
-                    "prompt_version": version,
-                    "attempts": [],
-                }
-                checkpoint = checkpoint_store.write(checkpoint)
-                arm = await _evaluate_arm(scenario, version, config, metered)
+                active = checkpoint.get("active_arm")
+                if active and (active["scenario_index"], active["prompt_version"]) == (scenario_index, version):
+                    resume = _resume_state(active)   # verified on load; never repeats a transmitted request
+                else:
+                    resume = None
+                    checkpoint["active_arm"] = {
+                        "scenario_id": scenario_id,
+                        "scenario_index": scenario_index,
+                        "prompt_version": version,
+                        "phase": "initial_pending",
+                        "attempts": [],
+                    }
+                    checkpoint = checkpoint_store.write(checkpoint)
+                try:
+                    arm = await _evaluate_arm(scenario, version, config, metered, resume=resume,
+                                              before_repair=persist_repair_pending)
+                except ResumeIntegrityError as error:
+                    raise CheckpointError(f"saved arm state for {scenario_id}/{version} failed verification: "
+                                          f"{error}") from error
                 attempts = checkpoint["active_arm"]["attempts"]
-                if not attempts:
-                    # A pre-transmission capacity/budget refusal leaves this arm genuinely
-                    # unexecuted so a later explicitly approved stage cannot mistake it for
-                    # a failed provider response or duplicate a completed request.
-                    checkpoint["active_arm"] = None
+                interruption = arm.get("interruption") or {}
+                if not attempts or (arm.get("failure_class") == EXECUTION_STOP and not interruption.get("transmitted")):
+                    # Stopped before transmission: nothing was sent for this arm yet, or its
+                    # untransmitted repair stays durably pending. Never a failed answer; the
+                    # campaign stop code alone decides whether a continuation is allowed.
+                    if not attempts:
+                        checkpoint["active_arm"] = None
                     checkpoint["active_attempt"] = None
                     checkpoint = checkpoint_store.write(checkpoint)
                     break
-                arm["gateway_invocations"] = arm["physical_calls"]
+                arm["gateway_invocations"] = len(attempts)
                 arm["physical_calls"] = sum(int(item.get("provider_calls") or 0) for item in attempts)
                 arm["usage"] = _arm_usage(attempts)
                 arm["attempts"] = attempts
@@ -617,8 +829,11 @@ async def run_incremental_evaluation(
             if checkpoint["execution"].get("stopped"):
                 break
     except asyncio.CancelledError:
-        checkpoint["execution"]["stop_code"] = "cancelled"
-        checkpoint["execution"]["stopped"] = "execution was cancelled with an unresolved attempted arm"
+        context = checkpoint["execution"].get("stop_context") or {}
+        if not (checkpoint.get("active_attempt") is None and context.get("kind") == "preflight_capacity"):
+            # A pre-transmission pause (for example during the opt-in wait) keeps its resumable
+            # stop; anything else is terminal and refused on resume.
+            record_stop("cancelled", "execution was cancelled with an unresolved attempted arm")
         stage["stopped"] = checkpoint["execution"]["stopped"]
         checkpoint_store.write(checkpoint)
         raise
@@ -634,5 +849,5 @@ async def run_incremental_evaluation(
 
 __all__ = [
     "AtomicCheckpoint", "CampaignLocked", "CheckpointError", "CHECKPOINT_SCHEMA",
-    "new_checkpoint", "run_incremental_evaluation", "verify_checkpoint",
+    "admission_estimate", "new_checkpoint", "run_incremental_evaluation", "verify_checkpoint",
 ]

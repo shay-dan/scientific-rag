@@ -116,6 +116,11 @@ deviation.
 
 ## Phase 2 — exact owner authorization and live run (only after Phase 1)
 
+> **Staged execution uses `incremental-run`**, per
+> [generation-evaluation-r7d-incremental.md](../cost-aware-pipeline/docs/generation-evaluation-r7d-incremental.md)
+> (checkpoint v2, durable pending repairs, verified continuation). The one-shot `paid-run`
+> below is kept only for completeness; it records nothing until the whole invocation returns.
+
 - Obtain or confirm the owner's **exact** authorization for *this* manifest,
   code SHA, canonical config SHA, provider `groq`, model
   `openai/gpt-oss-120b`, max 80 physical attempts, output limit 2,000

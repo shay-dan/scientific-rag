@@ -1,6 +1,6 @@
 # Scientific RAG — engineering roadmap
 
-**Status:** authoritative planning document. Last updated 2026-11-16 (R7D-A complete; R7D-B incremental execution safety in review).
+**Status:** authoritative planning document. Last updated 2026-11-18 (R7D-B incremental execution complete; R7D-B execution-safety correction in review).
 **Origin:** owner-approved *Master Implementation Plan*, which consolidated an independent
 audit, a reconciled R0–R13 roadmap, a discovery/evidence-acquisition addendum, and the
 historical engineering handover. Changes to this file require owner approval and an entry
@@ -32,7 +32,7 @@ Operating rules for agents are in [`AGENTS.md`](../AGENTS.md). History, complete
 | R4 | Evaluation integrity and reproducibility | **complete** (PR #11, `359e02c`) | R0 |
 | R5 | Offline semantic-verifier evaluation harness | **complete** (PR #12, `b21bc37`) | R0 |
 | R6 | Human-reviewed evidence packs and labels | R6A **complete** (PR #13, `60b394a`); R6B **complete** (PR #14, `e6bf0ee`); R6C **complete** (PR #15, `693b7a5`); R6D **complete** (PR #16, `5328573`) | R4, R5; R3 preferred |
-| R7 | Deterministic claim checks, graceful degradation | R7A **complete** (PR #17, `d638e15`); R7B **complete** (PR #18, `45f85a9`); R7C **complete** (PR #19, `23560a7`); R7D-A **complete** (PR #20, `6710fc4`); R7D route hotfix **complete** (PR #21, `14938d9`); R7D-B incremental safety **in review** (no paid calls) | R5, R6 |
+| R7 | Deterministic claim checks, graceful degradation | R7A **complete** (PR #17, `d638e15`); R7B **complete** (PR #18, `45f85a9`); R7C **complete** (PR #19, `23560a7`); R7D-A **complete** (PR #20, `6710fc4`); R7D route hotfix **complete** (PR #21, `14938d9`); R7D-B incremental execution **complete** (PR #23, `3923a12`); R7D-B execution-safety correction **in review** (no paid calls) | R5, R6 |
 | R9-D | Discovery candidate pool, ranking, backfilling | not started | R6 pilot, R2 |
 | R9-P | PMC scientific-content extraction | conditional | R6 fixtures; R7 preferred |
 | R8 | Semantic-verifier calibration and release decision | not started | R3, R5, R6, R7 |
@@ -714,7 +714,8 @@ uncertainty. Expansion is a separate decision.
 
 **Status:** R7A–R7C complete; R7D-A offline harness complete; R7D-B owner-waived,
 AI-assisted exploratory development pilot prepared privately; the opt-in incremental
-checkpoint/resume extension is in review, with no inference against unmerged code.
+checkpoint/resume extension is complete (PR #23, `3923a12`); the execution-safety
+correction (checkpoint v2) is in review. No benchmark inference has run.
 **Priority:** high.
 Independent of R9-D.
 
@@ -744,6 +745,33 @@ R7 is split into separately authorized stages in this order:
    Execution instructions: [R7D exploratory runbook](r7d-exploratory-runbook.md).
    Free-tier staged execution contract:
    [R7D-B incremental execution](../cost-aware-pipeline/docs/generation-evaluation-r7d-incremental.md).
+
+   **R7D-B incremental execution (PR #23)** merged as `3923a12` (final head `dd0cbe3`).
+   Post-merge CI and Security passed on `main`:
+   - 880 deterministic tests in the production image (0 failures, 58 skipped);
+   - 57/57 PostgreSQL/pgvector and Redis integration tests;
+   - historical prototype 13/13;
+   - migrations, `/healthz`, and image provenance (`3923a12`).
+
+   An independent takeover review (2026-11-17) then blocked the first live pair. It
+   confirmed two execution defects by offline reproduction:
+   - a pre-transmission capacity pause before an arm's repair was recorded as a failed
+     model answer and never repaired after continuation;
+   - per-minute admission at one token per prompt byte could strand the campaign after
+     one arm when prompts exceed about 6 KB.
+
+   **R7D-B execution-safety correction (in review)** keeps the frozen manifest, prompts,
+   order, schemas, one-repair maximum, Groq-only route and $1.50/80-call ceilings, and adds:
+   - checkpoint v2 with durable `initial_pending`/`repair_pending` arms and
+     fingerprint-verified resume;
+   - provider-calibrated per-minute admission (an estimate, separate from the unchanged
+     cost ledger);
+   - an opt-in wait of at most 65 s for per-minute token resets only;
+   - outcome classes so that only `completed` and model-output `failed` arms enter
+     pairing.
+
+   It refuses v1 checkpoints unchanged. A new authorization and zero-call preflight are
+   required after merge. The blind-key correction is a separate, later PR.
 
 R7A never converts zero surviving claims to `insufficient_evidence`; that outcome
 remains reserved for the independent evidence-sufficiency gate. R7A merged in PR #17 as
@@ -935,6 +963,7 @@ load evidence; large synthetic evaluation sets presented as gold data.
 
 | Date | Decision | Evidence / reason |
 |---|---|---|
+| 2026-11-18 | Mark R7D-B incremental execution complete (PR #23, `3923a12`); put the R7D-B execution-safety correction in review. Pre-transmission stops never become model failures; a pending repair is durable and resumes only the untransmitted operation after fingerprint verification; per-minute admission uses a provider-calibrated estimate (never called an upper bound) separate from the unchanged cost ledger; an opt-in wait covers only short known token resets; provider/network/billing interruptions are excluded from paired scoring; initial and post-repair outcomes are reported separately. Checkpoint v2 refuses v1 files unchanged. | Independent takeover review reproduced both defects on `3923a12`. Post-merge evidence for PR #23: 880 tests (0 failures, 58 skipped), 57/57 integration, legacy 13/13, provenance, migrations, `/healthz`, Security green. Frozen manifest, prompts, order, schemas, one-repair maximum, Groq-only route and $1.50/80-call limits unchanged; new authorization and zero-call preflight required after merge. |
 | 2026-11-16 | Put the minimal R7D-B Free-tier incremental execution extension in review. Keep the frozen 20-case manifest and generation/scoring contracts unchanged; add only opt-in atomic private checkpoints, cumulative ledger restoration, frozen-index pair staging, single-campaign locking, provider rate-header capture, and fail-closed resume. Do not call a provider before merge and a new merge-SHA-bound config, authorization, and zero-call dry run. | The accepted one-shot runner persisted only after the full invocation, so interruption could lose completed billable work. The incremental contract writes before and after every attempt, refuses unresolved attempts rather than duplicating them, and preserves the 80-call / $1.50 campaign ceilings across sessions. Rollback is to omit `incremental-run` or revert the PR; no migration, API, prompt, cache, or default-route change. |
 | 2026-11-16 | Record R7D-A complete (PR #20, `6710fc4`) and the R7D paid-run route hotfix complete (PR #21, `14938d9`). Proceed toward the *R7D-B exploratory development* pilot with the owner's explicit one-pilot waiver of independent human selection review; do **not** describe this as gold, human-reviewed, or calibrated. Private manifest, labels, passage text, scoring materials and keys remain outside Git. A production zero-call dry run, exact code/config/manifest authorization and maximum $1.50 / 80 attempts remain enforced before any paid execution. | Both PRs merged with green post-merge CI and Security. Frozen private 20-case manifest commitment `3dc9e1073a1cea87edf3d328828533553e56dc9319ebf7a65d0e94119b1f5739`; 76 passages, 5 cases per category. Offline source-equivalent cost bound $0.56904060, **not** a production dry run. See [R7D exploratory runbook](r7d-exploratory-runbook.md). |
 | 2026-11-15 | Mark R7C complete (PR #19, `23560a7`) and begin R7D-A as offline-only fixed-evidence evaluation preparation. No live or paid execution is authorized; v15 remains the default. | R7C main CI and Security green. R7D-A requires exactly 20 reviewed label-free development scenarios, v15/v16 as the sole arm difference, owner-side blind scoring, at most 80 physical calls and a proposed $1.50 ceiling. The reviewed manifest is not in the repository and must not be invented. |

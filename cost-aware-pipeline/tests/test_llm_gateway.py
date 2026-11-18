@@ -540,6 +540,14 @@ class LLMGatewayConfigurationTests(unittest.TestCase):
         self.assertEqual({"x-ratelimit-remaining-tokens": "7995"}, handler.rate_limit_headers)
         self.assertEqual((3, 2), (handler.input_tokens, handler.output_tokens))
 
+    def test_rate_limit_allowlist_includes_separate_input_and_output_token_limits(self) -> None:
+        captured = llm_gateway._rate_limit_headers({
+            "X-RateLimit-Remaining-Input-Tokens": "4000", "x-ratelimit-limit-output-tokens": "2000",
+            "x-ratelimit-reset-output-tokens": "6s", "Set-Cookie": "must-not-be-recorded",
+        })
+        self.assertEqual({"x-ratelimit-remaining-input-tokens": "4000", "x-ratelimit-limit-output-tokens": "2000",
+                          "x-ratelimit-reset-output-tokens": "6s"}, captured)
+
     def test_openrouter_query_repair_defaults_to_configured_qwen_model(self) -> None:
         with patch.dict(os.environ, {
             "GROQ_MODEL": "openai/gpt-oss-120b",
