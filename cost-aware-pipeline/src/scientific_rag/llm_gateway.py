@@ -25,6 +25,8 @@ from pydantic import ValidationError
 from model_policy import ModelPolicy
 from .provider_throttle import ProviderThrottled, admit as shared_admit, cool_down as shared_cool_down, release as shared_release
 from .costing import calculate_cost
+from .provider_capabilities import REASONING_EFFORT_SUPPORT, UnsupportedReasoningEffort, validate_reasoning_effort
+from .provider_failures import FAILURE_CLASSES, describe_provider_failure
 
 
 logger = logging.getLogger("ResearchAgent.LLMGateway")
@@ -104,6 +106,10 @@ class BoundedRequestLimitExceeded(OutputTokenLimitNotEnforced):
     """A bounded provider attempt tried to send more than one outbound request."""
 
 
+class ReasoningEffortNotEnforced(OutputTokenLimitNotEnforced):
+    """The outbound bounded request did not carry the requested reasoning effort; it was not sent."""
+
+
 class _OutputLimitGuard:
     """Checks every outbound request of a bounded model, before it is sent.
 
@@ -115,8 +121,9 @@ class _OutputLimitGuard:
     so the gateway fails the attempt even if the chain swallowed the error.
     """
 
-    def __init__(self, provider: str, limit: int) -> None:
+    def __init__(self, provider: str, limit: int, reasoning_effort: str | None = None) -> None:
         self.provider, self.limit, self.verified_requests = provider, limit, 0
+        self.reasoning_effort = reasoning_effort
         self.refusal: OutputTokenLimitError | None = None
 
     def check(self, content: bytes) -> None:
@@ -143,6 +150,9 @@ class _OutputLimitGuard:
         if body.get("n") not in (None, 1):   # several completions would multiply the bounded output
             raise OutputTokenLimitNotEnforced(
                 f"outbound {self.provider} request asks for more than one completion; not sent")
+        if self.reasoning_effort is not None and body.get("reasoning_effort") != self.reasoning_effort:
+            raise ReasoningEffortNotEnforced(
+                f"outbound {self.provider} request does not carry the requested reasoning effort; not sent")
         self.verified_requests += 1
 
     def sync_hook(self, request: httpx.Request) -> None:
@@ -265,6 +275,9 @@ class ProviderAttempt:
     skipped: bool = False
     admission_wait_ms: float = 0.0
     rate_limit_headers: dict[str, str] | None = None
+    # R7D-C: sanitized structured diagnostics (no text, prompts or credentials). Serialized only
+    # in the opt-in capture mode, so production run traces keep their existing shape.
+    diagnostics: dict[str, Any] | None = None
 
 
 _trace: ContextVar[list[ProviderAttempt] | None] = ContextVar("llm_gateway_trace", default=None)
@@ -280,9 +293,16 @@ class _TokenUsageHandler(BaseCallbackHandler):
         self.output_tokens = 0
         self.has_usage = False
         self.rate_limit_headers: dict[str, str] = {}
+        self.reasoning_tokens: int | None = None
+        self.finish_reason: str | None = None
 
     def on_llm_end(self, response, **kwargs) -> None:
         usage = getattr(response, "llm_output", None) or {}
+        reasoning, finish = _reasoning_and_finish(response)
+        if reasoning is not None:
+            self.reasoning_tokens = reasoning
+        if finish is not None:
+            self.finish_reason = finish
         self.rate_limit_headers.update(_rate_limit_headers(usage.get("headers") or usage.get("response_headers")))
         messages = [getattr(generation, "message", None)
                     for group in getattr(response, "generations", []) or [] for generation in group]
@@ -303,6 +323,33 @@ class _TokenUsageHandler(BaseCallbackHandler):
                 self.input_tokens += input_tokens
                 self.output_tokens += output_tokens
                 self.has_usage = True
+
+
+def _reasoning_and_finish(response: Any) -> tuple[int | None, str | None]:
+    """Provider-reported reasoning tokens and finish reason, when present; never estimated."""
+    reasoning: int | None = None
+    finish: str | None = None
+    usage_sources: list[Any] = []
+    llm_output = getattr(response, "llm_output", None) or {}
+    if isinstance(llm_output, dict):
+        usage_sources.append(llm_output.get("token_usage") or llm_output.get("usage"))
+    for group in getattr(response, "generations", []) or []:
+        for generation in group:
+            info = getattr(generation, "generation_info", None) or {}
+            message = getattr(generation, "message", None)
+            metadata = getattr(message, "response_metadata", None) or {}
+            for candidate in (info.get("finish_reason"), metadata.get("finish_reason")):
+                if isinstance(candidate, str) and re.fullmatch(r"[a-z_]{1,32}", candidate):
+                    finish = candidate
+            usage_sources.extend([metadata.get("token_usage"), getattr(message, "usage_metadata", None)])
+    for usage in usage_sources:
+        if not isinstance(usage, dict):
+            continue
+        details = usage.get("completion_tokens_details") or usage.get("output_token_details") or {}
+        value = details.get("reasoning_tokens", details.get("reasoning")) if isinstance(details, dict) else None
+        if type(value) is int and value >= 0:
+            reasoning = value
+    return reasoning, finish
 
 
 def _usage_pair(usage: Any) -> tuple[int | None, int | None]:
@@ -336,6 +383,7 @@ def end_trace(token: tuple[Token, Token, Token, Token, Token]) -> list[dict[str,
     if not capture_rate_limits:
         for attempt in serialized:
             attempt.pop("rate_limit_headers", None)
+            attempt.pop("diagnostics", None)
     return serialized
 
 
@@ -460,6 +508,12 @@ async def _ainvoke_with_usage(chain: Any, payload: Any, usage_handler: _TokenUsa
     return await chain.ainvoke(payload)
 
 
+def _attempt_diagnostics(usage_handler: "_TokenUsageHandler", limit: int | None, reasoning_effort: str | None,
+                         usage_complete: bool) -> dict[str, Any]:
+    return {"reasoning_effort": reasoning_effort, "max_output_tokens": limit, "usage_complete": usage_complete,
+            "reasoning_tokens": usage_handler.reasoning_tokens, "finish_reason": usage_handler.finish_reason}
+
+
 def _record(attempt: ProviderAttempt) -> None:
     attempts = _trace.get()
     if attempts is not None:
@@ -505,18 +559,25 @@ def primary_route_label(role: str) -> str:
     return "unconfigured"
 
 
-def create_chat_model(provider: str, role: str, temperature: float, max_output_tokens: int | None = None):
+def create_chat_model(provider: str, role: str, temperature: float, max_output_tokens: int | None = None,
+                      reasoning_effort: str | None = None):
     """Build the chat model for a provider and role.
 
     ``max_output_tokens`` (R6D) is optional. When omitted the model is built exactly as
     before. When given, the provider must support a verified limit: the limit is set as a
     request parameter, and a guard on the model's own HTTP clients refuses any outbound
     request that does not carry it.
+
+    ``reasoning_effort`` (R7D-C) is optional and only valid with a bounded request on a
+    supported route; the same guard refuses an outbound request that does not carry it.
     """
     limit = validate_max_output_tokens(max_output_tokens)
     if limit is not None:
         output_token_limit_parameters(provider)
     model = model_for(provider, role)
+    effort = validate_reasoning_effort(provider, model, reasoning_effort)
+    if effort is not None and limit is None:
+        raise UnsupportedReasoningEffort("reasoning effort requires a verified bounded request (max_output_tokens)")
     timeout = provider_timeout_seconds(provider)
     api_key = _key_for(provider)
     if not api_key:
@@ -538,8 +599,10 @@ def create_chat_model(provider: str, role: str, temperature: float, max_output_t
             }
         if _capture_rate_limits.get():
             kwargs["include_response_headers"] = True
+        if effort is not None:
+            kwargs["reasoning_effort"] = effort
         if limit is not None:
-            guard = _OutputLimitGuard(provider, limit)
+            guard = _OutputLimitGuard(provider, limit, effort)
             kwargs["max_tokens"] = limit
             # Redirects are not followed: a redirected POST would be a second, uncounted request.
             kwargs["http_client"] = httpx.Client(
@@ -654,12 +717,15 @@ def create_primary_chat_model(role: str, temperature: float):
 
 
 async def ainvoke(role: str, temperature: float, chain_builder: Callable[[Any], Any], payload: Any, *,
-                  max_output_tokens: int | None = None):
+                  max_output_tokens: int | None = None, reasoning_effort: str | None = None):
     """Invoke a chain and fail over only for transient/provider-availability errors.
 
     ``max_output_tokens`` (R6D, optional) bounds every provider attempt of this call. It is
     refused unless every configured provider for the role can enforce it, so a bounded call
     can never fall back to an unbounded request. Without it, behavior is unchanged.
+
+    ``reasoning_effort`` (R7D-C, optional) requires ``max_output_tokens`` and a supported
+    route for every configured provider; it is never silently dropped or applied elsewhere.
     """
     limit = validate_max_output_tokens(max_output_tokens)
     providers = list(_configured_providers(role))
@@ -668,6 +734,11 @@ async def ainvoke(role: str, temperature: float, chain_builder: Callable[[Any], 
     if limit is not None:
         for configured in providers:
             output_token_limit_parameters(configured)
+    if reasoning_effort is not None:
+        if limit is None:
+            raise UnsupportedReasoningEffort("reasoning effort requires a verified bounded request (max_output_tokens)")
+        for configured in providers:
+            validate_reasoning_effort(configured, model_for(configured, role), reasoning_effort)
 
     last_error: BaseException | None = None
     call_id = str(uuid4())
@@ -727,11 +798,13 @@ async def ainvoke(role: str, temperature: float, chain_builder: Callable[[Any], 
         actual_tokens: int | None = None
         bounded_model = None
         guard = None
+        chain = None
         try:
             if limit is None:
                 chain = chain_builder(create_chat_model(provider, role, temperature))
             else:
-                bounded_model = create_chat_model(provider, role, temperature, max_output_tokens=limit)
+                bounded_model = create_chat_model(provider, role, temperature, max_output_tokens=limit,
+                                                  reasoning_effort=reasoning_effort)
                 guard = _output_limit_guard(bounded_model)
                 chain = chain_builder(bounded_model)
             result = await asyncio.wait_for(
@@ -754,7 +827,10 @@ async def ainvoke(role: str, temperature: float, chain_builder: Callable[[Any], 
                                     input_tokens=input_tokens, output_tokens=output_tokens,
                                     recovery=recovery_phase, context_chars=context_chars,
                                     admission_wait_ms=admission.wait_ms if admission else 0,
-                                    rate_limit_headers=usage_handler.rate_limit_headers or None))
+                                    rate_limit_headers=usage_handler.rate_limit_headers or None,
+                                    diagnostics=_attempt_diagnostics(
+                                        usage_handler, limit, reasoning_effort,
+                                        input_tokens is not None and output_tokens is not None)))
             if failures is not None:
                 failures[provider] = 0
             if cooldowns is not None:
@@ -785,14 +861,18 @@ async def ainvoke(role: str, temperature: float, chain_builder: Callable[[Any], 
                     logger.info("llm_gateway_circuit_open provider=%s role=%s failures=%s", provider, role, failures[provider])
             input_tokens = usage_handler.input_tokens if usage_handler.has_usage else None
             output_tokens = usage_handler.output_tokens if usage_handler.has_usage else None
+            failure = describe_provider_failure(error, getattr(chain, "response_schema", None))
             _record(ProviderAttempt(call_id, attempt_index, provider, model, role, latency_ms, False,
                                     retryable, status, type(error).__name__, input_tokens, output_tokens,
                                     recovery_phase, context_chars, False,
                                     admission.wait_ms if admission else 0,
-                                    _error_rate_limit_headers(error) or None))
+                                    _error_rate_limit_headers(error) or None,
+                                    {**_attempt_diagnostics(usage_handler, limit, reasoning_effort,
+                                                            usage_handler.has_usage), **failure}))
             logger.warning(
-                "llm_gateway_failure provider=%s model=%s role=%s latency_ms=%s status=%s retryable=%s error_type=%s",
-                provider, model, role, latency_ms, status, retryable, type(error).__name__,
+                "llm_gateway_failure provider=%s model=%s role=%s latency_ms=%s status=%s retryable=%s "
+                "error_type=%s failure_class=%s",
+                provider, model, role, latency_ms, status, retryable, type(error).__name__, failure["failure_class"],
             )
             if limit_error is not None and limit_error is not error:
                 raise limit_error from error
@@ -820,10 +900,11 @@ async def ainvoke(role: str, temperature: float, chain_builder: Callable[[Any], 
 
 
 async def ainvoke_structured(role: str, temperature: float, prompt: str, response_schema: type, *,
-                             max_output_tokens: int | None = None):
+                             max_output_tokens: int | None = None, reasoning_effort: str | None = None):
     class ValidatedStructuredChain:
         def __init__(self, chain):
             self.chain = chain
+            self.response_schema = response_schema   # for sanitized failure diagnostics only
 
         async def ainvoke(self, payload, config=None):
             try:
@@ -860,6 +941,9 @@ async def ainvoke_structured(role: str, temperature: float, prompt: str, respons
                 raise
             return ValidatedStructuredChain(model.with_structured_output(response_schema))
 
+    if reasoning_effort is not None:
+        return await ainvoke(role, temperature, structured_model, prompt, max_output_tokens=max_output_tokens,
+                             reasoning_effort=reasoning_effort)
     if max_output_tokens is not None:
         return await ainvoke(role, temperature, structured_model, prompt, max_output_tokens=max_output_tokens)
     return await ainvoke(
