@@ -125,6 +125,11 @@ class _OutputLimitGuard:
         self.provider, self.limit, self.verified_requests = provider, limit, 0
         self.reasoning_effort = reasoning_effort
         self.refusal: OutputTokenLimitError | None = None
+        # Provider-reported usage read from the one successful HTTP response (numbers only). It
+        # survives a local parsing/validation failure, which can prevent LangChain callbacks.
+        self.response_usage: tuple[int, int] | None = None
+        self.response_reasoning_tokens: int | None = None
+        self.response_finish_reason: str | None = None
 
     def check(self, content: bytes) -> None:
         try:
@@ -160,6 +165,34 @@ class _OutputLimitGuard:
 
     async def async_hook(self, request: httpx.Request) -> None:
         self.check(await request.aread())
+
+    def _record_response(self, status: int, content: bytes) -> None:
+        if status != 200:
+            return
+        try:
+            body = json.loads(content)
+        except (ValueError, TypeError):
+            return
+        if not isinstance(body, dict):
+            return
+        usage = body.get("usage")
+        input_tokens, output_tokens = _usage_pair(usage)
+        if input_tokens is not None and output_tokens is not None:
+            self.response_usage = (input_tokens, output_tokens)
+        details = usage.get("completion_tokens_details") if isinstance(usage, dict) else None
+        reasoning = details.get("reasoning_tokens") if isinstance(details, dict) else None
+        if type(reasoning) is int and reasoning >= 0:
+            self.response_reasoning_tokens = reasoning
+        choices = body.get("choices")
+        finish = choices[0].get("finish_reason") if isinstance(choices, list) and choices and isinstance(choices[0], dict) else None
+        if isinstance(finish, str) and re.fullmatch(r"[a-z_]{1,32}", finish):
+            self.response_finish_reason = finish
+
+    def sync_response_hook(self, response: httpx.Response) -> None:
+        self._record_response(response.status_code, response.read())
+
+    async def async_response_hook(self, response: httpx.Response) -> None:
+        self._record_response(response.status_code, await response.aread())
 
 
 def _outbound_transport() -> httpx.BaseTransport | None:
@@ -514,6 +547,15 @@ def _attempt_diagnostics(usage_handler: "_TokenUsageHandler", limit: int | None,
             "reasoning_tokens": usage_handler.reasoning_tokens, "finish_reason": usage_handler.finish_reason}
 
 
+def _merge_wire_details(usage_handler: "_TokenUsageHandler", guard: "_OutputLimitGuard | None") -> None:
+    if guard is None:
+        return
+    if usage_handler.reasoning_tokens is None:
+        usage_handler.reasoning_tokens = guard.response_reasoning_tokens
+    if usage_handler.finish_reason is None:
+        usage_handler.finish_reason = guard.response_finish_reason
+
+
 def _record(attempt: ProviderAttempt) -> None:
     attempts = _trace.get()
     if attempts is not None:
@@ -607,10 +649,10 @@ def create_chat_model(provider: str, role: str, temperature: float, max_output_t
             # Redirects are not followed: a redirected POST would be a second, uncounted request.
             kwargs["http_client"] = httpx.Client(
                 timeout=timeout, follow_redirects=False, transport=_outbound_transport(),
-                event_hooks={"request": [guard.sync_hook]})
+                event_hooks={"request": [guard.sync_hook], "response": [guard.sync_response_hook]})
             kwargs["http_async_client"] = httpx.AsyncClient(
                 timeout=timeout, follow_redirects=False, transport=_outbound_transport(),
-                event_hooks={"request": [guard.async_hook]})
+                event_hooks={"request": [guard.async_hook], "response": [guard.async_response_hook]})
             kwargs["http_async_client"].output_limit_guard = guard
         return ChatOpenAI(**kwargs)
 
@@ -821,6 +863,9 @@ async def ainvoke(role: str, temperature: float, chain_builder: Callable[[Any], 
             input_tokens, output_tokens = _usage_counts(result)
             if input_tokens is None and usage_handler.has_usage:
                 input_tokens, output_tokens = usage_handler.input_tokens, usage_handler.output_tokens
+            if input_tokens is None and guard is not None and guard.response_usage is not None:
+                input_tokens, output_tokens = guard.response_usage
+            _merge_wire_details(usage_handler, guard)
             if input_tokens is not None and output_tokens is not None:
                 actual_tokens = input_tokens + output_tokens
             _record(ProviderAttempt(call_id, attempt_index, provider, model, role, latency_ms, True, False,
@@ -861,6 +906,9 @@ async def ainvoke(role: str, temperature: float, chain_builder: Callable[[Any], 
                     logger.info("llm_gateway_circuit_open provider=%s role=%s failures=%s", provider, role, failures[provider])
             input_tokens = usage_handler.input_tokens if usage_handler.has_usage else None
             output_tokens = usage_handler.output_tokens if usage_handler.has_usage else None
+            if input_tokens is None and guard is not None and guard.response_usage is not None:
+                input_tokens, output_tokens = guard.response_usage   # e.g. HTTP 200, then local parsing failed
+            _merge_wire_details(usage_handler, guard)
             failure = describe_provider_failure(error, getattr(chain, "response_schema", None))
             _record(ProviderAttempt(call_id, attempt_index, provider, model, role, latency_ms, False,
                                     retryable, status, type(error).__name__, input_tokens, output_tokens,
@@ -868,7 +916,8 @@ async def ainvoke(role: str, temperature: float, chain_builder: Callable[[Any], 
                                     admission.wait_ms if admission else 0,
                                     _error_rate_limit_headers(error) or None,
                                     {**_attempt_diagnostics(usage_handler, limit, reasoning_effort,
-                                                            usage_handler.has_usage), **failure}))
+                                                            input_tokens is not None and output_tokens is not None),
+                                     **failure}))
             logger.warning(
                 "llm_gateway_failure provider=%s model=%s role=%s latency_ms=%s status=%s retryable=%s "
                 "error_type=%s failure_class=%s",
