@@ -35,6 +35,7 @@ from .generation_evaluation import (
     ADMISSION_MARGIN,
     EXECUTION_STOP,
     MAX_TOKEN_RESET_WAIT_SECONDS,
+    SCORABLE_ARM_STATUSES,
     AuthorizationError,
     EvaluationStopped,
     Gateway,
@@ -42,6 +43,7 @@ from .generation_evaluation import (
     _dump,
     _evaluate_arm,
     _execution_order,
+    _is_model_output_error,
     _planning_prompts,
     _usage_from_trace,
     canonical_sha256,
@@ -527,6 +529,9 @@ def _quota_error(error: BaseException | None, summary: dict) -> bool:
 
 
 def _pair_status(arms: list[dict]) -> str:
+    """``completed`` only for two valid terminal model outcomes; never for an interruption."""
+    if any(arm.get("status") not in SCORABLE_ARM_STATUSES for arm in arms):
+        return "interrupted"
     return "completed" if len(arms) == 2 else "partial"
 
 
@@ -743,12 +748,23 @@ async def run_incremental_evaluation(
                 record_stop("unexpected_retry", "an unexpected retry or fallback was observed")
             elif isinstance(usage["output_tokens"], int) and usage["output_tokens"] > max_output_tokens:
                 record_stop("output_limit", "provider reported output beyond the output-token limit")
+            elif isinstance(error, Exception) and not _is_model_output_error(error):
+                # A provider/network failure is not evidence about the prompt, and the next
+                # request would meet the same provider state: stop the campaign (terminal).
+                record_stop("provider_failure", "the provider request failed; execution stopped", {
+                    "kind": "provider_failure", "error_type": type(error).__name__,
+                    "call_index": len(checkpoint["execution"]["calls"]) - 1})
             checkpoint_store.write(checkpoint)
-        if error is not None:
+        stop_code = checkpoint["execution"].get("stop_code")
+        if error is not None and (not isinstance(error, Exception) or not _is_model_output_error(error)
+                                  or stop_code is None):
+            # Cancellation and provider/network failures keep their own classification.
             raise error
-        if checkpoint["execution"].get("stopped"):
-            raise EvaluationStopped(checkpoint["execution"]["stopped"],
-                                    code=checkpoint["execution"]["stop_code"], transmitted=True)
+        if stop_code is not None:
+            # Safety stops (uncertain accounting, quota, model drift, retries, output limit)
+            # take precedence over model-quality classification: never a scorable failure.
+            raise EvaluationStopped(checkpoint["execution"]["stopped"], code=stop_code,
+                                    transmitted=True) from error
         return result
 
     async def persist_repair_pending(state: dict) -> None:

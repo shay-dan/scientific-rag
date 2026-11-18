@@ -66,12 +66,19 @@ The runner stops before another request on authorization/code/route/model drift,
 price, budget exhaustion, missing remaining-capacity headers after the first authorized
 benchmark request, insufficient estimated remaining request/token allowance, incomplete
 usage, unknown billing, an unexpected retry/fallback, a reported output-limit breach,
-HTTP 429, quota exhaustion, cancellation, or a tampered/inconsistent checkpoint.
+HTTP 429, quota exhaustion, any other provider/network failure (`provider_failure`, even
+with complete usage), cancellation, or a tampered/inconsistent checkpoint.
+
+**Stop precedence.** After each call, safety stops are checked before the response is
+classified. If uncertain accounting, quota, model drift, an unexpected retry or an
+output-limit breach is observed, the arm is an `execution_stop` interruption even when the
+provider also returned invalid structured output. It is never a scorable model failure.
 
 Any stop **before transmission** leaves the arm unexecuted or its repair pending; it is
 never recorded as an answer. Only a recorded pre-transmission capacity pause
 (`rate_limit`, kind `preflight_capacity`) can continue, after its reset. A provider 429,
-incomplete usage, or cancellation during a request is terminal.
+any other provider/network failure, incomplete usage, or cancellation during a request is
+terminal.
 
 ## Capacity admission (estimate) versus cost accounting
 
@@ -124,9 +131,13 @@ pending operation, so the normal `--resume-after-rate-limit` continuation is req
 |---|---|---|---|
 | `completed` | — | valid answer, after at most one repair | yes |
 | `failed` | `model_output` | invalid structured output, invalid repair response, or validation still failing after the one repair | yes |
-| `interrupted` | `infrastructure` | provider, network or gateway failure (including a 429) | no |
-| `interrupted` | `execution_stop` | runner stop after a response (incomplete billing, drift, retry, output limit) | no |
+| `interrupted` | `infrastructure` | provider, network or gateway failure (including a 429); stops the campaign | no |
+| `interrupted` | `execution_stop` | runner stop after a call (incomplete billing, drift, retry, output limit), including one that also returned invalid structured output | no |
 | `not_executed` | — | never sent | no |
+
+A pair (record `status`) is `completed` only when both arms are `completed` or `failed`. A
+pair with any interrupted arm is `interrupted`, and it is never counted in a stage's
+`completed_pairs` or the command summary.
 
 Only pairs where both arms are `completed` or `failed` are scorable in the blind packet
 and the public report. The report shows initial-generation outcomes (structurally valid,

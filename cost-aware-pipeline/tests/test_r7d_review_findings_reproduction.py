@@ -179,7 +179,7 @@ class InfrastructureTerminationTests(_IncrementalHarness):
                 self.assert_not_scored(checkpoint)
                 with self.assertRaisesRegex(CheckpointError, r"stopped \(provider_failure\)"):
                     await self.execute(base._manifest(), provider, pairs=1)
-                with self.assertRaisesRegex(CheckpointError, "pre-transmission capacity stop"):
+                with self.assertRaisesRegex(CheckpointError, r"stopped \(provider_failure\)"):
                     await self.execute(base._manifest(), provider, pairs=1, resume=True)
                 self.assertEqual(fail_at, len(provider.requests))
 

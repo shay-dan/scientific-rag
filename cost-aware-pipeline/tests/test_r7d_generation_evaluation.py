@@ -221,12 +221,14 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
             raise TimeoutError("provider timeout")
 
         result = await evaluate_pair(_manifest()["scenarios"][0], config=_config(), gateway=gateway)
-        self.assertEqual(2, calls)
         # R7D correction: provider/network failures are infrastructure interruptions, not
-        # model-output failures, so they can never count against a prompt version.
-        self.assertTrue(all(arm["status"] == "interrupted" for arm in result["arms"]))
-        self.assertTrue(all(arm["failure_kind"] == "gateway_failure" for arm in result["arms"]))
-        self.assertTrue(all(arm["failure_class"] == "infrastructure" for arm in result["arms"]))
+        # model-output failures, so they can never count against a prompt version, and they
+        # end the pair: the second arm is never sent.
+        self.assertEqual(1, calls)
+        self.assertEqual(["interrupted", "not_executed"], [arm["status"] for arm in result["arms"]])
+        self.assertEqual(("gateway_failure", "infrastructure"),
+                         (result["arms"][0]["failure_kind"], result["arms"][0]["failure_class"]))
+        self.assertEqual("interrupted", result["status"])
 
     async def test_no_retrieval_mining_or_embedding_dependency_is_needed(self):
         async def gateway(*args, **kwargs):

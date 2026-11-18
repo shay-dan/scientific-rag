@@ -423,7 +423,8 @@ async def evaluate_pair(scenario: dict, *, config: dict, gateway: Gateway,
     for position, version in enumerate(order):
         arm = await _evaluate_arm(scenario, version, config, gateway)
         arms.append(arm)
-        if arm.get("failure_class") == EXECUTION_STOP:
+        if arm.get("failure_class") in {EXECUTION_STOP, INFRASTRUCTURE}:
+            # A stop or a provider/network failure ends the pair: no later request is sent.
             arms.extend(_not_executed_arm(scenario, pending, arm.get("error") or "evaluation stopped")
                         for pending in order[position + 1:])
             break
@@ -641,10 +642,14 @@ async def run_paid_evaluation(manifest: dict, config: dict, *, authorization: di
                 stopped = "an unexpected retry or fallback was observed"
             elif isinstance(usage["output_tokens"], int) and usage["output_tokens"] > max_output_tokens:
                 stopped = "provider reported output beyond the enforced output-token limit"
-        if error is not None:
+            elif isinstance(error, Exception) and not _is_model_output_error(error):
+                # Provider/network failure: stop; no later request is sent.
+                stopped = "the provider request failed; execution stopped"
+        if error is not None and (not isinstance(error, Exception) or not _is_model_output_error(error)
+                                  or stopped is None):
             raise error
-        if stopped is not None:   # a response arrived, but its accounting is not acceptable
-            raise EvaluationStopped(stopped, code="accounting", transmitted=True)
+        if stopped is not None:   # accounting stops take precedence over model-output classification
+            raise EvaluationStopped(stopped, code="accounting", transmitted=True) from error
         return result
 
     records = []
