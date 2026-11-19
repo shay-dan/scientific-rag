@@ -640,7 +640,8 @@ class ProgramLedgerTests(_CampaignHarness):
         self.assertEqual(6, budget["provider_calls_charged"])              # 4 historical + 2 new
         self.assertAlmostEqual(0.003552, budget["uncertain_reserved_usd"], places=8)
         self.assertEqual(4, checkpoint["program"]["baseline"]["provider_calls_charged"])
-        state = ledger_module().accounting_summary(ledger_store.load(), checkpoint)
+        state = ledger_module().accounting_summary(ledger_store.load(), checkpoint,
+                                                   checkpoint_path=self.checkpoint().path)
         self.assertEqual(2, state["current_experiment"]["provider_calls_charged"])
         self.assertEqual(6, state["cumulative"]["provider_calls_charged"])
         self.assertEqual(4, state["closed_baseline"]["provider_calls_charged"])

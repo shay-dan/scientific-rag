@@ -118,8 +118,11 @@ non-blocking advisory lock. No database is used.
 - **Run:**
   - the checkpoint binds the baseline and its budget starts there, so every reservation is
     checked against the cumulative remaining allowance **before transmission**;
-  - before every transmission the runner records a **ledger mark**: checkpoint revision,
-    checksum and cumulative budget, including that request's reservation;
+  - the runner records a **ledger mark** (checkpoint revision, checksum, cumulative budget)
+    before every transmission (phase `in_flight`, reservation included) and immediately after
+    its durable settlement (phase `settled`). If the pre-transmission mark cannot be written
+    (an I/O error or ordinary lock contention), nothing is sent: the reservation is released
+    and the campaign stops with `ledger_mark_failed`;
   - execution must use the registered path, match the ledger entry's identity and baseline,
     and not be older than the mark;
   - v2 execution holds a **per-campaign lock** that is independent of the checkpoint path;
@@ -129,18 +132,22 @@ non-blocking advisory lock. No database is used.
   - accepts only the authoritative, non-stale checkpoint;
   - records per-experiment consumption, keeping unsettled reservations as uncertain;
   - does not modify the checkpoint, and is idempotent for the same final checkpoint.
-- **Close a lost campaign** (`ledger-close-lost`): if the authoritative checkpoint no longer
-  exists, the campaign closes from its last mark. That mark was taken before the last
-  transmission with the reservation included, so it does not understate what could have
-  been sent. A lost checkpoint is never recreated after recorded progress.
+- **Close a lost campaign** (`ledger-close-lost`) only when consumption is established: there
+  is no mark (nothing was ever sent), or the last mark is `settled`. An `in_flight` mark is
+  ambiguous, because settled usage can exceed a reservation, and a reservation is **not** a
+  guaranteed upper bound. Then closing is refused and the campaign stays open, so no new
+  campaign can open until the checkpoint is recovered or the owner resolves it explicitly.
+  A lost checkpoint is never recreated after recorded progress.
 - **Diagnostics:** recorded separately by source-file hash, and never counted against
   benchmark ceilings or as benchmark pairs. They are still reported, so their quota use and
   potential expense stay visible.
 
 `ledger-summary` keeps these views separate:
 - `closed_baseline`: closed campaigns only;
-- `current_experiment`: the open campaign's consumption, from its checkpoint or otherwise its
-  last ledger mark (`basis` says which);
+- `current_experiment`: the open campaign's consumption. It comes from its checkpoint only
+  when that is the current authoritative checkpoint (path required; stale or alternate copies
+  are refused), otherwise from the last ledger mark. `basis` says which, and `limitation` is
+  set when a request was in flight at that mark;
 - `cumulative`: the two together, with remaining allowance;
 - `diagnostics`: never counted against the ceilings;
 - `actual_provider_billing`: always `not_available`, because internal values are token-based
@@ -160,8 +167,11 @@ order is campaign → ledger → checkpoint.
 | After ledger registration, before the checkpoint exists | Open entry with path P and no mark | Same path P creates the checkpoint; any other path is refused |
 | After the checkpoint is created, before its first mark | Checkpoint at P, no mark | Accepted (nothing was sent), then marked |
 | After a reservation is written, before its mark | Checkpoint with an `active_attempt` | Refused as unresolved (PR #24); close keeps it as uncertain |
-| After the mark, during transmission | Mark covers the reservation | Refused as unresolved; a lost checkpoint closes from the mark |
-| After settlement | Settled checkpoint, newer than the mark | Accepted |
+| The pre-transmission mark write fails (I/O, lock contention) | Reservation released, `ledger_mark_failed` | Nothing sent; terminal stop; close reconciles. If the release itself cannot be persisted, the reserved attempt stays unresolved and is charged as uncertain |
+| After the in-flight mark, during transmission | `in_flight` mark | Refused as unresolved; if the checkpoint is lost, `ledger-close-lost` is refused (ambiguous) |
+| After settlement, before the settled mark | Settled checkpoint, `in_flight` mark | Accepted; if the checkpoint is lost, `ledger-close-lost` is refused (the settled cost may exceed the reservation) |
+| After the settled mark | `settled` mark | Accepted; if the checkpoint is lost, `ledger-close-lost` records the exact settled consumption |
+| An internal error before a settled transmission | Any reserved attempt kept | `internal_error` stop; the reservation is never cleared |
 | An older copy restored at P, or used from another path | Revision below the mark, or another path | Refused as stale, or as not authoritative |
 | During close | Atomic ledger replace | The campaign is either still open or closed |
 

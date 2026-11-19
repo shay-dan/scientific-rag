@@ -872,6 +872,19 @@ R7 is split into separately authorized stages in this order:
      finish reason are recorded per call, never estimated.
    - **Also found:** an internal error before transmission was silently treated as an
      untransmitted pending arm. It now stops with `internal_error`.
+   - **Final targeted review of `a6551f1`** (2026-11-19): three crash-consistency defects,
+     each reproduced first (`d509c97`; 6 failures and 3 errors):
+     - `ledger-close-lost` could understate settled consumption ($0.00166 recorded against
+       $0.05 observed; 1 call against 2). The mark is now refreshed immediately after durable
+       settlement, and closing from an `in_flight` mark is refused: a reservation is not a
+       guaranteed upper bound.
+     - A failed or lock-contended pre-transmission mark cleared the reserved attempt but kept
+       its charge, which left the accounting unreconcilable. Now nothing is sent, the
+       reservation is released, the run stops with `ledger_mark_failed`, and close reconciles.
+       An `internal_error` never clears a reserved attempt.
+     - `accounting_summary()` accepted a stale or alternate checkpoint. It now requires the
+       authoritative checkpoint and its path, or reports from the ledger mark with a stated
+       limitation.
    - **Revised live acceptance proposal** (separate PR, not authorized): 3 challenging
      synthetic cases × v15/v16 × low reasoning at 2,000 and 3,000 tokens; 12 initial
      generations, at most 12 repairs and 2 repair-schema checks, at most 26 requests.

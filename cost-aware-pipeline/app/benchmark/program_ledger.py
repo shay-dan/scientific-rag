@@ -20,8 +20,10 @@ open; a campaign id is never reused; a closed campaign never runs again; a new c
 starts from the exact baseline its owner authorization names.
 
 Single authoritative execution state (R7D-C review P0.1). An open campaign is bound to one
-checkpoint path. Before every transmission the runner records a high-water mark (checkpoint
-revision, checksum and cumulative budget, reservation included) in the ledger, so:
+checkpoint path. The runner records a high-water mark (checkpoint revision, checksum and
+cumulative budget) in the ledger before every transmission (phase ``in_flight``, reservation
+included) and immediately after its durable settlement (phase ``settled``). A reservation is
+not a guaranteed upper bound, so only a ``settled`` mark establishes consumption. Because:
 - another path, or a missing checkpoint after recorded progress, is refused;
 - an older copy of the checkpoint (revision below the mark, or same revision with another
   checksum) is refused as stale, for execution and for closing;
@@ -439,6 +441,7 @@ def record_checkpoint_mark(store: ProgramLedgerStore, campaign_id: str, checkpoi
         _check_authoritative(entry, checkpoint_path, checkpoint)
         entry["mark"] = {"revision": checkpoint["checkpoint_revision"],
                          "checkpoint_sha256": checkpoint["checkpoint_sha256"],
+                         "phase": "in_flight" if checkpoint.get("active_attempt") is not None else "settled",
                          "budget": dict(checkpoint["execution"]["budget"])}
         store.write(ledger)
         return entry["mark"]
@@ -485,9 +488,11 @@ def close_campaign(store: ProgramLedgerStore, checkpoint_store) -> dict:
 def close_lost_campaign(store: ProgramLedgerStore, campaign_id: str) -> dict:
     """Close an open campaign whose authoritative checkpoint no longer exists.
 
-    Its consumption is the last ledger mark, recorded before the last transmission with that
-    request's reservation included, so it does not understate what could have been sent
-    (unsettled reservations count as uncertain).
+    Allowed only when consumption is established: no mark (nothing was ever sent) or a
+    ``settled`` mark (recorded after durable settlement, before any later transmission). An
+    ``in_flight`` mark is ambiguous, because settled usage can exceed a reservation, which is
+    not a guaranteed upper bound. Then closing is refused, the campaign stays open, and no new
+    campaign can open until the checkpoint is recovered or the owner resolves it explicitly.
     """
     with store.campaign_lock(campaign_id), store.locked():
         ledger = store.load()
@@ -497,6 +502,9 @@ def close_lost_campaign(store: ProgramLedgerStore, campaign_id: str) -> dict:
         if Path(entry["checkpoint_path"]).exists():
             raise ProgramLedgerError("the authoritative checkpoint exists; close the campaign from it")
         mark = entry.get("mark")
+        if mark is not None and mark.get("phase") != "settled":
+            raise ProgramLedgerError("consumption after the last ledger mark cannot be established (a request was "
+                                     "in flight); recover the checkpoint or resolve the campaign explicitly")
         cumulative = (_budget_from_checkpoint({"execution": {"budget": mark["budget"]}, "active_attempt": None})[0]
                       if mark is not None else dict(entry["baseline"]))
         closed = {key: entry[key] for key in ("campaign_id", "source", "code_sha", "config_sha256", "manifest_sha256",
@@ -536,28 +544,38 @@ def record_diagnostic(store: ProgramLedgerStore, source_path: Path, *, label: st
         return entry
 
 
-def accounting_summary(ledger: dict, checkpoint: dict | None = None) -> dict:
+def accounting_summary(ledger: dict, checkpoint: dict | None = None, *, checkpoint_path=None) -> dict:
     """Accounting views kept separate: closed baseline, current experiment, cumulative,
     diagnostics and (unavailable) actual provider billing.
 
-    The current experiment comes from ``checkpoint`` when it is the open campaign's, otherwise
-    from the ledger mark (recorded before each transmission, reservation included).
+    The current experiment comes from ``checkpoint`` only when it is the open campaign's
+    current authoritative checkpoint (``checkpoint_path`` required; a stale or alternate copy
+    is refused). Otherwise it comes from the last ledger mark, with a stated limitation when a
+    request was in flight at that mark.
     """
     baseline = program_baseline(ledger)
     ceilings = baseline["ceilings"]
     open_entry = next((item for item in ledger["campaigns"] if item["state"] == "open"), None)
     current = None
+    limitation = None
+    if checkpoint is not None:
+        if open_entry is None or checkpoint_path is None:
+            raise ProgramLedgerError("a checkpoint is summarized only as the open campaign's authoritative "
+                                     "checkpoint, with its path")
+        _check_authoritative(open_entry, checkpoint_path, checkpoint)
     if open_entry is not None:
         source = None
-        if (checkpoint is not None and checkpoint.get("authorization_id") == open_entry["campaign_id"]
-                and isinstance(checkpoint.get("program"), dict)):
+        if checkpoint is not None:
             source, basis = checkpoint["execution"]["budget"], "checkpoint"
         elif open_entry.get("mark") is not None:
             source, basis = open_entry["mark"]["budget"], "ledger_mark"
+            if open_entry["mark"].get("phase") != "settled":
+                limitation = ("a request was in flight at the last ledger mark; its settled consumption may "
+                              "differ from the reservation, which is not a guaranteed upper bound")
         if source is not None:
             converted = _budget_from_checkpoint({"execution": {"budget": source}, "active_attempt": None})[0]
             current = {**_consumed(converted, open_entry["baseline"]), "campaign_id": open_entry["campaign_id"],
-                       "basis": basis}
+                       "basis": basis, "limitation": limitation}
         else:
             current = {**_consumed(open_entry["baseline"], open_entry["baseline"]),
                        "campaign_id": open_entry["campaign_id"], "basis": "no_transmission_recorded"}

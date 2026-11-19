@@ -108,7 +108,7 @@ def _incremental_run(args) -> int:
             wait_for_token_reset=args.wait_for_token_reset, program_ledger=ledger_store,
         ))
     records = checkpoint["records"]
-    accounting = programs.accounting_summary(ledger_store.load(), checkpoint)
+    accounting = programs.accounting_summary(ledger_store.load(), checkpoint, checkpoint_path=store.path)
     print(json.dumps({
         "checkpoint_sha256": checkpoint["checkpoint_sha256"],
         "completed_pairs": sum(record.get("status") == "completed" for record in records),
@@ -167,9 +167,11 @@ def _ledger_diagnostic(args) -> int:
 
 def _ledger_summary(args) -> int:
     ledger = _ledger(args).load()
-    checkpoint = AtomicCheckpoint(_private(args.checkpoint, "checkpoint")).load() if args.checkpoint else None
+    path = _private(args.checkpoint, "checkpoint") if args.checkpoint else None
+    checkpoint = AtomicCheckpoint(path).load() if path else None
     print(json.dumps({"baseline": programs.program_baseline(ledger),
-                      "accounting": programs.accounting_summary(ledger, checkpoint)}, sort_keys=True))
+                      "accounting": programs.accounting_summary(ledger, checkpoint, checkpoint_path=path)},
+                     sort_keys=True))
     return 0
 
 

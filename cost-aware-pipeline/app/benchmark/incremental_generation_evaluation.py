@@ -632,10 +632,8 @@ async def run_incremental_evaluation(
     if not campaign_id:
         raise AuthorizationError("authorization_id is required")
     with program_ledger.campaign_lock(campaign_id):
-        checkpoint = await _run_incremental_evaluation(manifest, config, **arguments)
-        if checkpoint.get("program") is not None:
-            programs.record_checkpoint_mark(program_ledger, campaign_id, checkpoint_store.path, checkpoint)
-        return checkpoint
+        # Marks are recorded before every transmission and immediately after its settlement.
+        return await _run_incremental_evaluation(manifest, config, **arguments)
 
 
 async def _run_incremental_evaluation(
@@ -828,7 +826,19 @@ async def _run_incremental_evaluation(
             "state": "reserved",
         }
         checkpoint = checkpoint_store.write(checkpoint)
-        mark(checkpoint)   # the ledger now covers this reservation before anything is sent
+        try:
+            mark(checkpoint)   # the ledger must cover this in-flight reservation before anything is sent
+        except Exception as error:
+            # Nothing was transmitted: release the reservation and stop (terminal, no retry). If
+            # this state cannot be persisted, the durable reserved attempt stays unresolved.
+            ledger.release(reserved)
+            checkpoint["execution"]["budget"] = ledger.snapshot()
+            checkpoint["active_attempt"] = None
+            reason = "the pre-transmission ledger mark could not be recorded; nothing was sent"
+            record_stop("ledger_mark_failed", reason, {"kind": "ledger_persistence", "phase": "pre_transmission",
+                                                       "error_type": type(error).__name__})
+            checkpoint = checkpoint_store.write(checkpoint)
+            raise EvaluationStopped(reason, code="ledger_mark_failed") from error
         token = llm_gateway.begin_trace(capture_rate_limits=True)
         started = time.perf_counter()
         result = None
@@ -902,7 +912,19 @@ async def _run_incremental_evaluation(
                 record_stop("provider_failure", "the provider request failed; execution stopped", {
                     "kind": "provider_failure", "error_type": type(error).__name__,
                     "call_index": len(checkpoint["execution"]["calls"]) - 1})
-            checkpoint_store.write(checkpoint)
+            checkpoint = checkpoint_store.write(checkpoint)
+            if v2:
+                # Refresh the ledger mark immediately after durable settlement, so a lost
+                # checkpoint never hides settled consumption (cost above a reservation, retries).
+                try:
+                    mark(checkpoint)
+                except Exception as mark_error:   # the mark stays "in_flight": lost-checkpoint close refuses
+                    if not checkpoint["execution"].get("stopped"):
+                        record_stop("ledger_mark_failed",
+                                    "settled consumption could not be recorded in the program ledger",
+                                    {"kind": "ledger_persistence", "phase": "post_settlement",
+                                     "error_type": type(mark_error).__name__})
+                        checkpoint = checkpoint_store.write(checkpoint)
         stop_code = checkpoint["execution"].get("stop_code")
         if stop_code is not None and scored_budget_failure:
             # P0.3: an execution-integrity stop outranks the scored completion-budget outcome.
@@ -971,10 +993,14 @@ async def _run_incremental_evaluation(
                 attempts = checkpoint["active_arm"]["attempts"]
                 interruption = arm.get("interruption") or {}
                 if not attempts and arm.get("status") == "interrupted" and arm.get("failure_class") != EXECUTION_STOP:
-                    # An internal error before any transmission: nothing was sent or spent, but the
-                    # stage must not look successful. Fail closed with a terminal stop.
-                    record_stop("internal_error", "an internal error occurred before transmission; nothing was sent",
-                                {"kind": "internal_error", "error_type": arm.get("error_type")})
+                    # An internal error before any settled transmission: fail closed with a terminal
+                    # stop. Any reserved active attempt is kept as-is (unresolved, charged as
+                    # uncertain), never cleared: whether it was sent cannot be established here.
+                    record_stop("internal_error", "an internal error occurred before a settled transmission",
+                                {"kind": "internal_error", "error_type": arm.get("error_type"),
+                                 "reserved_attempt_kept": checkpoint.get("active_attempt") is not None})
+                    checkpoint = checkpoint_store.write(checkpoint)
+                    break
                 if not attempts or (arm.get("failure_class") == EXECUTION_STOP and not interruption.get("transmitted")):
                     # Stopped before transmission: nothing was sent for this arm yet, or its
                     # untransmitted repair stays durably pending. Never a failed answer; the

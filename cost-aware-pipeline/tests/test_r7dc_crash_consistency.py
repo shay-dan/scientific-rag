@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 from app.benchmark import program_ledger as programs
 from app.benchmark.incremental_generation_evaluation import AtomicCheckpoint, CheckpointError
-from tests.test_r7dc_generation_reliability import ScriptedProvider, ledger_module
+from tests.test_r7dc_generation_reliability import ScriptedProvider, ledger_module, v2_config
 from tests.test_r7dc_review_corrections import MutatingProvider, _Corrections, _cost, _retry
 
 
@@ -65,11 +65,11 @@ class LostCheckpointAccountingTests(_Faults):
                     self.assertIn("cannot be established", str(error))   # ambiguous: refused, campaign stays open
                     entry = ledger_store.load()["campaigns"][0]
                     self.assertEqual("open", entry["state"])
+                    next_config = v2_config(max_output_tokens=3000)   # program execution stays blocked
                     with self.assertRaisesRegex(ledger_module().ProgramLedgerError, "already open"):
                         await self.run_v2(ScriptedProvider(), self.checkpoint("next.json"), ledger_store,
-                                          config=__import__("tests.test_r7dc_generation_reliability",
-                                                            fromlist=["v2_config"]).v2_config(max_output_tokens=3000),
-                                          authorization=self.authorization(ledger_store, authorization_id="next"))
+                                          config=next_config, authorization=self.authorization(
+                                              ledger_store, next_config, authorization_id="next"))
                     continue
                 consumed = closed["consumed"]
                 self.assertGreaterEqual(consumed["provider_calls_charged"], observed["provider_calls_charged"])

@@ -220,6 +220,12 @@ class BudgetLedger:
         self.charged += cost
         return True
 
+    def release(self, reserved: float) -> None:
+        """Undo a reservation that was provably never transmitted (R7D-C)."""
+        self.calls -= 1
+        self.unsettled -= reserved
+        self.charged -= reserved
+
     def settle(self, reserved: float, usage: dict) -> None:
         """Replace a reservation with measured cost when usage is complete; otherwise keep it charged."""
         self.calls += max(0, int(usage.get("provider_calls") or 0) - 1)   # gateway retries and fallbacks
