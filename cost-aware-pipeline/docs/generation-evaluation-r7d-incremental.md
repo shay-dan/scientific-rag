@@ -3,8 +3,10 @@
 This opt-in extension makes the existing fixed-evidence R7D comparison safe to stage
 across Groq Free quota windows. It does not change the frozen manifest, prompts, arm
 order, schemas, validation, one-repair maximum, provider/model, authorization ceilings,
-or scoring contract. The original `paid-run` command remains available and unchanged;
-operators must use `incremental-run` for staged execution.
+or scoring contract. Operators must use `incremental-run` for staged execution. Since
+R7D-C, `paid-run` is refused, and `incremental-run` requires a v2 config and the cumulative
+program ledger
+([generation-reliability-r7d-c.md](generation-reliability-r7d-c.md)).
 
 The R7D execution-safety correction (after PR #23) adds checkpoint v2: durable arms, a
 resumable pending repair, calibrated per-minute admission, an opt-in short wait, and
@@ -156,8 +158,12 @@ python scripts/generation_evaluation_r7d.py incremental-run \
   --config /private/r7d-config.incremental.private.json \
   --authorization /private/r7d-authorization.incremental.private.json \
   --private-checkpoint /private/r7d-checkpoint.private.json \
+  --program-ledger /private/r7d-program-ledger.private.json \
   --pairs 1
 ```
+
+(R7D-C: `--program-ledger` and a v2 config are required. The authorization names the
+ledger's exact `program_baseline_sha256`.)
 
 Add `--wait-for-token-reset` only if the owner wants short per-minute pauses covered in
 process; the command summary reports any `pending_arm`.

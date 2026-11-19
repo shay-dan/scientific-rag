@@ -31,8 +31,12 @@ import tempfile
 import time
 from typing import Awaitable, Callable, Iterator
 
+from scientific_rag import provider_failures as pf
+
+from . import program_ledger as programs
 from .generation_evaluation import (
     ADMISSION_MARGIN,
+    CONFIG_SCHEMA_V2,
     EXECUTION_STOP,
     MAX_TOKEN_RESET_WAIT_SECONDS,
     SCORABLE_ARM_STATUSES,
@@ -45,9 +49,12 @@ from .generation_evaluation import (
     _execution_order,
     _is_model_output_error,
     _planning_prompts,
+    _scores_completion_budget_failures,
     _usage_from_trace,
     canonical_sha256,
     check_paid_authorization,
+    outcome_dimensions,
+    reservation_input_tokens,
     schema_bytes,
     validate_config,
     validate_manifest,
@@ -172,9 +179,21 @@ def _prompt_contracts(manifest: dict, config: dict) -> list[dict]:
             for item in _planning_prompts(manifest, config)]
 
 
-def new_checkpoint(manifest: dict, config: dict, authorization: dict, provenance: dict) -> dict:
+def _program_binding(authorization: dict, baseline: dict) -> dict:
+    return {"program_id": authorization["program_id"], "baseline_sha256": baseline["sha256"],
+            "baseline": dict(baseline["budget"])}
+
+
+def new_checkpoint(manifest: dict, config: dict, authorization: dict, provenance: dict,
+                   program_baseline: dict | None = None) -> dict:
+    """A fresh campaign checkpoint. A v2 campaign starts from its program baseline (R7D-C)."""
     auth = check_paid_authorization(authorization, manifest=manifest, config=config)
-    return {
+    v2 = config["schema"] == CONFIG_SCHEMA_V2
+    if v2 != (program_baseline is not None):
+        raise CheckpointError("a v2 campaign requires its program baseline; a v1 campaign has none")
+    budget = (dict(program_baseline["budget"]) if v2
+              else BudgetLedger(config["max_calls"], config["max_cost_usd"]).snapshot())
+    value = {
         "schema": CHECKPOINT_SCHEMA,
         "checkpoint_revision": 0,
         "manifest_sha256": manifest["manifest_sha256"],
@@ -190,7 +209,7 @@ def new_checkpoint(manifest: dict, config: dict, authorization: dict, provenance
         "active_attempt": None,
         "execution": {
             "authorization_id": auth["authorization_id"],
-            "budget": BudgetLedger(config["max_calls"], config["max_cost_usd"]).snapshot(),
+            "budget": budget,
             "code": provenance,
             "stopped": None,
             "stop_code": None,
@@ -201,6 +220,9 @@ def new_checkpoint(manifest: dict, config: dict, authorization: dict, provenance
             "stages": [],
         },
     }
+    if v2:
+        value["program"] = _program_binding(authorization, program_baseline)
+    return value
 
 
 UNRESOLVED_MESSAGE = "checkpoint contains an unresolved provider attempt or arm; refusing a duplicate request"
@@ -309,9 +331,18 @@ def verify_checkpoint(checkpoint: dict, manifest: dict, config: dict, authorizat
         "model": config["model"],
         "prompt_contracts": _prompt_contracts(manifest, config),
     }
+    v2 = config["schema"] == CONFIG_SCHEMA_V2
+    if v2:
+        program = checkpoint.get("program")
+        if (not isinstance(program, dict) or program.get("program_id") != authorization.get("program_id")
+                or program.get("baseline_sha256") != authorization.get("program_baseline_sha256")):
+            expected["program"] = "authorized program baseline"
+    elif "program" in checkpoint:
+        expected["program"] = None
     mismatched = [key for key, value in expected.items() if checkpoint.get(key) != value]
     if mismatched:
         raise CheckpointError("checkpoint binding mismatch: " + ", ".join(mismatched))
+    baseline = checkpoint["program"]["baseline"] if v2 else BudgetLedger(1, 1.0).snapshot()
     if checkpoint.get("active_attempt") is not None:
         raise CheckpointError(UNRESOLVED_MESSAGE)
     execution = checkpoint.get("execution")
@@ -359,11 +390,12 @@ def verify_checkpoint(checkpoint: dict, manifest: dict, config: dict, authorizat
         else:
             uncertain_cost += float(call.get("reserved_cost_usd") or 0.0)
     snapshot = ledger.snapshot()
-    if charged_calls != snapshot["provider_calls_charged"]:
+    if charged_calls + baseline["provider_calls_charged"] != snapshot["provider_calls_charged"]:
         raise CheckpointError("checkpoint call audit does not reconcile with the cumulative call ledger")
-    if not math.isclose(complete_cost, snapshot["cost_complete_usd"], abs_tol=1e-8):
+    if not math.isclose(complete_cost + baseline["cost_complete_usd"], snapshot["cost_complete_usd"], abs_tol=1e-8):
         raise CheckpointError("checkpoint complete usage does not reconcile with the cumulative cost ledger")
-    if not math.isclose(uncertain_cost, snapshot["uncertain_reserved_usd"], abs_tol=1e-8):
+    if not math.isclose(uncertain_cost + baseline["uncertain_reserved_usd"], snapshot["uncertain_reserved_usd"],
+                        abs_tol=1e-8):
         raise CheckpointError("checkpoint uncertain usage does not reconcile with the cumulative cost ledger")
     return ledger
 
@@ -520,10 +552,24 @@ def _short_token_wait(checkpoint: dict, refusal: dict, estimate: dict, now: floa
     return max(delays) + 1.0
 
 
-def _quota_error(error: BaseException | None, summary: dict) -> bool:
+def _reported_reasoning(summary: dict) -> dict:
+    """Provider-reported reasoning tokens and finish reason (capture mode); never estimated."""
+    diagnostics = [attempt.get("diagnostics") or {} for attempt in summary.get("attempts") or []]
+    tokens = [item.get("reasoning_tokens") for item in diagnostics]
+    reported = bool(tokens) and all(type(value) is int and value >= 0 for value in tokens)
+    finish = [item.get("finish_reason") for item in diagnostics if isinstance(item.get("finish_reason"), str)]
+    return {"reasoning_tokens": sum(tokens) if reported else None, "finish_reason": finish[-1] if finish else None}
+
+
+def _quota_error(error: BaseException | None, summary: dict, failure: dict | None = None) -> bool:
     statuses = {attempt.get("status_code") for attempt in summary.get("attempts") or []}
-    if 429 in statuses:
+    if 429 in statuses or (failure is not None and failure["failure_class"] == pf.PROVIDER_RATE_LIMIT):
         return True
+    if failure is not None and failure["failure_class"] not in (pf.UNKNOWN_PROVIDER_FAILURE,
+                                                                pf.TRANSIENT_INFRASTRUCTURE_FAILURE):
+        # A typed provider error is not a quota error: its body (for example a failed
+        # generation) can contain arbitrary scientific text that must not be pattern-matched.
+        return False
     message = str(error or "").lower()
     return any(marker in message for marker in ("quota", "rate limit", "resource exhausted", "too many requests"))
 
@@ -553,6 +599,47 @@ async def run_incremental_evaluation(
     manifest: dict,
     config: dict,
     *,
+    authorization: dict | None,
+    checkpoint_store: AtomicCheckpoint,
+    pairs: int,
+    gateway: Gateway | None = None,
+    resume_after_rate_limit: bool = False,
+    provenance_resolver: Callable[[], dict] | None = None,
+    clock: Callable[[], float] = time.time,
+    wait_for_token_reset: bool = False,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    program_ledger: "programs.ProgramLedgerStore | None" = None,
+) -> dict:
+    """Run up to ``pairs`` unexecuted pairs (see ``_run_incremental_evaluation``).
+
+    R7D-C: the real provider gateway runs only for a v2 config with the program ledger, so no
+    live route bypasses cumulative accounting; injected gateways keep historical v1 behavior
+    for offline tests. A v2 campaign runs under its per-campaign lock, independent of the
+    checkpoint path, so two processes cannot spend the same allowance concurrently.
+    """
+    from scientific_rag import llm_gateway
+    v2 = isinstance(config, dict) and config.get("schema") == CONFIG_SCHEMA_V2
+    if (gateway is None or gateway is llm_gateway.ainvoke_structured) and not (v2 and program_ledger is not None):
+        raise AuthorizationError("real-provider execution requires a v2 config and the program ledger "
+                                 "(cumulative accounting)")
+    arguments = dict(authorization=authorization, checkpoint_store=checkpoint_store, pairs=pairs, gateway=gateway,
+                     resume_after_rate_limit=resume_after_rate_limit, provenance_resolver=provenance_resolver,
+                     clock=clock, wait_for_token_reset=wait_for_token_reset, sleep=sleep,
+                     program_ledger=program_ledger)
+    if not (v2 and program_ledger is not None):
+        return await _run_incremental_evaluation(manifest, config, **arguments)
+    campaign_id = str((authorization or {}).get("authorization_id") or "")
+    if not campaign_id:
+        raise AuthorizationError("authorization_id is required")
+    with program_ledger.campaign_lock(campaign_id):
+        # Marks are recorded before every transmission and immediately after its settlement.
+        return await _run_incremental_evaluation(manifest, config, **arguments)
+
+
+async def _run_incremental_evaluation(
+    manifest: dict,
+    config: dict,
+    *,
     authorization: dict,
     checkpoint_store: AtomicCheckpoint,
     pairs: int,
@@ -562,6 +649,7 @@ async def run_incremental_evaluation(
     clock: Callable[[], float] = time.time,
     wait_for_token_reset: bool = False,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    program_ledger: "programs.ProgramLedgerStore | None" = None,
 ) -> dict:
     """Execute at most ``pairs`` frozen pairs and persist every provider attempt.
 
@@ -569,6 +657,9 @@ async def run_incremental_evaluation(
     wait in-process for a known reset of at most ``MAX_TOKEN_RESET_WAIT_SECONDS``. The pause
     is recorded durably before waiting, so a restart during the wait requires the normal
     ``resume_after_rate_limit`` continuation. Request-per-day and unknown limits never wait.
+
+    A v2 config (R7D-C) requires ``program_ledger``: a new campaign opens there from the exact
+    authorized cumulative baseline, and an existing campaign must still be open in it.
     """
     if type(pairs) is not int or pairs <= 0:
         raise ValueError("pairs must be a positive integer")
@@ -586,10 +677,41 @@ async def run_incremental_evaluation(
     if route != (config["provider"],) or llm_gateway.model_for(config["provider"], "expert") != config["model"]:
         raise AuthorizationError("expert gateway route is not pinned to the authorized provider/model")
     gateway = gateway or llm_gateway.ainvoke_structured
+    v2 = config["schema"] == CONFIG_SCHEMA_V2
+    if v2 and program_ledger is None:
+        raise AuthorizationError("v2 configurations require the program ledger (cumulative accounting)")
+    if not v2 and program_ledger is not None:
+        raise AuthorizationError("the program ledger requires a v2 configuration")
+
+    campaign_id = str(authorization["authorization_id"])
+
+    def mark(value: dict) -> None:
+        # Durable high-water mark of the authoritative checkpoint (P0.1): before transmission.
+        if v2:
+            programs.record_checkpoint_mark(program_ledger, campaign_id, checkpoint_store.path, value)
 
     if checkpoint_store.exists():
         checkpoint = checkpoint_store.load()
+        if v2:
+            if checkpoint.get("authorization_id") != campaign_id:
+                raise CheckpointError("checkpoint binding mismatch: authorization_id")
+            programs.require_runnable_campaign(program_ledger, campaign_id, checkpoint_store.path, checkpoint)
         ledger = verify_checkpoint(checkpoint, manifest, config, authorization)
+    elif v2:
+        entry = next((item for item in program_ledger.load()["campaigns"] if item["campaign_id"] == campaign_id), None)
+        if entry is not None:
+            # Registered earlier: only its own path, and only if nothing was ever marked.
+            programs.require_runnable_campaign(program_ledger, campaign_id, checkpoint_store.path, None)
+        baseline = programs.program_baseline(program_ledger.load())
+        if entry is None and (authorization.get("program_id") != baseline["program_id"]
+                              or authorization.get("program_baseline_sha256") != baseline["sha256"]):
+            raise AuthorizationError("authorization program baseline does not match the program ledger")
+        baseline = programs.open_campaign(program_ledger, authorization=authorization, config=config,
+                                          manifest_sha256=manifest["manifest_sha256"],
+                                          checkpoint_path=checkpoint_store.path)
+        checkpoint = checkpoint_store.write(new_checkpoint(manifest, config, authorization, provenance, baseline))
+        mark(checkpoint)
+        ledger = BudgetLedger.from_snapshot(config["max_calls"], config["max_cost_usd"], checkpoint["execution"]["budget"])
     else:
         checkpoint = checkpoint_store.write(new_checkpoint(manifest, config, authorization, provenance))
         ledger = BudgetLedger(config["max_calls"], config["max_cost_usd"])
@@ -636,7 +758,7 @@ async def run_incremental_evaluation(
         checkpoint["execution"]["stopped"] = reason
         checkpoint["execution"]["stop_context"] = context
 
-    async def metered(role, temperature, prompt, schema, *, max_output_tokens):
+    async def metered(role, temperature, prompt, schema, *, max_output_tokens, **settings):
         nonlocal checkpoint, reset_continuation_authorized
         schema_name = getattr(schema, "__name__", str(schema))
         phase = "initial" if schema_name == "StructuredEvidenceAnswerV2" else "repair"
@@ -680,12 +802,13 @@ async def run_incremental_evaluation(
             })
             reset_continuation_authorized = False
             checkpoint = checkpoint_store.write(checkpoint)
-        if prompt_bytes > config["max_input_tokens"]:
+        reservation_input = reservation_input_tokens(config, prompt_bytes, schema)
+        if reservation_input > config["max_input_tokens"]:
             reason = "conservative input-token ceiling reached before the call"
             record_stop("input_ceiling", reason)
             checkpoint_store.write(checkpoint)
             raise EvaluationStopped(reason, code="input_ceiling")
-        reserved, _ = calculate_cost(config["provider"], config["model"], prompt_bytes, max_output_tokens)
+        reserved, _ = calculate_cost(config["provider"], config["model"], reservation_input, max_output_tokens)
         if reserved is None or not ledger.reserve(reserved):
             reason = "authorized call or cost ceiling reached before the call"
             record_stop("budget", reason)
@@ -702,18 +825,40 @@ async def run_incremental_evaluation(
             "reserved_cost_usd": reserved,
             "state": "reserved",
         }
-        checkpoint_store.write(checkpoint)
+        checkpoint = checkpoint_store.write(checkpoint)
+        try:
+            mark(checkpoint)   # the ledger must cover this in-flight reservation before anything is sent
+        except Exception as error:
+            # Nothing was transmitted: release the reservation and stop (terminal, no retry). If
+            # this state cannot be persisted, the durable reserved attempt stays unresolved.
+            ledger.release(reserved)
+            checkpoint["execution"]["budget"] = ledger.snapshot()
+            checkpoint["active_attempt"] = None
+            reason = "the pre-transmission ledger mark could not be recorded; nothing was sent"
+            record_stop("ledger_mark_failed", reason, {"kind": "ledger_persistence", "phase": "pre_transmission",
+                                                       "error_type": type(error).__name__})
+            checkpoint = checkpoint_store.write(checkpoint)
+            raise EvaluationStopped(reason, code="ledger_mark_failed") from error
         token = llm_gateway.begin_trace(capture_rate_limits=True)
         started = time.perf_counter()
         result = None
         error: BaseException | None = None
         try:
-            result = await gateway(role, temperature, prompt, schema, max_output_tokens=max_output_tokens)
+            result = await gateway(role, temperature, prompt, schema, max_output_tokens=max_output_tokens, **settings)
         except BaseException as caught:
             error = caught
         finally:
             summary = llm_gateway.summarize_trace(llm_gateway.end_trace(token))
             usage = _usage_from_trace(summary, reserved)
+            failure = pf.describe_provider_failure(error, schema) if isinstance(error, Exception) else None
+            local_failure = failure is not None and failure["failure_class"] == pf.LOCAL_STRUCTURED_OUTPUT_FAILURE
+            # Predeclared policy (v2): explicit completion-budget exhaustion is a scored model
+            # outcome. Its reservation stays charged when usage is unknown; it is never re-sent.
+            scored_budget_failure = (failure is not None
+                                     and failure["failure_class"] == pf.COMPLETION_BUDGET_EXHAUSTED
+                                     and _scores_completion_budget_failures(config))
+            if failure is not None:
+                usage["provider_failure"] = failure
             usage["latency_ms"] = round((time.perf_counter() - started) * 1000, 1)
             usage["rate_limit_headers"] = _rate_headers(summary)
             usage["rate_limit_observed_at_unix"] = _clock_now(clock)
@@ -722,7 +867,9 @@ async def run_incremental_evaluation(
             usage["prompt_sha256"] = prompt_sha256
             usage["prompt_bytes"] = prompt_bytes
             usage["request_bytes"] = estimate["request_bytes"]
+            usage["reservation_input_tokens"] = reservation_input
             usage["admission"] = estimate
+            usage.update(_reported_reasoning(summary))
             usage["scenario_id"] = checkpoint["active_arm"]["scenario_id"]
             usage["prompt_version"] = checkpoint["active_arm"]["prompt_version"]
             ledger.settle(reserved, usage)
@@ -737,25 +884,51 @@ async def run_incremental_evaluation(
             })
             checkpoint["active_attempt"] = None
             allowed = f"{config['provider']}:{config['model']}"
-            if _quota_error(error, summary):
+            if _quota_error(error, summary, failure):
                 record_stop("rate_limit", "provider returned a rate-limit or quota-exhaustion response", {
                     "kind": "provider_rate_limit", "call_index": len(checkpoint["execution"]["calls"]) - 1})
             elif any(model != allowed for model in usage["provider_models"]):
                 record_stop("model_drift", "a call used a provider/model outside the authorization")
-            elif usage["cost_status"] != "complete":
+            elif usage["cost_status"] == "complete" and usage["cost_usd"] > reserved + 1e-12:
+                # Fail closed: the measured cost is kept (never replaced by the reservation).
+                record_stop("reservation_exceeded", "measured cost exceeded the call's reservation")
+            elif ledger.charged > config["max_cost_usd"] + 1e-9:
+                record_stop("cost_ceiling_exceeded", "settled cost exceeded the cumulative cost ceiling")
+            elif v2 and failure is not None and not local_failure and not scored_budget_failure:
+                # Typed, terminal provider failure: never scored, never re-sent automatically.
+                record_stop(failure["failure_class"], "the provider request failed; execution stopped", {
+                    "kind": "provider_failure", "failure_class": failure["failure_class"],
+                    "transmission": failure["transmission"], "error_type": type(error).__name__,
+                    "call_index": len(checkpoint["execution"]["calls"]) - 1})
+            elif usage["cost_status"] != "complete" and not scored_budget_failure:
                 record_stop("billing_unknown", "provider usage was incomplete; spend is uncertain")
             elif usage["provider_calls"] != 1:
                 record_stop("unexpected_retry", "an unexpected retry or fallback was observed")
             elif isinstance(usage["output_tokens"], int) and usage["output_tokens"] > max_output_tokens:
                 record_stop("output_limit", "provider reported output beyond the output-token limit")
-            elif isinstance(error, Exception) and not _is_model_output_error(error):
+            elif isinstance(error, Exception) and not _is_model_output_error(error) and not scored_budget_failure:
                 # A provider/network failure is not evidence about the prompt, and the next
                 # request would meet the same provider state: stop the campaign (terminal).
                 record_stop("provider_failure", "the provider request failed; execution stopped", {
                     "kind": "provider_failure", "error_type": type(error).__name__,
                     "call_index": len(checkpoint["execution"]["calls"]) - 1})
-            checkpoint_store.write(checkpoint)
+            checkpoint = checkpoint_store.write(checkpoint)
+            if v2:
+                # Refresh the ledger mark immediately after durable settlement, so a lost
+                # checkpoint never hides settled consumption (cost above a reservation, retries).
+                try:
+                    mark(checkpoint)
+                except Exception as mark_error:   # the mark stays "in_flight": lost-checkpoint close refuses
+                    if not checkpoint["execution"].get("stopped"):
+                        record_stop("ledger_mark_failed",
+                                    "settled consumption could not be recorded in the program ledger",
+                                    {"kind": "ledger_persistence", "phase": "post_settlement",
+                                     "error_type": type(mark_error).__name__})
+                        checkpoint = checkpoint_store.write(checkpoint)
         stop_code = checkpoint["execution"].get("stop_code")
+        if stop_code is not None and scored_budget_failure:
+            # P0.3: an execution-integrity stop outranks the scored completion-budget outcome.
+            raise EvaluationStopped(checkpoint["execution"]["stopped"], code=stop_code, transmitted=True) from error
         if error is not None and (not isinstance(error, Exception) or not _is_model_output_error(error)
                                   or stop_code is None):
             # Cancellation and provider/network failures keep their own classification.
@@ -819,6 +992,15 @@ async def run_incremental_evaluation(
                                           f"{error}") from error
                 attempts = checkpoint["active_arm"]["attempts"]
                 interruption = arm.get("interruption") or {}
+                if not attempts and arm.get("status") == "interrupted" and arm.get("failure_class") != EXECUTION_STOP:
+                    # An internal error before any settled transmission: fail closed with a terminal
+                    # stop. Any reserved active attempt is kept as-is (unresolved, charged as
+                    # uncertain), never cleared: whether it was sent cannot be established here.
+                    record_stop("internal_error", "an internal error occurred before a settled transmission",
+                                {"kind": "internal_error", "error_type": arm.get("error_type"),
+                                 "reserved_attempt_kept": checkpoint.get("active_attempt") is not None})
+                    checkpoint = checkpoint_store.write(checkpoint)
+                    break
                 if not attempts or (arm.get("failure_class") == EXECUTION_STOP and not interruption.get("transmitted")):
                     # Stopped before transmission: nothing was sent for this arm yet, or its
                     # untransmitted repair stays durably pending. Never a failed answer; the
@@ -832,6 +1014,7 @@ async def run_incremental_evaluation(
                 arm["physical_calls"] = sum(int(item.get("provider_calls") or 0) for item in attempts)
                 arm["usage"] = _arm_usage(attempts)
                 arm["attempts"] = attempts
+                arm["outcome_dimensions"] = outcome_dimensions(arm, attempts)
                 record["arms"].append(arm)
                 record["physical_calls"] = sum(item["physical_calls"] for item in record["arms"])
                 record["status"] = _pair_status(record["arms"])
