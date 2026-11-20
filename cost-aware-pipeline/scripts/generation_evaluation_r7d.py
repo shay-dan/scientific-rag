@@ -28,7 +28,6 @@ from app.benchmark.generation_evaluation import (  # noqa: E402
     canonical_sha256,
     create_blind_key,
     validate_blind_key,
-    check_paid_authorization,
     SCORE_METRICS,
     dry_run,
     unblind_owner_scores,
@@ -38,6 +37,7 @@ from app.benchmark.incremental_generation_evaluation import (  # noqa: E402
     CampaignLocked,
     CheckpointError,
     run_incremental_evaluation,
+    verify_checkpoint,
 )
 
 
@@ -232,12 +232,9 @@ def _bound_packet(args, payload):
     manifest = _load(_private(args.manifest, "manifest"))
     config = _load(_private(args.config, "config"))
     authorization = _load(_private(args.authorization, "authorization"))
-    check_paid_authorization(authorization, manifest=manifest, config=config)
-    if (payload.get("manifest_sha256") != manifest["manifest_sha256"]
-            or payload.get("config_sha256") != canonical_sha256(config)
-            or payload.get("authorization_sha256") != canonical_sha256(authorization)
-            or payload.get("active_attempt") is not None or payload.get("active_arm") is not None):
-        raise ValueError("checkpoint is not bound to this authorization or has pending work")
+    verify_checkpoint(payload, manifest, config, authorization)
+    if payload.get("active_arm") is not None:
+        raise ValueError("checkpoint has pending work")
     key = _read_blind_key(args.private_key)
     return build_blind_scoring_packet(manifest, payload["records"], key=key,
                                       commitment=authorization.get("blind_key_sha256"))
@@ -290,7 +287,10 @@ def _public_report(args) -> int:
         if (canonical_sha256(frozen) != args.frozen_scores_sha256
                 or frozen != _score_freeze(packet, frozen.get("scores", {}))):
             raise ValueError("frozen scores or scoring packet mismatch")
-        scores = unblind_owner_scores(frozen["scores"], key)
+        manifest = _load(_private(args.manifest, "manifest"))
+        authorization = _load(_private(args.authorization, "authorization"))
+        scores = unblind_owner_scores(frozen["scores"], key, manifest=manifest,
+                                      commitment=authorization.get("blind_key_sha256"))
     else:
         scores = {}
     report = build_public_report(

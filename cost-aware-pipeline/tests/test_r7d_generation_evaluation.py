@@ -471,7 +471,7 @@ class GateAndReportTests(unittest.TestCase):
         first = key["arms"][0]
         unblinded = unblind_owner_scores({"D001": {
             "winner": "A", "metrics": {"coverage": {"A": 2, "B": 1}}
-        }}, key)
+        }}, key, manifest=manifest, commitment=canonical_sha256(allocation))
         self.assertEqual(first["A"], unblinded["D001"]["winner"])
         self.assertEqual({first["A"]: 2, first["B"]: 1}, unblinded["D001"]["metrics"]["coverage"])
         with self.assertRaises(ValueError):

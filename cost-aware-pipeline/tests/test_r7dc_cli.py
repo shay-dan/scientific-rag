@@ -95,6 +95,60 @@ class CommandLineTests(unittest.TestCase):
         self.assertTrue(any("remaining program request allowance" in item for item in plan["program"]["warnings"]))
         self.assertEqual([], plan["blockers"])
 
+    def test_blind_init_exclusive_and_private(self):
+        manifest = self.write("m.json", base._manifest())
+        path = self.private / "key.json"
+        code, out = self.run_cli("blind-init", "--manifest", manifest, "--private-key", path)
+        key = json.loads(path.read_text())
+        self.assertEqual(0, code)
+        self.assertEqual(0o600, path.stat().st_mode & 0o777)
+        self.assertEqual(self.cli.canonical_sha256(key), json.loads(out)["blind_key_sha256"])
+        self.assertNotIn(key["nonce"], out)
+        self.assertNotIn("v15", out)
+        with self.assertRaises(SystemExit):
+            self.run_cli("blind-init", "--manifest", manifest, "--private-key", path)
+        self.assertEqual(key, json.loads(path.read_text()))
+
+    def test_incremental_run_refuses_missing_or_changed_allocation_before_runner(self):
+        manifest = base._manifest()
+        mpath = self.write("m.json", manifest)
+        config = reliability.v2_config()
+        key = self.cli.create_blind_key(manifest)
+        auth = {"blind_key_sha256": self.cli.canonical_sha256(key)}
+        args = ["incremental-run", "--manifest", mpath, "--config", self.write("c.json", config),
+                "--authorization", self.write("a.json", auth), "--pairs", 1,
+                "--private-checkpoint", self.private / "checkpoint.json",
+                "--program-ledger", self.private / "ledger.json"]
+        with patch.object(self.cli, "run_incremental_evaluation") as runner:
+            with self.assertRaisesRegex(SystemExit, "precommitted"):
+                self.run_cli(*args)
+            with self.assertRaisesRegex(SystemExit, "invalid blind key"):
+                self.run_cli(*args, "--private-key", self.write("bad.json", self.cli.create_blind_key(manifest)))
+            runner.assert_not_called()
+        self.assertFalse((self.private / "checkpoint.json").exists())
+
+    def test_freeze_scores_bound_to_exact_packet_and_bounded_values(self):
+        packet = {"schema": "scientific-rag-generation-eval-blind-scoring/v1",
+                  "cases": [{"scenario_id": "D001", "scorable": True},
+                            {"scenario_id": "D002", "scorable": False}]}
+        scores = {"D001": {"winner": "A", "metrics": {"coverage": {"A": 2, "B": 1}}}}
+        ppath, spath = self.write("packet.json", packet), self.write("scores.json", scores)
+        frozen = self.private / "frozen.json"
+        _, out = self.run_cli("freeze-scores", "--private-packet", ppath, "--scores", spath,
+                              "--frozen-scores", frozen)
+        value = json.loads(frozen.read_text())
+        self.assertEqual(self.cli.canonical_sha256(value), json.loads(out)["frozen_scores_sha256"])
+        self.assertEqual(self.cli.canonical_sha256(packet), value["packet_sha256"])
+        with self.assertRaises(SystemExit):
+            self.run_cli("freeze-scores", "--private-packet", ppath, "--scores", spath,
+                         "--frozen-scores", frozen)
+        for invalid in ({}, {"D002": scores["D001"]},
+                        {"D001": {"winner": "A", "metrics": {"coverage": {"A": 3, "B": 1}}}}):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                self.cli._score_freeze(packet, invalid)
+        changed = dict(packet, cases=packet["cases"][:1])
+        self.assertNotEqual(value, self.cli._score_freeze(changed, scores))
+
     def test_ledger_files_must_stay_outside_the_repository(self):
         inside = SCRIPT.parents[1] / "r7d-ledger.private.json"
         with self.assertRaisesRegex(SystemExit, "outside the public repository"):

@@ -1005,7 +1005,8 @@ def validate_blind_key(manifest: dict, key: dict, commitment: str) -> dict:
     rows = key["arms"]
     if (len(rows) != len(ids)
             or any(not isinstance(row, dict) or set(row) != {"scenario_id", "A", "B"}
-                   or {row["A"], row["B"]} != {"v15", "v16"} for row in rows)
+                   or row["A"] not in ("v15", "v16") or row["B"] not in ("v15", "v16")
+                   or row["A"] == row["B"] for row in rows)
             or [row["scenario_id"] for row in rows] != ids
             or sum(row["A"] == "v15" for row in rows) != 10):
         raise ValueError("blind allocation must be complete, unique, ordered and balanced")
@@ -1050,12 +1051,11 @@ def build_blind_scoring_packet(manifest: dict, records: list[dict], *, key: dict
     return packet, key
 
 
-def unblind_owner_scores(blind_scores: dict, key: dict) -> dict:
-    """Translate frozen A/B owner scores using the separately held arm key."""
-    if not isinstance(blind_scores, dict) or not isinstance(key, dict):
-        raise ValueError("blind scores and arm key must be objects")
-    if key.get("schema") != BLIND_KEY_SCHEMA:
-        raise ValueError("unrecognized blind arm key schema")
+def unblind_owner_scores(blind_scores: dict, key: dict, *, manifest: dict, commitment: str) -> dict:
+    """Translate frozen A/B owner scores using the separately held committed arm key."""
+    validate_blind_key(manifest, key, commitment)
+    if not isinstance(blind_scores, dict):
+        raise ValueError("blind scores must be an object")
     mappings = {row["scenario_id"]: row for row in key.get("arms", [])}
     if set(blind_scores) - set(mappings):
         raise ValueError("blind scores contain scenario IDs absent from the arm key")

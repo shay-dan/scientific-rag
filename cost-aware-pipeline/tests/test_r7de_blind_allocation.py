@@ -5,6 +5,7 @@ import unittest
 
 from app.benchmark.generation_evaluation import (
     build_blind_scoring_packet, canonical_sha256, create_blind_key, validate_blind_key,
+    unblind_owner_scores,
 )
 from tests.test_r7d_generation_evaluation import _manifest
 
@@ -57,3 +58,12 @@ class BlindAllocationTests(unittest.TestCase):
         for records in (self.records[:-1], self.records + [self.records[0]]):
             with self.assertRaises(ValueError):
                 build_blind_scoring_packet(self.manifest, records, key=self.key, commitment=self.commitment)
+
+    def test_unblinding_checks_commitment(self):
+        scores = {"D001": {"winner": "A", "metrics": {"coverage": {"A": 2, "B": 1}}}}
+        version = self.key["arms"][0]["A"]
+        result = unblind_owner_scores(scores, self.key, manifest=self.manifest, commitment=self.commitment)
+        self.assertEqual(version, result["D001"]["winner"])
+        with self.assertRaises(ValueError):
+            unblind_owner_scores(scores, create_blind_key(self.manifest), manifest=self.manifest,
+                                 commitment=self.commitment)

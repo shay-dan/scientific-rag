@@ -175,20 +175,7 @@ it never retries an attempt and still enforces the campaign-wide call and cost l
 
 ## Blind scoring packet
 
-A completed incremental checkpoint is also the private-records payload expected by the
-existing `blind-packet` command because it contains the same top-level `records` array.
-Generate the packet and keep its arm key separate with:
-
-```bash
-python scripts/generation_evaluation_r7d.py blind-packet \
-  --manifest /private/r7d-20-manifest.private.json \
-  --private-records /private/r7d-checkpoint.private.json \
-  --private-packet /private/r7d-blind-packet.private.json \
-  --private-key /separate-private/r7d-blind-key.private.json
-```
-
-Run this only after all 20 checkpoint records exist. The CLI validates the frozen
-manifest and refuses missing attempted records; it does not make provider calls.
+Superseded by [R7D-E operator instructions](r7d-e-benchmark-readiness.md): generate and commit the private balanced allocation before authorization; never generate an allocation during answer export. See the new runbook for the updated CLI and score-freeze procedure.
 
 ## Rollback
 
