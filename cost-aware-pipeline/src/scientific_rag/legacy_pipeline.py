@@ -51,6 +51,9 @@ from app.weak_model_synthesis import (
     repair_prompt_v2,
     validate_answer_v2,
 )
+from app.quote_recovery import (
+    QuoteRecoveryMode, recover_answer_quotes, recover_repair_quotes, validate_quote_recovery_mode,
+)
 from app.claim_verification import (
     ClaimVerificationError,
     SEMANTIC_VERIFICATION_MAX_GATEWAY_INVOCATIONS,
@@ -1449,7 +1452,8 @@ class ResearchAgent:
                  semantic_verification_max_gateway_invocations: int = SEMANTIC_VERIFICATION_MAX_GATEWAY_INVOCATIONS,
                  claim_recovery_mode: Literal["strict", "degrade"] = "strict",
                  claim_audit_mode: Literal["off", "audit"] = "off",
-                 generation_prompt_version: Literal["v15", "v16"] = "v15"):
+                 generation_prompt_version: Literal["v15", "v16"] = "v15",
+                 quote_recovery_mode: QuoteRecoveryMode = "off"):
         if semantic_verification_mode not in {"off", "shadow", "enforce"}:
             raise ValueError(f"Unsupported semantic verification mode: {semantic_verification_mode}")
         if claim_recovery_mode not in {"strict", "degrade"}:
@@ -1458,6 +1462,7 @@ class ResearchAgent:
             raise ValueError(f"Unsupported claim audit mode: {claim_audit_mode}")
         if generation_prompt_version not in {"v15", "v16"}:
             raise ValueError(f"Unsupported generation prompt version: {generation_prompt_version}")
+        validate_quote_recovery_mode(quote_recovery_mode, semantic_verification_mode)
         if semantic_verification_timeout_seconds <= 0:
             raise ValueError("Semantic verification timeout must be positive")
         if semantic_verification_max_gateway_invocations < 1:
@@ -1472,6 +1477,8 @@ class ResearchAgent:
         self.claim_recovery_mode = claim_recovery_mode
         self.claim_audit_mode = claim_audit_mode
         self.generation_prompt_version = generation_prompt_version
+        self.quote_recovery_mode = quote_recovery_mode
+        self.last_quote_recovery_audit: dict | None = None
         self.semantic_verification_timeout_seconds = semantic_verification_timeout_seconds
         self.semantic_verification_max_gateway_invocations = semantic_verification_max_gateway_invocations
         self.last_recovery_audit: dict | None = None
@@ -1612,6 +1619,7 @@ ANSWER LINES:
         }
 
     async def run_research(self, query: str, retr: str = "context") -> Dict[str, Any]: #[edit]
+        self.last_quote_recovery_audit = None
         """
         Synthesizes the final answer using retrieved documents.
         This is called by the Orchestrator after mining is complete.
@@ -1701,6 +1709,24 @@ ANSWER LINES:
             StructuredEvidenceAnswerV2,
         )
         validation_errors = validate_answer_v2(structured_answer, evidence_blocks)
+        quote_audit = None
+        if self.quote_recovery_mode != "off":
+            # Defense in depth: never allow a mutated runtime flag to bypass enforce.
+            validate_quote_recovery_mode(self.quote_recovery_mode, self.semantic_verification_mode)
+            initial_error_count = len(validation_errors)
+            structured_answer, edits, validation_errors = recover_answer_quotes(
+                structured_answer, evidence_blocks, self.quote_recovery_mode
+            )
+            quote_audit = {
+                "mode": self.quote_recovery_mode,
+                "initial_error_count": initial_error_count,
+                "remaining_after_initial": len(validation_errors),
+                "initial_attempts": edits,
+                "repair_attempts": [],
+                "repair_avoided": bool(initial_error_count and not validation_errors),
+                "semantic_verification_status": "not_run",
+            }
+            self.last_quote_recovery_audit = quote_audit
         repair_audit = None
         removals: tuple[RemovedField, ...] = ()
         if validation_errors:
@@ -1711,12 +1737,19 @@ ANSWER LINES:
                 repair_prompt_v2(query, structured_context, structured_answer, validation_errors),
                 V2RepairBatch,
             )
+            if quote_audit is not None:
+                repair_batch, edits = recover_repair_quotes(
+                    repair_batch, evidence_blocks, self.quote_recovery_mode, validation_errors
+                )
+                quote_audit["repair_attempts"] = edits
             if self.claim_recovery_mode == "degrade":
                 recovered, repair_audit, removals = recover_v2_answer(
                     structured_answer, repair_batch, evidence_blocks
                 )
                 self.last_recovery_audit = repair_audit
                 self.last_recovery_removals = removals
+                if quote_audit is not None:
+                    quote_audit["removed_fields"] = len(removals)
                 if recovered is None:
                     raise NoValidClaimsRemain(repair_audit, removals)
                 structured_answer = recovered
@@ -1725,6 +1758,9 @@ ANSWER LINES:
                 structured_answer, repair_audit, validation_errors = merge_v2_repairs(
                     structured_answer, repair_batch, evidence_blocks
                 )
+        if quote_audit is not None:
+            quote_audit["remaining_structural_errors"] = len(validation_errors)
+            quote_audit["removed_fields"] = len(removals)
         if validation_errors:
             raise RuntimeError(
                 "Structured synthesis still contained invalid evidence references after one repair attempt"
@@ -1732,6 +1768,8 @@ ANSWER LINES:
         semantic_audit = None
         selected_answer = structured_answer
         if self.semantic_verification_mode != "off":
+            if quote_audit is not None:
+                quote_audit["semantic_verification_status"] = "pending"
             await self._progress("Verifying answer claims against cited evidence", "gatekeeper")
             verification_started = time.monotonic()
             try:
@@ -1795,7 +1833,16 @@ ANSWER LINES:
             if self.claim_audit_mode == "audit"
             else None
         )
-        answer = render_answer_v2(selected_answer, omitted_count=len(removals))
+        omitted_count = len(removals)
+        if quote_audit is not None:
+            # This enabled mode requires enforce; disclose semantic omissions as well.
+            if semantic_audit is None or not semantic_audit["filtering_applied"]:
+                raise RuntimeError("Quotation recovery requires completed semantic enforcement")
+            quote_audit["semantic_verification_status"] = semantic_audit["status"]
+            semantic_removed = len(semantic_audit["removed_target_ids"])
+            quote_audit["semantic_removed_fields"] = semantic_removed
+            omitted_count += semantic_removed
+        answer = render_answer_v2(selected_answer, omitted_count=omitted_count)
         def validated_claim(item):
             return {
                 **item.model_dump(),
@@ -1810,6 +1857,8 @@ ANSWER LINES:
             "repair": repair_audit,
             "remaining_errors": {},
         }
+        if quote_audit is not None:
+            claim_validation["quote_recovery"] = quote_audit
         if semantic_audit is not None:
             claim_validation["semantic_verification"] = semantic_audit
         if deterministic_audit is not None:

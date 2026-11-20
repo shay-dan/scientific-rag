@@ -194,7 +194,8 @@ async def _run_evaluation_job(ctx, evaluation_run_id: str):
             run_id=str(run.id), dataset_id=str(dataset.id), dataset_name=dataset.name,
             case_hashes=[case_hashes[case.id] for case in cases], case_provenance=[case.provenance for case in cases],
             mode=mode.value, pipeline_version=effective_pipeline_version(
-                semantic_mode, recovery_mode, generation_prompt_version=prompt_version
+                semantic_mode, recovery_mode, generation_prompt_version=prompt_version,
+                quote_recovery_mode=getattr(settings, "quote_recovery_mode", "off"),
             ),
             semantic_verification_mode=semantic_mode, judge_model=settings.ragas_judge_model,
             embedding_model=settings.embedding_model, prompt_versions=EVALUATION_PROMPT_VERSIONS,

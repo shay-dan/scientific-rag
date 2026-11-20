@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     claim_recovery_mode: Literal["strict", "degrade"] = "strict"
     claim_audit_mode: Literal["off", "audit"] = "off"
     generation_prompt_version: Literal["v15", "v16"] = "v15"
+    quote_recovery_mode: Literal["off", "unicode", "unicode_ellipsis"] = "off"
     allow_database_reset: bool = False
     embedding_model: str = "gemini-embedding-2"
     ragas_judge_model: str = "gemini-2.5-flash"
@@ -64,6 +65,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def normalize_gemini_key(self) -> "Settings":
+        if self.quote_recovery_mode != "off" and self.semantic_claim_verification_mode != "enforce":
+            raise ValueError("Quotation recovery requires semantic verification in enforce mode")
         if not self.google_api_key and self.gemini_api_key:
             self.google_api_key = self.gemini_api_key
         return self
