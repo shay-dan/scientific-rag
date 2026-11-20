@@ -915,12 +915,57 @@ R7 is split into separately authorized stages in this order:
      ledger is not initialized or modified, and the benchmark's 80-call/$1.50 ceilings are
      unchanged.
    - Live execution requires an exact authorization binding the code SHA, dataset, config,
-     schedule, plan and selection-rule hashes, provider/model, reasoning, limits, request
-     and spending ceilings, the failure policy and the acceptance ledger baseline.
-   - Predeclared selection rules (`r7d-d-selection/v1`): prefer 2,000 unless 3,000 shows
-     a meaningful advantage; no statistical superiority is claimed.
+     schedule, plan, synthetic-reference and selection-rule hashes, provider/model,
+     reasoning, limits, request and spending ceilings, the failure policy and the acceptance
+     ledger baseline.
+   - Predeclared selection rules (`r7d-d-selection/v2`): prefer 2,000 unless 3,000 shows
+     a meaningful advantage; no statistical superiority is claimed. The automatic result is
+     a recommendation only: the owner reviews the 12 generated answers scientifically
+     before a configuration is frozen.
    - Limitations: three synthetic cases, regex predicates, one balanced execution;
      estimates and reservations are not charges or guaranteed bounds.
+
+   **Independent review of PR #26 at `d1d5a95` (2026-11-20): not approved for merge.**
+   The architecture, matrix, shared `GuardedExecution`, separate accounting and 26-request
+   maximum were accepted. Every finding was confirmed and reproduced first (`d960e44`;
+   31 failures), then corrected in the same PR:
+   - **P0.1 repeated transmissions after interruption.** A continuation re-sent settled
+     initial, conditional-repair and dedicated-repair requests, and a cancellation after
+     transmission was not terminal. Now:
+     - before any request, the checkpoint's records, call audit, budget and in-progress
+       operation (identity, phase, attempt sequence, fingerprints) are verified;
+     - settled responses are restored with the benchmark's restoration logic, adapted for
+       dedicated repairs, whose initial answer is the fixture;
+     - anything unrestorable is refused, never re-sent;
+     - cancellation after transmission is a terminal `cancelled` stop.
+
+     A regression sweep stops the process at every durable step and still gives exactly 14
+     (or 26) physical requests.
+   - **P0.2** The plan commits to the reference hash, and the authorization and checkpoint
+     bind it. Reporting refuses any other references. Reference contents never reach the
+     runner or a prompt; changing them leaves prompt hashes unchanged.
+   - **P1.1** Reports verify the dataset, config, schedule, plan and references against the
+     checkpoint. They refuse duplicate, unscheduled or mismatched records. Any recorded
+     stop, interrupted operation or in-progress operation makes the experiment incomplete:
+     an interrupted final operation previously still selected a configuration.
+   - **P1.2** Scoring fixes:
+     - arms without an answer earn no predicate credit;
+     - abstention must be stated explicitly;
+     - the main numeric facts must sit beside their own arm (references rehashed to
+       `0cae5ef4…`);
+     - interrupted arms are not scored.
+
+     Accounted truncations are separated from accounting defects in the rules, the report
+     and the runbook.
+   - **P1.3** The validator enforces exactly the reviewed matrix. A smaller budget is
+     allowed, but nothing above $0.15.
+   - **P1.4** The Windows runbook now:
+     - checks every native exit code and stops on preflight failure;
+     - holds the key only in a temporary environment variable, cleared in `finally`;
+     - zero-frees the BSTR and writes no key file;
+     - keeps private state in a named volume, with its permissions verified in the
+       container;
+     - exports read-only.
 
 R7A never converts zero surviving claims to `insufficient_evidence`; that outcome
 remains reserved for the independent evidence-sufficiency gate. R7A merged in PR #17 as
@@ -1112,7 +1157,7 @@ load evidence; large synthetic evaluation sets presented as gold data.
 
 | Date | Decision | Evidence / reason |
 |---|---|---|
-| 2026-11-20 | Mark R7D-C complete (PR #25, `e025a3d`); put R7D-D in review. Add a synthetic live configuration acceptance harness (low reasoning, 2,000 vs 3,000 completion tokens, v15/v16, 3 fictional scenarios, at most 26 requests) with a separate acceptance program ledger, exact authorization binding and predeclared selection rules. Extract the benchmark runner's guarded execution into a shared class without behaviour change. | PR #25 post-merge evidence: 1,011 tests (0 failures, 58 skipped), 57/57 integration, legacy 13/13, provenance, migrations, `/healthz`, Security green. The frozen R7D benchmark, its references, prompts, answer schemas, production defaults and the 80-call/$1.50 ceilings are unchanged; no live call is made in this stage. |
+| 2026-11-20 | Mark R7D-C complete (PR #25, `e025a3d`); put R7D-D in review. Add a synthetic live configuration acceptance harness (low reasoning, 2,000 vs 3,000 completion tokens, v15/v16, 3 fictional scenarios, at most 26 requests) with a separate acceptance program ledger, exact authorization binding and predeclared selection rules. Extract the benchmark runner's guarded execution into a shared class without behaviour change. Review corrections: fail-closed restoration on continuation, frozen reference hash, report bindings, honest predicate scoring, a pinned matrix and a hardened Windows runbook. | PR #25 post-merge evidence: 1,011 tests (0 failures, 58 skipped), 57/57 integration, legacy 13/13, provenance, migrations, `/healthz`, Security green. The frozen R7D benchmark, its references, prompts, answer schemas, production defaults and the 80-call/$1.50 ceilings are unchanged; no live call is made in this stage. |
 | 2026-11-18 | Mark R7D-B execution-safety correction complete (PR #24, `796e0d2`); put R7D-C in review. Bind reasoning effort and a predeclared completion-budget policy in config v2. Classify provider failures by status, error code and one narrow truncation check, with sanitized diagnostics. Score confirmed truncation only under the predeclared policy, keeping its reservation. Carry cumulative benchmark-program accounting in a private ledger so a fresh checkpoint cannot reset the ceilings. Refuse the one-shot `paid-run`. | D002 truncation and the external carry-forward accounting were observed in owner runs. PR #24 post-merge evidence: 926 tests (0 failures, 58 skipped), 57/57 integration, legacy 13/13, provenance, migrations, `/healthz`, Security green. Prompts, answer schemas, validators, retrieval, production defaults and the 80-call/$1.50 ceilings are unchanged; per-campaign recovery and the live acceptance harness are deferred. |
 | 2026-11-18 | Mark R7D-B incremental execution complete (PR #23, `3923a12`); put the R7D-B execution-safety correction in review. Pre-transmission stops never become model failures; a pending repair is durable and resumes only the untransmitted operation after fingerprint verification; per-minute admission uses a provider-calibrated estimate (never called an upper bound) separate from the unchanged cost ledger; an opt-in wait covers only short known token resets; provider/network/billing interruptions are excluded from paired scoring; initial and post-repair outcomes are reported separately. Post-call safety stops outrank model-output classification; any provider/network failure stops execution; interrupted pairs never count as completed. Checkpoint v2 refuses v1 files unchanged. | Independent takeover review reproduced both defects on `3923a12`. Post-merge evidence for PR #23: 880 tests (0 failures, 58 skipped), 57/57 integration, legacy 13/13, provenance, migrations, `/healthz`, Security green. Frozen manifest, prompts, order, schemas, one-repair maximum, Groq-only route and $1.50/80-call limits unchanged; new authorization and zero-call preflight required after merge. |
 | 2026-11-16 | Put the minimal R7D-B Free-tier incremental execution extension in review. Keep the frozen 20-case manifest and generation/scoring contracts unchanged; add only opt-in atomic private checkpoints, cumulative ledger restoration, frozen-index pair staging, single-campaign locking, provider rate-header capture, and fail-closed resume. Do not call a provider before merge and a new merge-SHA-bound config, authorization, and zero-call dry run. | The accepted one-shot runner persisted only after the full invocation, so interruption could lose completed billable work. The incremental contract writes before and after every attempt, refuses unresolved attempts rather than duplicating them, and preserves the 80-call / $1.50 campaign ceilings across sessions. Rollback is to omit `incremental-run` or revert the PR; no migration, API, prompt, cache, or default-route change. |
