@@ -1,0 +1,21 @@
+{
+  "schema": "scientific-rag-generation-acceptance-authorization/v1",
+  "authorization_id": "REPLACE_WITH_UNIQUE_AUTHORIZATION_ID",
+  "approved_by": "REPLACE_WITH_OWNER_IDENTITY_ON_APPROVAL",
+  "accepted_code_sha": "REPLACE_WITH_MERGED_R7D_D_COMMIT_SHA",
+  "dataset_sha256": "e6fbe08aa7a80d2f5bce0d1fb36e16b7e677a43e5ebb9858da6742230d8b2362",
+  "config_sha256": "REPLACE_WITH_DRY_RUN_config_sha256",
+  "schedule_sha256": "REPLACE_WITH_DRY_RUN_schedule_sha256",
+  "plan_sha256": "REPLACE_WITH_DRY_RUN_plan_sha256",
+  "selection_rules_sha256": "REPLACE_WITH_DRY_RUN_selection_rules_sha256",
+  "references_sha256": "0cae5ef4a7e8987b6d099792e68e182a690846868ae1af50d547a72b21c7f3e8",
+  "provider": "groq",
+  "model": "openai/gpt-oss-120b",
+  "reasoning_effort": "low",
+  "max_output_tokens": [2000, 3000],
+  "max_physical_requests": 26,
+  "max_cost_usd": 0.15,
+  "completion_budget_failure_policy": "score_as_failure",
+  "program_id": "r7d-d-acceptance",
+  "program_baseline_sha256": "REPLACE_WITH_ledger-summary_closed_baseline.baseline_sha256"
+}

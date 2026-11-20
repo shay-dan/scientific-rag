@@ -1,0 +1,20 @@
+{
+  "schema": "scientific-rag-generation-acceptance-config/v1",
+  "code_sha": "REPLACE_WITH_MERGED_R7D_D_COMMIT_SHA",
+  "provider": "groq",
+  "model": "openai/gpt-oss-120b",
+  "temperature": 0,
+  "prompt_versions": ["v15", "v16"],
+  "model_context_tokens": 131072,
+  "max_input_tokens": 100000,
+  "max_calls": 26,
+  "max_cost_usd": 0.15,
+  "semantic_verification_mode": "off",
+  "claim_recovery_mode": "strict",
+  "claim_audit_mode": "off",
+  "completion_budget_failure_policy": "score_as_failure",
+  "configurations": [
+    {"label": "A", "reasoning_effort": "low", "max_output_tokens": 2000},
+    {"label": "B", "reasoning_effort": "low", "max_output_tokens": 3000}
+  ]
+}

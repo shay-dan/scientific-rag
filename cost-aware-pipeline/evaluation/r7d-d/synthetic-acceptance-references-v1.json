@@ -1,0 +1,454 @@
+{
+  "schema": "scientific-rag-generation-acceptance-references/v1",
+  "label": "synthetic acceptance references; not independent human-reviewed gold labels",
+  "dataset_sha256": "e6fbe08aa7a80d2f5bce0d1fb36e16b7e677a43e5ebb9858da6742230d8b2362",
+  "predicates": {
+    "A001": [
+      {
+        "id": "A001-F1",
+        "kind": "expected_fact",
+        "dimension": "numerical_fidelity",
+        "scope": "answer",
+        "any_of": [
+          "14\\.2\\s*mmhg"
+        ],
+        "description": "systolic reduction with velarozan",
+        "arm": {
+          "with": [
+            "velarozan"
+          ],
+          "against": [
+            "placebo"
+          ]
+        }
+      },
+      {
+        "id": "A001-F2",
+        "kind": "expected_fact",
+        "dimension": "numerical_fidelity",
+        "scope": "answer",
+        "any_of": [
+          "4\\.1\\s*mmhg"
+        ],
+        "description": "systolic reduction with placebo",
+        "arm": {
+          "with": [
+            "placebo"
+          ],
+          "against": [
+            "velarozan"
+          ]
+        }
+      },
+      {
+        "id": "A001-F3",
+        "kind": "expected_fact",
+        "dimension": "numerical_fidelity",
+        "scope": "answer",
+        "any_of": [
+          "18 of 1,?206",
+          "18/1,?206",
+          "1\\.5\\s*%"
+        ],
+        "description": "stroke events with velarozan",
+        "arm": {
+          "with": [
+            "velarozan"
+          ],
+          "against": [
+            "placebo"
+          ]
+        }
+      },
+      {
+        "id": "A001-F4",
+        "kind": "expected_fact",
+        "dimension": "numerical_fidelity",
+        "scope": "answer",
+        "any_of": [
+          "31 of 1,?206",
+          "31/1,?206",
+          "2\\.6\\s*%"
+        ],
+        "description": "stroke events with placebo",
+        "arm": {
+          "with": [
+            "placebo"
+          ],
+          "against": [
+            "velarozan"
+          ]
+        }
+      },
+      {
+        "id": "A001-F5",
+        "kind": "expected_fact",
+        "dimension": "numerical_fidelity",
+        "scope": "answer",
+        "any_of": [
+          "\\b0\\.58\\b"
+        ],
+        "description": "stroke hazard ratio"
+      },
+      {
+        "id": "A001-U1",
+        "kind": "required_uncertainty",
+        "dimension": "causality_uncertainty",
+        "scope": "answer",
+        "any_of": [
+          "1\\.03",
+          "not statistically significant",
+          "confidence interval (includes|crosses|spans) 1",
+          "did not reach (statistical )?significance",
+          "uncertain"
+        ],
+        "description": "the stroke hazard-ratio interval includes 1"
+      },
+      {
+        "id": "A001-F6",
+        "kind": "expected_fact",
+        "dimension": "attribution",
+        "scope": "answer",
+        "any_of": [
+          "arden"
+        ],
+        "description": "the cited registry is identified as a separate study"
+      },
+      {
+        "id": "A001-X1",
+        "kind": "forbidden_claim",
+        "dimension": "attribution",
+        "critical": true,
+        "scope": "claims",
+        "all_of": [
+          "32\\s*%",
+          "kestrel"
+        ],
+        "unless_any_of": [
+          "arden",
+          "registry",
+          "cite"
+        ],
+        "description": "registry result attributed to KESTREL-3"
+      },
+      {
+        "id": "A001-X2",
+        "kind": "forbidden_claim",
+        "dimension": "numerical_fidelity",
+        "critical": true,
+        "scope": "claims",
+        "all_of": [
+          "diastolic",
+          "\\d+(\\.\\d+)?\\s*mmhg"
+        ],
+        "unless_any_of": [],
+        "description": "an unsupported diastolic number"
+      },
+      {
+        "id": "A001-X3",
+        "kind": "forbidden_claim",
+        "dimension": "causality_uncertainty",
+        "critical": true,
+        "scope": "claims",
+        "all_of": [
+          "stroke",
+          "significant(ly)?"
+        ],
+        "unless_any_of": [
+          "\\bnot\\b",
+          "\\bno\\b",
+          "did not",
+          "non-?significant",
+          "1\\.03"
+        ],
+        "description": "the stroke effect described as statistically significant"
+      },
+      {
+        "id": "A001-A1",
+        "kind": "required_abstention",
+        "dimension": "abstention",
+        "scope": "unanswered_or_answer",
+        "any_of": [
+          "diastolic"
+        ],
+        "description": "diastolic results are not reported"
+      }
+    ],
+    "A002": [
+      {
+        "id": "A002-F1",
+        "kind": "expected_fact",
+        "dimension": "numerical_fidelity",
+        "scope": "answer",
+        "any_of": [
+          "\\b0\\.83\\b",
+          "11\\.9\\s*%"
+        ],
+        "description": "randomized trial estimate"
+      },
+      {
+        "id": "A002-F2",
+        "kind": "expected_fact",
+        "dimension": "study_design",
+        "scope": "answer",
+        "any_of": [
+          "\\b0\\.62\\b"
+        ],
+        "description": "observational adjusted odds ratio"
+      },
+      {
+        "id": "A002-U1",
+        "kind": "required_uncertainty",
+        "dimension": "causality_uncertainty",
+        "scope": "answer",
+        "any_of": [
+          "0\\.56",
+          "1\\.22",
+          "not statistically significant",
+          "no (statistically )?significant",
+          "did not (show|demonstrate)",
+          "inconclusive",
+          "uncertain"
+        ],
+        "description": "the randomized estimate is inconclusive"
+      },
+      {
+        "id": "A002-U2",
+        "kind": "required_uncertainty",
+        "dimension": "study_design",
+        "scope": "answer",
+        "any_of": [
+          "confound",
+          "observational",
+          "younger",
+          "frail"
+        ],
+        "description": "observational confounding acknowledged"
+      },
+      {
+        "id": "A002-C1",
+        "kind": "conditional",
+        "dimension": "study_design",
+        "critical": true,
+        "scope": "claims",
+        "if_any_of": [
+          "subgroup",
+          "cognitive impairment"
+        ],
+        "then_any_of": [
+          "hypothesis",
+          "0\\.21",
+          "interaction",
+          "exploratory",
+          "1\\.01",
+          "uncertain"
+        ],
+        "description": "subgroup claims must carry their uncertainty"
+      },
+      {
+        "id": "A002-X1",
+        "kind": "forbidden_claim",
+        "dimension": "causality_uncertainty",
+        "critical": true,
+        "scope": "claims",
+        "all_of": [
+          "\\b(prevents?|reduces?|reduced|lowers?)\\b",
+          "delirium"
+        ],
+        "unless_any_of": [
+          "odds",
+          "associat",
+          "observational",
+          "cohort",
+          "\\bnot\\b",
+          "\\bno\\b",
+          "0\\.83",
+          "0\\.56",
+          "1\\.22",
+          "uncertain",
+          "\\bmay\\b",
+          "non-?significant",
+          "did not",
+          "subgroup",
+          "0\\.61",
+          "11\\.9"
+        ],
+        "description": "an unqualified causal claim that melzorin reduces delirium"
+      },
+      {
+        "id": "A002-X2",
+        "kind": "forbidden_claim",
+        "dimension": "study_design",
+        "critical": true,
+        "scope": "claims",
+        "all_of": [
+          "\\b(better|superior|more effective|outperform)",
+          "protocol"
+        ],
+        "unless_any_of": [
+          "\\bno\\b",
+          "\\bnot\\b"
+        ],
+        "description": "a head-to-head superiority claim"
+      },
+      {
+        "id": "A002-A1",
+        "kind": "required_abstention",
+        "dimension": "abstention",
+        "scope": "unanswered_or_answer",
+        "any_of": [
+          "head-to-head",
+          "no (study|studies|direct)",
+          "not (been )?compared",
+          "directly compared"
+        ],
+        "description": "no comparison with the ward protocol exists"
+      }
+    ],
+    "A003": [
+      {
+        "id": "A003-F1",
+        "kind": "expected_fact",
+        "dimension": "numerical_fidelity",
+        "scope": "answer",
+        "any_of": [
+          "71\\s*%"
+        ],
+        "description": "PASI 90 versus placebo",
+        "arm": {
+          "with": [
+            "tralvekimab"
+          ],
+          "against": [
+            "placebo"
+          ]
+        }
+      },
+      {
+        "id": "A003-F2",
+        "kind": "expected_fact",
+        "dimension": "numerical_fidelity",
+        "scope": "answer",
+        "any_of": [
+          "67\\s*%"
+        ],
+        "description": "PASI 90 with tralvekimab versus the active comparator",
+        "arm": {
+          "with": [
+            "tralvekimab"
+          ],
+          "against": [
+            "bremilumab"
+          ]
+        }
+      },
+      {
+        "id": "A003-F3",
+        "kind": "expected_fact",
+        "dimension": "numerical_fidelity",
+        "scope": "answer",
+        "any_of": [
+          "82\\s*%"
+        ],
+        "description": "week-104 durability"
+      },
+      {
+        "id": "A003-U1",
+        "kind": "required_uncertainty",
+        "dimension": "study_design",
+        "scope": "answer",
+        "any_of": [
+          "open-label",
+          "uncontrolled",
+          "as observed",
+          "612",
+          "discontinu"
+        ],
+        "description": "durability comes from an uncontrolled, as-observed extension"
+      },
+      {
+        "id": "A003-F4",
+        "kind": "expected_fact",
+        "dimension": "coverage",
+        "scope": "answer",
+        "any_of": [
+          "3\\.1\\s*per 100",
+          "serious adverse"
+        ],
+        "description": "serious adverse events"
+      },
+      {
+        "id": "A003-F5",
+        "kind": "expected_fact",
+        "dimension": "coverage",
+        "scope": "answer",
+        "any_of": [
+          "candidiasis"
+        ],
+        "description": "common adverse event"
+      },
+      {
+        "id": "A003-F6",
+        "kind": "expected_fact",
+        "dimension": "coverage",
+        "scope": "answer",
+        "any_of": [
+          "(two|2) years",
+          "week 16",
+          "84\\s*%",
+          "white"
+        ],
+        "description": "evidence limitations"
+      },
+      {
+        "id": "A003-X1",
+        "kind": "forbidden_claim",
+        "dimension": "causality_uncertainty",
+        "critical": true,
+        "scope": "claims",
+        "all_of": [
+          "cardiovascular",
+          "\\b(reduc|increas|protect|lower|rais|harm)"
+        ],
+        "unless_any_of": [
+          "\\bnot\\b",
+          "\\bno\\b",
+          "insufficient",
+          "cannot",
+          "unknown",
+          "powered",
+          "designed",
+          "two major",
+          "\\b2 major"
+        ],
+        "description": "a cardiovascular effect conclusion"
+      },
+      {
+        "id": "A003-X2",
+        "kind": "forbidden_claim",
+        "dimension": "numerical_fidelity",
+        "critical": true,
+        "scope": "claims",
+        "all_of": [
+          "\\b(three|five|3|5)[- ]years?\\b"
+        ],
+        "unless_any_of": [
+          "\\bno\\b",
+          "\\bnot\\b"
+        ],
+        "description": "durability claimed beyond the available follow-up"
+      },
+      {
+        "id": "A003-A1",
+        "kind": "required_abstention",
+        "dimension": "abstention",
+        "scope": "unanswered_or_answer",
+        "any_of": [
+          "cardiovascular"
+        ],
+        "description": "the cardiovascular effect cannot be determined"
+      }
+    ]
+  },
+  "references_sha256": "0cae5ef4a7e8987b6d099792e68e182a690846868ae1af50d547a72b21c7f3e8"
+}
