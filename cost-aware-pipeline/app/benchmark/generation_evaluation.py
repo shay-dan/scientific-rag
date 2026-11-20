@@ -11,6 +11,7 @@ import hashlib
 import json
 import math
 import re
+import secrets
 import time
 from collections import Counter
 from typing import Awaitable, Callable
@@ -975,24 +976,63 @@ def _post_repair_outcome(arm: dict) -> str:
     return str(arm.get("failure_kind") or "failed")
 
 
-def build_blind_scoring_packet(manifest: dict, records: list[dict]) -> tuple[dict, dict]:
+BLIND_KEY_SCHEMA = "scientific-rag-generation-eval-blind-key/v2"
+
+
+def create_blind_key(manifest: dict) -> dict:
+    """Private allocation, generated once before authorization; salt prevents brute force."""
+    validate_manifest(manifest)
+    ids = sorted(row["scenario_id"] for row in manifest["scenarios"])
+    allocation = ["v15"] * 10 + ["v16"] * 10
+    secrets.SystemRandom().shuffle(allocation)
+    return {"schema": BLIND_KEY_SCHEMA, "manifest_sha256": manifest["manifest_sha256"],
+            "nonce": secrets.token_hex(32),
+            "arms": [{"scenario_id": sid, "A": a, "B": "v16" if a == "v15" else "v15"}
+                     for sid, a in zip(ids, allocation)]}
+
+
+def validate_blind_key(manifest: dict, key: dict, commitment: str) -> dict:
+    validate_manifest(manifest)
+    if (not isinstance(key, dict) or set(key) != {"schema", "manifest_sha256", "nonce", "arms"}
+            or key.get("schema") != BLIND_KEY_SCHEMA
+            or key.get("manifest_sha256") != manifest["manifest_sha256"]
+            or not re.fullmatch(r"[0-9a-f]{64}", str(key.get("nonce", "")))
+            or not isinstance(key.get("arms"), list)
+            or not re.fullmatch(r"[0-9a-f]{64}", str(commitment))
+            or canonical_sha256(key) != commitment):
+        raise ValueError("invalid blind key or commitment")
+    ids = sorted(row["scenario_id"] for row in manifest["scenarios"])
+    rows = key["arms"]
+    if (len(rows) != len(ids)
+            or any(not isinstance(row, dict) or set(row) != {"scenario_id", "A", "B"}
+                   or {row["A"], row["B"]} != {"v15", "v16"} for row in rows)
+            or [row["scenario_id"] for row in rows] != ids
+            or sum(row["A"] == "v15" for row in rows) != 10):
+        raise ValueError("blind allocation must be complete, unique, ordered and balanced")
+    return key
+
+
+def build_blind_scoring_packet(manifest: dict, records: list[dict], *, key: dict,
+                               commitment: str) -> tuple[dict, dict]:
     """Return a private evidence/output packet and a separate arm-key document.
 
     Prompt versions never appear in the scoring packet.  The key must be withheld from
     the owner-side scorer until judgments are frozen.  Neither document is a public report.
     """
-    validate_manifest(manifest)
+    validate_blind_key(manifest, key, commitment)
     by_id = {record["scenario_id"]: record for record in records}
-    cases, keys = [], []
+    if len(by_id) != len(records) or set(by_id) != {row["scenario_id"] for row in manifest["scenarios"]}:
+        raise ValueError("blind packet requires exactly one attempted record per frozen scenario")
+    mapping = {row["scenario_id"]: row for row in key["arms"]}
+    cases = []
     for scenario in sorted(manifest["scenarios"], key=lambda item: item["scenario_id"]):
         record = by_id.get(scenario["scenario_id"])
         if record is None:
             raise ValueError(f"missing attempted record for {scenario['scenario_id']}")
         arms = _normalized_arms(record)
         scorable = pair_is_scorable(arms)
-        # Deterministic balancing without disclosing the version in the scoring packet.
-        a_version = "v15" if int(canonical_sha256(scenario["scenario_id"]), 16) % 2 == 0 else "v16"
-        b_version = "v16" if a_version == "v15" else "v15"
+        a_version = mapping[scenario["scenario_id"]]["A"]
+        b_version = mapping[scenario["scenario_id"]]["B"]
         cases.append({
             "scenario_id": scenario["scenario_id"], "question": scenario["question"],
             "evidence": _context_parts(scenario),
@@ -1005,11 +1045,8 @@ def build_blind_scoring_packet(manifest: dict, records: list[dict]) -> tuple[dic
             "scorable": scorable,
             "score_fields": sorted(SCORE_METRICS),
         })
-        keys.append({"scenario_id": scenario["scenario_id"], "A": a_version, "B": b_version})
     packet = {"schema": "scientific-rag-generation-eval-blind-scoring/v1",
               "manifest_sha256": manifest["manifest_sha256"], "cases": cases}
-    key = {"schema": "scientific-rag-generation-eval-blind-key/v1",
-           "manifest_sha256": manifest["manifest_sha256"], "arms": keys}
     return packet, key
 
 
@@ -1017,7 +1054,7 @@ def unblind_owner_scores(blind_scores: dict, key: dict) -> dict:
     """Translate frozen A/B owner scores using the separately held arm key."""
     if not isinstance(blind_scores, dict) or not isinstance(key, dict):
         raise ValueError("blind scores and arm key must be objects")
-    if key.get("schema") != "scientific-rag-generation-eval-blind-key/v1":
+    if key.get("schema") != BLIND_KEY_SCHEMA:
         raise ValueError("unrecognized blind arm key schema")
     mappings = {row["scenario_id"]: row for row in key.get("arms", [])}
     if set(blind_scores) - set(mappings):
@@ -1050,6 +1087,6 @@ __all__ = [
     "FAILURE_DECISION_TABLE", "RESERVATION_FRAMING_TOKENS", "generation_settings", "outcome_dimensions",
     "reservation_input_tokens", "AuthorizationError", "EvaluationStopped", "ManifestError",
     "ResumeIntegrityError", "SCORABLE_ARM_STATUSES", "pair_is_scorable", "schema_bytes",
-    "build_blind_scoring_packet", "build_public_report", "canonical_sha256", "check_paid_authorization", "dry_run", "evaluate_pair",
+    "create_blind_key", "validate_blind_key", "build_blind_scoring_packet", "build_public_report", "canonical_sha256", "check_paid_authorization", "dry_run", "evaluate_pair",
     "manifest_hash", "question_context_hash", "run_paid_evaluation", "unblind_owner_scores", "validate_config", "validate_manifest",
 ]

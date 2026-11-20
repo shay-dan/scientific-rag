@@ -58,6 +58,7 @@ from .generation_evaluation import (
     schema_bytes,
     validate_config,
     validate_manifest,
+    validate_blind_key,
 )
 from .production_verifier_replay import BudgetLedger
 
@@ -817,6 +818,7 @@ async def run_incremental_evaluation(
     wait_for_token_reset: bool = False,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     program_ledger: "programs.ProgramLedgerStore | None" = None,
+    blind_key: dict | None = None,
 ) -> dict:
     """Run up to ``pairs`` unexecuted pairs (see ``_run_incremental_evaluation``).
 
@@ -830,6 +832,11 @@ async def run_incremental_evaluation(
     if (gateway is None or gateway is llm_gateway.ainvoke_structured) and not (v2 and program_ledger is not None):
         raise AuthorizationError("real-provider execution requires a v2 config and the program ledger "
                                  "(cumulative accounting)")
+    if gateway is None or gateway is llm_gateway.ainvoke_structured:
+        try:
+            validate_blind_key(manifest, blind_key, (authorization or {}).get("blind_key_sha256"))
+        except ValueError as error:
+            raise AuthorizationError("real-provider execution requires the precommitted private blind allocation") from error
     arguments = dict(authorization=authorization, checkpoint_store=checkpoint_store, pairs=pairs, gateway=gateway,
                      resume_after_rate_limit=resume_after_rate_limit, provenance_resolver=provenance_resolver,
                      clock=clock, wait_for_token_reset=wait_for_token_reset, sleep=sleep,

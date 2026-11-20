@@ -1,6 +1,6 @@
 # Scientific RAG — engineering roadmap
 
-**Status:** authoritative planning document. Last updated 2026-11-20 (R7D-C generation reliability and cumulative accounting complete; R7D-D live configuration acceptance harness in review).
+**Status:** authoritative planning document. Last updated 2026-11-20 (R7D-D complete; R7D-E final benchmark readiness in review).
 **Origin:** owner-approved *Master Implementation Plan*, which consolidated an independent
 audit, a reconciled R0–R13 roadmap, a discovery/evidence-acquisition addendum, and the
 historical engineering handover. Changes to this file require owner approval and an entry
@@ -32,7 +32,7 @@ Operating rules for agents are in [`AGENTS.md`](../AGENTS.md). History, complete
 | R4 | Evaluation integrity and reproducibility | **complete** (PR #11, `359e02c`) | R0 |
 | R5 | Offline semantic-verifier evaluation harness | **complete** (PR #12, `b21bc37`) | R0 |
 | R6 | Human-reviewed evidence packs and labels | R6A **complete** (PR #13, `60b394a`); R6B **complete** (PR #14, `e6bf0ee`); R6C **complete** (PR #15, `693b7a5`); R6D **complete** (PR #16, `5328573`) | R4, R5; R3 preferred |
-| R7 | Deterministic claim checks, graceful degradation | R7A **complete** (PR #17, `d638e15`); R7B **complete** (PR #18, `45f85a9`); R7C **complete** (PR #19, `23560a7`); R7D-A **complete** (PR #20, `6710fc4`); R7D route hotfix **complete** (PR #21, `14938d9`); R7D-B incremental execution **complete** (PR #23, `3923a12`); R7D-B execution-safety correction **complete** (PR #24, `796e0d2`); R7D-C generation reliability and cumulative accounting **complete** (PR #25, `e025a3d`); R7D-D live configuration acceptance harness **in review** (no live calls) | R5, R6 |
+| R7 | Deterministic claim checks, graceful degradation | R7A **complete** (PR #17, `d638e15`); R7B **complete** (PR #18, `45f85a9`); R7C **complete** (PR #19, `23560a7`); R7D-A **complete** (PR #20, `6710fc4`); R7D route hotfix **complete** (PR #21, `14938d9`); R7D-B incremental execution **complete** (PR #23, `3923a12`); R7D-B execution-safety correction **complete** (PR #24, `796e0d2`); R7D-C generation reliability and cumulative accounting **complete** (PR #25, `e025a3d`); R7D-D live configuration acceptance **complete** (PR #26, `ff0d65b`); R7D-E final benchmark readiness **in review** | R5, R6 |
 | R9-D | Discovery candidate pool, ranking, backfilling | not started | R6 pilot, R2 |
 | R9-P | PMC scientific-content extraction | conditional | R6 fixtures; R7 preferred |
 | R8 | Semantic-verifier calibration and release decision | not started | R3, R5, R6, R7 |
@@ -895,7 +895,7 @@ R7 is split into separately authorized stages in this order:
      synthetic cases × v15/v16 × low reasoning at 2,000 and 3,000 tokens; 12 initial
      generations, at most 12 repairs and 2 repair-schema checks, at most 26 requests.
 
-   **R7D-D — live configuration acceptance harness (in review; no live call).** Contract
+   **R7D-D — live configuration acceptance (complete; PR #26, `ff0d65b`).** Contract
    and Windows runbook:
    [r7d-d-acceptance.md](../cost-aware-pipeline/docs/r7d-d-acceptance.md).
    - Matrix: Groq `openai/gpt-oss-120b`, temperature 0, low reasoning, A = 2,000 and
@@ -1198,3 +1198,14 @@ load evidence; large synthetic evaluation sets presented as gold data.
 | 2026-11-11 | Adopt the "Stage implementation and roadmap synchronization" workflow (`AGENTS.md`): each stage PR carries its own roadmap updates; a stage is `in review` while its PR is open and `complete` after merge plus green CI/Security on `main`; completion details are recorded in the next authorized stage PR; no separate docs-only PRs; every stage and merge needs separate owner approval. | Owner instruction with the R3 authorization. |
 | 2026-11-11 | R3 review: narrow the verifier guard to claims or quotes that overlap isolated instruction text, and remove that text from the verifier's view; bump `PIPELINE_VERSION` to v15 (owner-approved). | Reproduced by failing tests (`c326f0d`, `50f70ee`): clean claims beside an injection were downgraded, injected text reached the verifier, and pre-R3 answers were reused. |
 | 2026-11-11 | R3: frame untrusted content in delimited, nonce-tagged blocks and add two deterministic output guards (instruction-like quotes rejected; verifier `supported` downgraded for flagged evidence), with no new agent, dependency, migration or API change. | Reproduced injection paths with attacker-compliant fakes; smallest fix that limits damage regardless of model behavior. |
+
+
+### R7D-E — final benchmark readiness (in review)
+
+PR #26 post-merge CI and Security green at `ff0d65b`: 1,055 tests (997 passed, 58 skipped), integration 57/57, legacy 13/13. Owner live acceptance: 14/14 operations, 20 requests, estimated $0.0119451, no uncertain spend, execution stop, provider generation or completion-budget failure. Initial parse 12/12, initial validity 6/12, final validity 9/12; conditional repair 3/6 and dedicated repair parsing 2/2. A: 5/6 final, 41/58 predicates; B: 4/6 final, 31/58 predicates. Three synthetic cases do not establish superiority. Owner approved A for the paired benchmark: Groq openai/gpt-oss-120b, low reasoning, 2000 completion tokens, temperature zero, strict recovery, audit and semantic verification off, one bounded repair, no retries/fallback, score explicit completion exhaustion as failure. Production defaults unchanged.
+
+Acceptance ledger closed by owner: checkpoint `22bdd94d6fca0fd8affbfbdebf06ef942746849e50f74fae98ed52954a97edaa`, closed baseline `9edf3e366ce5aa86846f18c8d527a23bd7873c3c56bd4028a90ed227b49f113d`. Separate from the scientific benchmark program. Historical scientific pilot consumption 4 calls, $0.0019017 measured estimate + $0.003552 uncertain = $0.0054537 reserved/charged, leaving 76 calls/$1.4945463 of 80/$1.50. Import both actual checkpoints offline; do not substitute estimates for ledger reconciliation. Full benchmark worst case 80 new calls exceeds remaining allowance by four; no ceiling change authorized.
+
+Decision: freeze private salted balanced scoring allocation before authorization, validate commitment on execution and export, freeze blind scores before revealing identities. Follow [operator instructions](../cost-aware-pipeline/docs/r7d-e-benchmark-readiness.md). Existing checkpoint retains initial output, validation errors, repair batch, audit/failure, final output, usage and call traces; exact evidence is frozen separately. No additional production recovery behavior in this PR.
+
+Retrospective policies: v15 only, v16 only, v15 then v16 after failed repair, v16 then v15 after failed repair (paired counterfactuals, not executed sequential fallback), deterministic source-anchored Unicode correction, conservative bounded ellipsis reconstruction, existing claim-level recovery, combined cascades. Preserve exact source substring/identity, numbers, polarity and scientific meaning; ambiguous matching fails closed. Acceptance operation 11 and 13 repeated U+2011 in S5; operation 12 repeated discontinuous ellipsis in S3. Compare structural validity, scientific quality, cost and latency separately. Next live work: complete 20-pair benchmark, then early five-question end-to-end smoke test. No live requests authorized or performed by this PR. New tests are pending GitHub CI; do not mark complete before merge and post-merge checks.
