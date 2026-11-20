@@ -213,7 +213,10 @@ def reporting_records(manifest, config, checkpoint):
         raise ValueError("invalid report scenario identities")
     incomplete = len(records) != len(ids) or any(len(r["arms"]) < 2 for r in records)
     ex = checkpoint["execution"]
-    if incomplete and (not ex.get("stopped") or ex.get("stop_code") == "rate_limit"):
+    context = ex.get("stop_context") or {}
+    terminal = bool(ex.get("stopped")) and (
+        ex.get("stop_code") != "rate_limit" or context.get("kind") == "provider_rate_limit")
+    if incomplete and not terminal:
         raise ValueError("partial export requires a terminal stop, not an unfinished or resumable run")
     return [copy.deepcopy(by_id[s["scenario_id"]]) if s["scenario_id"] in by_id
             else _not_executed_pair(s, config, i, "not attempted before terminal execution stop")

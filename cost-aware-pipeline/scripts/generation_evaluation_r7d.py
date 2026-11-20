@@ -273,8 +273,15 @@ def _report_inputs(args, payload):
         raise ValueError("checkpoint has pending work")
     key = _read_blind_key(args.private_key)
     validate_blind_key(manifest, key, authorization.get("blind_key_sha256"))
-    records = (reporting_records(manifest, config, payload)
-               if getattr(args, "allow_partial", False) else payload["records"])
+    if getattr(args, "allow_partial", False):
+        records = reporting_records(manifest, config, payload)
+    else:
+        records = payload["records"]
+        if "continuation" in payload:
+            # A live successor may not be scored while it has merely paused.
+            reporting_records(manifest, config, payload)
+            if any(len(r["arms"]) < 2 for r in records) or len(records) != len(manifest["scenarios"]):
+                raise ValueError("incomplete successor report requires --allow-partial")
     return manifest, authorization, key, records
 
 
