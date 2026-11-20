@@ -1,6 +1,6 @@
 # Scientific RAG — engineering roadmap
 
-**Status:** authoritative planning document. Last updated 2026-11-18 (R7D-B execution-safety correction complete; R7D-C generation reliability and cumulative accounting in review).
+**Status:** authoritative planning document. Last updated 2026-11-20 (R7D-C generation reliability and cumulative accounting complete; R7D-D live configuration acceptance harness in review).
 **Origin:** owner-approved *Master Implementation Plan*, which consolidated an independent
 audit, a reconciled R0–R13 roadmap, a discovery/evidence-acquisition addendum, and the
 historical engineering handover. Changes to this file require owner approval and an entry
@@ -32,7 +32,7 @@ Operating rules for agents are in [`AGENTS.md`](../AGENTS.md). History, complete
 | R4 | Evaluation integrity and reproducibility | **complete** (PR #11, `359e02c`) | R0 |
 | R5 | Offline semantic-verifier evaluation harness | **complete** (PR #12, `b21bc37`) | R0 |
 | R6 | Human-reviewed evidence packs and labels | R6A **complete** (PR #13, `60b394a`); R6B **complete** (PR #14, `e6bf0ee`); R6C **complete** (PR #15, `693b7a5`); R6D **complete** (PR #16, `5328573`) | R4, R5; R3 preferred |
-| R7 | Deterministic claim checks, graceful degradation | R7A **complete** (PR #17, `d638e15`); R7B **complete** (PR #18, `45f85a9`); R7C **complete** (PR #19, `23560a7`); R7D-A **complete** (PR #20, `6710fc4`); R7D route hotfix **complete** (PR #21, `14938d9`); R7D-B incremental execution **complete** (PR #23, `3923a12`); R7D-B execution-safety correction **complete** (PR #24, `796e0d2`); R7D-C generation reliability and cumulative accounting **in review** (no live calls) | R5, R6 |
+| R7 | Deterministic claim checks, graceful degradation | R7A **complete** (PR #17, `d638e15`); R7B **complete** (PR #18, `45f85a9`); R7C **complete** (PR #19, `23560a7`); R7D-A **complete** (PR #20, `6710fc4`); R7D route hotfix **complete** (PR #21, `14938d9`); R7D-B incremental execution **complete** (PR #23, `3923a12`); R7D-B execution-safety correction **complete** (PR #24, `796e0d2`); R7D-C generation reliability and cumulative accounting **complete** (PR #25, `e025a3d`); R7D-D live configuration acceptance harness **in review** (no live calls) | R5, R6 |
 | R9-D | Discovery candidate pool, ranking, backfilling | not started | R6 pilot, R2 |
 | R9-P | PMC scientific-content extraction | conditional | R6 fixtures; R7 preferred |
 | R8 | Semantic-verifier calibration and release decision | not started | R3, R5, R6, R7 |
@@ -718,7 +718,9 @@ checkpoint/resume extension is complete (PR #23, `3923a12`); the execution-safet
 correction (checkpoint v2) is complete (PR #24, `796e0d2`). Owner-run production pilot:
 D001 completed, D002 stopped on a confirmed completion-budget truncation (4 benchmark
 requests in total). R7D-C (reasoning configuration, typed provider failures, cumulative
-program accounting) is in review.
+program accounting) is complete (PR #25, `e025a3d`). R7D-D (a synthetic live
+configuration acceptance harness, low reasoning at 2,000 vs 3,000 completion tokens) is in
+review; its live run needs separate authorization.
 **Priority:** high.
 Independent of R9-D.
 
@@ -826,8 +828,12 @@ R7 is split into separately authorized stages in this order:
        supplied for independent recomputation.
      - It is too small to select a configuration. Low/3,000 is a candidate, not a result.
 
-   **R7D-C — generation reliability, typed failures and cumulative accounting (in
-   review).** Contract:
+   **R7D-C — generation reliability, typed failures and cumulative accounting
+   (complete: PR #25, merge `e025a3d36350edfaedb38988993c5f96f593a647`).** Post-merge CI
+   and Security on `main`: 1,011 tests (0 failures, 58 skipped), 57/57
+   PostgreSQL/pgvector and Redis integration, historical prototype 13/13, image provenance
+   `e025a3d`, migrations, `/healthz`, Security green. No live calls were made; the program
+   ledger was not initialized. Contract:
    [generation-reliability-r7d-c.md](../cost-aware-pipeline/docs/generation-reliability-r7d-c.md).
    - Config v2 binds `reasoning_effort` and a predeclared completion-budget policy (v1
      commitments unchanged). The gateway carries `reasoning_effort` only on supported Groq
@@ -888,6 +894,33 @@ R7 is split into separately authorized stages in this order:
    - **Revised live acceptance proposal** (separate PR, not authorized): 3 challenging
      synthetic cases × v15/v16 × low reasoning at 2,000 and 3,000 tokens; 12 initial
      generations, at most 12 repairs and 2 repair-schema checks, at most 26 requests.
+
+   **R7D-D — live configuration acceptance harness (in review; no live call).** Contract
+   and Windows runbook:
+   [r7d-d-acceptance.md](../cost-aware-pipeline/docs/r7d-d-acceptance.md).
+   - Matrix: Groq `openai/gpt-oss-120b`, temperature 0, low reasoning, A = 2,000 and
+     B = 3,000 completion tokens, v15 and v16, identical evidence, the original strict
+     schemas, semantic verification off, at most one repair, no retries or fallback. Each
+     arm uses a config v2 contract.
+   - Dataset: three fictional, synthetic scenarios (numeric fidelity and attribution;
+     study design; complex synthesis and coverage) with deterministic predicates kept in a
+     separate references file. These are synthetic acceptance references, not gold labels.
+     They are never read by the runner or placed in a prompt.
+   - Schedule: 14 frozen, balanced operations: 12 initial generations, up to 12 repairs,
+     and 2 dedicated repairs from invalid fixtures that are independent of natural
+     failures. At most 26 physical requests; no automatic repeats.
+   - Reuse: `_evaluate_arm`, `GuardedExecution` (extracted unchanged from the benchmark
+     runner), `AtomicCheckpoint` and the program ledger. A separate acceptance ledger
+     (`r7d-d-acceptance`, 26 requests, proposed $0.15) is used; the scientific benchmark
+     ledger is not initialized or modified, and the benchmark's 80-call/$1.50 ceilings are
+     unchanged.
+   - Live execution requires an exact authorization binding the code SHA, dataset, config,
+     schedule, plan and selection-rule hashes, provider/model, reasoning, limits, request
+     and spending ceilings, the failure policy and the acceptance ledger baseline.
+   - Predeclared selection rules (`r7d-d-selection/v1`): prefer 2,000 unless 3,000 shows
+     a meaningful advantage; no statistical superiority is claimed.
+   - Limitations: three synthetic cases, regex predicates, one balanced execution;
+     estimates and reservations are not charges or guaranteed bounds.
 
 R7A never converts zero surviving claims to `insufficient_evidence`; that outcome
 remains reserved for the independent evidence-sufficiency gate. R7A merged in PR #17 as
@@ -1079,6 +1112,7 @@ load evidence; large synthetic evaluation sets presented as gold data.
 
 | Date | Decision | Evidence / reason |
 |---|---|---|
+| 2026-11-20 | Mark R7D-C complete (PR #25, `e025a3d`); put R7D-D in review. Add a synthetic live configuration acceptance harness (low reasoning, 2,000 vs 3,000 completion tokens, v15/v16, 3 fictional scenarios, at most 26 requests) with a separate acceptance program ledger, exact authorization binding and predeclared selection rules. Extract the benchmark runner's guarded execution into a shared class without behaviour change. | PR #25 post-merge evidence: 1,011 tests (0 failures, 58 skipped), 57/57 integration, legacy 13/13, provenance, migrations, `/healthz`, Security green. The frozen R7D benchmark, its references, prompts, answer schemas, production defaults and the 80-call/$1.50 ceilings are unchanged; no live call is made in this stage. |
 | 2026-11-18 | Mark R7D-B execution-safety correction complete (PR #24, `796e0d2`); put R7D-C in review. Bind reasoning effort and a predeclared completion-budget policy in config v2. Classify provider failures by status, error code and one narrow truncation check, with sanitized diagnostics. Score confirmed truncation only under the predeclared policy, keeping its reservation. Carry cumulative benchmark-program accounting in a private ledger so a fresh checkpoint cannot reset the ceilings. Refuse the one-shot `paid-run`. | D002 truncation and the external carry-forward accounting were observed in owner runs. PR #24 post-merge evidence: 926 tests (0 failures, 58 skipped), 57/57 integration, legacy 13/13, provenance, migrations, `/healthz`, Security green. Prompts, answer schemas, validators, retrieval, production defaults and the 80-call/$1.50 ceilings are unchanged; per-campaign recovery and the live acceptance harness are deferred. |
 | 2026-11-18 | Mark R7D-B incremental execution complete (PR #23, `3923a12`); put the R7D-B execution-safety correction in review. Pre-transmission stops never become model failures; a pending repair is durable and resumes only the untransmitted operation after fingerprint verification; per-minute admission uses a provider-calibrated estimate (never called an upper bound) separate from the unchanged cost ledger; an opt-in wait covers only short known token resets; provider/network/billing interruptions are excluded from paired scoring; initial and post-repair outcomes are reported separately. Post-call safety stops outrank model-output classification; any provider/network failure stops execution; interrupted pairs never count as completed. Checkpoint v2 refuses v1 files unchanged. | Independent takeover review reproduced both defects on `3923a12`. Post-merge evidence for PR #23: 880 tests (0 failures, 58 skipped), 57/57 integration, legacy 13/13, provenance, migrations, `/healthz`, Security green. Frozen manifest, prompts, order, schemas, one-repair maximum, Groq-only route and $1.50/80-call limits unchanged; new authorization and zero-call preflight required after merge. |
 | 2026-11-16 | Put the minimal R7D-B Free-tier incremental execution extension in review. Keep the frozen 20-case manifest and generation/scoring contracts unchanged; add only opt-in atomic private checkpoints, cumulative ledger restoration, frozen-index pair staging, single-campaign locking, provider rate-header capture, and fail-closed resume. Do not call a provider before merge and a new merge-SHA-bound config, authorization, and zero-call dry run. | The accepted one-shot runner persisted only after the full invocation, so interruption could lose completed billable work. The incremental contract writes before and after every attempt, refuses unresolved attempts rather than duplicating them, and preserves the 80-call / $1.50 campaign ceilings across sessions. Rollback is to omit `incremental-run` or revert the PR; no migration, API, prompt, cache, or default-route change. |
