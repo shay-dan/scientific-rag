@@ -69,6 +69,7 @@ def effective_pipeline_version(
     claim_recovery_mode: str = "strict",
     *,
     generation_prompt_version: str = "v15",
+    quote_recovery_mode: str = "off",
 ) -> str:
     """Separate cache identities per verification mode; historical records keep their stored version."""
     if semantic_verification_mode == "off":
@@ -82,9 +83,13 @@ def effective_pipeline_version(
     elif claim_recovery_mode != "strict":
         raise ValueError(f"Unsupported claim recovery mode: {claim_recovery_mode}")
     if generation_prompt_version == "v16":
-        return f"{version}-genprompt-v16"
-    if generation_prompt_version != "v15":
+        version = f"{version}-genprompt-v16"
+    elif generation_prompt_version != "v15":
         raise ValueError(f"Unsupported generation prompt version: {generation_prompt_version}")
+    from .quote_recovery import validate_quote_recovery_mode
+    validate_quote_recovery_mode(quote_recovery_mode, semantic_verification_mode)
+    if quote_recovery_mode != "off":
+        version = f"{version}-quote-recovery-{quote_recovery_mode}-v1"
     return version
 
 
@@ -166,7 +171,8 @@ class ResearchService:
                   semantic_verification_mode: str | None = None,
                   claim_recovery_mode: str | None = None,
                   claim_audit_mode: str | None = None,
-                  generation_prompt_version: str | None = None) -> dict:
+                  generation_prompt_version: str | None = None,
+                  quote_recovery_mode: str | None = None) -> dict:
         verification_mode = semantic_verification_mode or getattr(
             getattr(self, "settings", None), "semantic_claim_verification_mode", "off"
         )
@@ -179,6 +185,9 @@ class ResearchService:
         prompt_version = generation_prompt_version or getattr(
             getattr(self, "settings", None), "generation_prompt_version", "v15"
         )
+        quote_mode = quote_recovery_mode or getattr(
+            getattr(self, "settings", None), "quote_recovery_mode", "off"
+        )
         metadata = {
             "policy": "provider-agnostic Groq -> OpenRouter -> Gemini gateway",
             "mode": mode.value,
@@ -186,7 +195,8 @@ class ResearchService:
             "estimated_max_generation_calls": estimated_generation_calls(budget, verification_mode),
             "cache_hit": False,
             "retrieval_version": effective_pipeline_version(
-                verification_mode, recovery_mode, generation_prompt_version=prompt_version
+                verification_mode, recovery_mode, generation_prompt_version=prompt_version,
+                quote_recovery_mode=quote_mode,
             ),
             "semantic_claim_verification_mode": verification_mode,
             "progress": {"stage": stage, "role": role, "model": self._model_for_role(role)},
@@ -199,6 +209,8 @@ class ResearchService:
             metadata["claim_audit_mode"] = audit_mode
         if prompt_version != "v15":
             metadata["generation_prompt_version"] = prompt_version
+        if quote_mode != "off":
+            metadata["quote_recovery_mode"] = quote_mode
         return metadata
 
     async def _find_cached(self, session: AsyncSession, question: str, actor: str, mode: ResearchMode,
@@ -215,7 +227,8 @@ class ResearchService:
             getattr(self, "settings", None), "generation_prompt_version", "v15"
         )
         version = effective_pipeline_version(
-            verification_mode, recovery_mode, generation_prompt_version=prompt_version
+            verification_mode, recovery_mode, generation_prompt_version=prompt_version,
+            quote_recovery_mode=getattr(getattr(self, "settings", None), "quote_recovery_mode", "off"),
         )
         return (
             await session.execute(
@@ -308,7 +321,8 @@ class ResearchService:
             getattr(self, "settings", None), "generation_prompt_version", "v15"
         )
         version = effective_pipeline_version(
-            semantic_mode, recovery_mode, generation_prompt_version=prompt_version
+            semantic_mode, recovery_mode, generation_prompt_version=prompt_version,
+            quote_recovery_mode=getattr(getattr(self, "settings", None), "quote_recovery_mode", "off"),
         )
         # Serialize identical submissions (same caller, mode, pipeline version, question).
         await acquire_identity_lock(session, actor, mode.value, version, question)
@@ -426,6 +440,7 @@ class ResearchService:
                 stored_semantic_mode,
                 stored_recovery_mode,
                 generation_prompt_version=stored_prompt_version,
+                quote_recovery_mode=str((record.model_metadata or {}).get("quote_recovery_mode") or "off"),
             )
             lease = LeaseKeeper(
                 session_factory, run_id, attempt,
@@ -582,8 +597,11 @@ class ResearchService:
             (record.model_metadata or {}).get("generation_prompt_version")
             or "v15"
         )
+        # Historic queued/direct records without the mode remain off, independently of worker settings.
+        quote_mode = str((record.model_metadata or {}).get("quote_recovery_mode") or "off")
         version = effective_pipeline_version(
-            semantic_mode, recovery_mode, generation_prompt_version=prompt_version
+            semantic_mode, recovery_mode, generation_prompt_version=prompt_version,
+            quote_recovery_mode=quote_mode,
         )
         trace_token = begin_trace(self.redis)
         trace_closed = False
@@ -615,6 +633,7 @@ class ResearchService:
                     claim_audit_mode=audit_mode,
                     generation_prompt_version=prompt_version,
                     semantic_verification_timeout_seconds=120,
+                    **({"quote_recovery_mode": quote_mode} if quote_mode != "off" else {}),
                 )
                 orchestrator = legacy_pipeline.Orchestrator(
                     vector_service,
@@ -667,6 +686,7 @@ class ResearchService:
                 claim_recovery_mode=recovery_mode,
                 claim_audit_mode=audit_mode,
                 generation_prompt_version=prompt_version,
+                quote_recovery_mode=quote_mode,
             )
             metadata["retrieval_version"] = version
             metadata["llm_gateway"] = summarize_trace(end_trace(trace_token))
@@ -756,6 +776,10 @@ class ResearchService:
                     ],
                     "downstream_failure_kind": type(error).__name__,
                 }
+            if research_agent is not None and getattr(research_agent, "last_quote_recovery_audit", None):
+                validation = dict(metadata.get("claim_validation") or {"status": "failed"})
+                validation["quote_recovery"] = dict(research_agent.last_quote_recovery_audit)
+                metadata["claim_validation"] = validation
             metadata["progress"] = {"stage": "Research failed", "role": None, "model": None}
             if orchestrator is not None:
                 metadata["source_diagnostics"] = getattr(orchestrator, "last_source_diagnostics", {})
