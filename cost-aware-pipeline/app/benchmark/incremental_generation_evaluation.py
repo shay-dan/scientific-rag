@@ -595,6 +595,214 @@ def _arm_usage(attempts: list[dict]) -> dict:
     }
 
 
+class GuardedExecution:
+    """Pre-transmission safety, one bounded transmission and settlement (R7D-B/C, shared).
+
+    Used by the benchmark runner and by the R7D-D acceptance runner, so both apply exactly the
+    same admission, reservation, ledger-mark, stop-precedence and settlement rules. ``state``
+    must be checkpoint-shaped (``execution`` calls/budget/rate-limit/stop fields,
+    ``active_arm`` and ``active_attempt``) and is mutated in place.
+    """
+
+    def __init__(self, *, checkpoint: dict, checkpoint_store: AtomicCheckpoint, ledger: BudgetLedger,
+                 config: dict, v2: bool, mark: Callable[[dict], None], clock: Callable[[], float],
+                 sleep: Callable[[float], Awaitable[None]], wait_for_token_reset: bool,
+                 reset_continuation_authorized: bool, stage: dict, gateway: Gateway) -> None:
+        self.checkpoint, self.checkpoint_store, self.ledger = checkpoint, checkpoint_store, ledger
+        self.config, self.v2, self.mark, self.clock, self.sleep = config, v2, mark, clock, sleep
+        self.wait_for_token_reset = wait_for_token_reset
+        self.reset_continuation_authorized = reset_continuation_authorized
+        self.stage, self.gateway = stage, gateway
+
+    def record_stop(self, code: str | None, reason: str | None, context: dict | None = None) -> None:
+        self.checkpoint["execution"]["stop_code"] = code
+        self.checkpoint["execution"]["stopped"] = reason
+        self.checkpoint["execution"]["stop_context"] = context
+
+    async def metered(self, role, temperature, prompt, schema, *, max_output_tokens, **settings):
+        from scientific_rag import llm_gateway   # resolved at call time (tests patch its trace hooks)
+        from scientific_rag.costing import calculate_cost
+        schema_name = getattr(schema, "__name__", str(schema))
+        phase = "initial" if schema_name == "StructuredEvidenceAnswerV2" else "repair"
+        prompt_bytes = len(prompt.encode("utf-8"))
+        estimate = admission_estimate(self.checkpoint["execution"]["calls"], prompt_bytes=prompt_bytes,
+                                      schema_name=schema_name, schema_size=schema_bytes(schema),
+                                      max_output_tokens=max_output_tokens)
+        now = _clock_now(self.clock)
+        refusal = _capacity_check(self.checkpoint, estimate, now=now, allow_elapsed_reset=self.reset_continuation_authorized)
+        continuation_kind = "operator_resume_after_reset" if self.reset_continuation_authorized else None
+        if refusal and self.wait_for_token_reset:
+            delay = _short_token_wait(self.checkpoint, refusal, estimate, now)
+            if delay is not None:
+                # Durable before waiting: a restart here needs the normal verified continuation.
+                self.record_stop("rate_limit", refusal["reason"], {
+                    "kind": "preflight_capacity", "blocked_dimensions": refusal["blocked"],
+                    "observed_at_unix": now, "phase": phase, "waiting_until_unix": now + delay,
+                    "admission": estimate})
+                self.checkpoint = self.checkpoint_store.write(self.checkpoint)
+                await self.sleep(delay)
+                now = _clock_now(self.clock)
+                self.record_stop(None, None, None)
+                self.checkpoint = self.checkpoint_store.write(self.checkpoint)
+                refusal = _capacity_check(self.checkpoint, estimate, now=now, allow_elapsed_reset=True)
+                continuation_kind = "in_process_token_reset_wait"
+        if refusal:
+            resumable = refusal["code"] == "rate_limit"
+            self.record_stop(refusal["code"], refusal["reason"], {
+                "kind": "preflight_capacity", "blocked_dimensions": refusal["blocked"],
+                "observed_at_unix": now, "phase": phase, "admission": estimate})
+            self.checkpoint_store.write(self.checkpoint)
+            raise EvaluationStopped(refusal["reason"], code=refusal["code"], resumable=resumable)
+        if continuation_kind is not None:
+            self.checkpoint["execution"]["rate_limit_continuations"].append({
+                "kind": continuation_kind,
+                "authorized_at_unix": now,
+                "stage_number": self.stage["stage_number"],
+                "next_scenario_index": self.checkpoint["active_arm"]["scenario_index"],
+                "next_prompt_version": self.checkpoint["active_arm"]["prompt_version"],
+                "next_phase": phase,
+            })
+            self.reset_continuation_authorized = False
+            self.checkpoint = self.checkpoint_store.write(self.checkpoint)
+        reservation_input = reservation_input_tokens(self.config, prompt_bytes, schema)
+        if reservation_input > self.config["max_input_tokens"]:
+            reason = "conservative input-token ceiling reached before the call"
+            self.record_stop("input_ceiling", reason)
+            self.checkpoint_store.write(self.checkpoint)
+            raise EvaluationStopped(reason, code="input_ceiling")
+        reserved, _ = calculate_cost(self.config["provider"], self.config["model"], reservation_input, max_output_tokens)
+        if reserved is None or not self.ledger.reserve(reserved):
+            reason = "authorized call or cost ceiling reached before the call"
+            self.record_stop("budget", reason)
+            self.checkpoint_store.write(self.checkpoint)
+            raise EvaluationStopped(reason, code="budget")
+        prompt_sha256 = canonical_sha256(prompt)
+        self.checkpoint["execution"]["budget"] = self.ledger.snapshot()
+        self.checkpoint["active_attempt"] = {
+            "scenario_id": self.checkpoint["active_arm"]["scenario_id"],
+            "scenario_index": self.checkpoint["active_arm"]["scenario_index"],
+            "prompt_version": self.checkpoint["active_arm"]["prompt_version"],
+            "phase": phase,
+            "prompt_sha256": prompt_sha256,
+            "reserved_cost_usd": reserved,
+            "state": "reserved",
+        }
+        self.checkpoint = self.checkpoint_store.write(self.checkpoint)
+        try:
+            self.mark(self.checkpoint)   # the ledger must cover this in-flight reservation before anything is sent
+        except Exception as error:
+            # Nothing was transmitted: release the reservation and stop (terminal, no retry). If
+            # this state cannot be persisted, the durable reserved attempt stays unresolved.
+            self.ledger.release(reserved)
+            self.checkpoint["execution"]["budget"] = self.ledger.snapshot()
+            self.checkpoint["active_attempt"] = None
+            reason = "the pre-transmission ledger mark could not be recorded; nothing was sent"
+            self.record_stop("ledger_mark_failed", reason, {"kind": "ledger_persistence", "phase": "pre_transmission",
+                                                       "error_type": type(error).__name__})
+            self.checkpoint = self.checkpoint_store.write(self.checkpoint)
+            raise EvaluationStopped(reason, code="ledger_mark_failed") from error
+        token = llm_gateway.begin_trace(capture_rate_limits=True)
+        started = time.perf_counter()
+        result = None
+        error: BaseException | None = None
+        try:
+            result = await self.gateway(role, temperature, prompt, schema, max_output_tokens=max_output_tokens, **settings)
+        except BaseException as caught:
+            error = caught
+        finally:
+            summary = llm_gateway.summarize_trace(llm_gateway.end_trace(token))
+            usage = _usage_from_trace(summary, reserved)
+            failure = pf.describe_provider_failure(error, schema) if isinstance(error, Exception) else None
+            local_failure = failure is not None and failure["failure_class"] == pf.LOCAL_STRUCTURED_OUTPUT_FAILURE
+            # Predeclared policy (v2): explicit completion-budget exhaustion is a scored model
+            # outcome. Its reservation stays charged when usage is unknown; it is never re-sent.
+            scored_budget_failure = (failure is not None
+                                     and failure["failure_class"] == pf.COMPLETION_BUDGET_EXHAUSTED
+                                     and _scores_completion_budget_failures(self.config))
+            if failure is not None:
+                usage["provider_failure"] = failure
+            usage["latency_ms"] = round((time.perf_counter() - started) * 1000, 1)
+            usage["rate_limit_headers"] = _rate_headers(summary)
+            usage["rate_limit_observed_at_unix"] = _clock_now(self.clock)
+            usage["phase"] = phase
+            usage["schema"] = schema_name
+            usage["prompt_sha256"] = prompt_sha256
+            usage["prompt_bytes"] = prompt_bytes
+            usage["request_bytes"] = estimate["request_bytes"]
+            usage["reservation_input_tokens"] = reservation_input
+            usage["admission"] = estimate
+            usage.update(_reported_reasoning(summary))
+            usage["scenario_id"] = self.checkpoint["active_arm"]["scenario_id"]
+            usage["prompt_version"] = self.checkpoint["active_arm"]["prompt_version"]
+            self.ledger.settle(reserved, usage)
+            self.checkpoint["execution"]["budget"] = self.ledger.snapshot()
+            self.checkpoint["execution"]["calls"].append(usage)
+            self.checkpoint["execution"]["rate_limit_state"] = _rate_limit_state(
+                usage["rate_limit_headers"], usage["rate_limit_observed_at_unix"])
+            self.checkpoint["active_arm"]["attempts"].append({
+                **usage,
+                "result": _dump(result) if result is not None else None,
+                "error_type": type(error).__name__ if error is not None else None,
+            })
+            self.checkpoint["active_attempt"] = None
+            allowed = f"{self.config['provider']}:{self.config['model']}"
+            if _quota_error(error, summary, failure):
+                self.record_stop("rate_limit", "provider returned a rate-limit or quota-exhaustion response", {
+                    "kind": "provider_rate_limit", "call_index": len(self.checkpoint["execution"]["calls"]) - 1})
+            elif any(model != allowed for model in usage["provider_models"]):
+                self.record_stop("model_drift", "a call used a provider/model outside the authorization")
+            elif usage["cost_status"] == "complete" and usage["cost_usd"] > reserved + 1e-12:
+                # Fail closed: the measured cost is kept (never replaced by the reservation).
+                self.record_stop("reservation_exceeded", "measured cost exceeded the call's reservation")
+            elif self.ledger.charged > self.config["max_cost_usd"] + 1e-9:
+                self.record_stop("cost_ceiling_exceeded", "settled cost exceeded the cumulative cost ceiling")
+            elif self.v2 and failure is not None and not local_failure and not scored_budget_failure:
+                # Typed, terminal provider failure: never scored, never re-sent automatically.
+                self.record_stop(failure["failure_class"], "the provider request failed; execution stopped", {
+                    "kind": "provider_failure", "failure_class": failure["failure_class"],
+                    "transmission": failure["transmission"], "error_type": type(error).__name__,
+                    "call_index": len(self.checkpoint["execution"]["calls"]) - 1})
+            elif usage["cost_status"] != "complete" and not scored_budget_failure:
+                self.record_stop("billing_unknown", "provider usage was incomplete; spend is uncertain")
+            elif usage["provider_calls"] != 1:
+                self.record_stop("unexpected_retry", "an unexpected retry or fallback was observed")
+            elif isinstance(usage["output_tokens"], int) and usage["output_tokens"] > max_output_tokens:
+                self.record_stop("output_limit", "provider reported output beyond the output-token limit")
+            elif isinstance(error, Exception) and not _is_model_output_error(error) and not scored_budget_failure:
+                # A provider/network failure is not evidence about the prompt, and the next
+                # request would meet the same provider state: stop the campaign (terminal).
+                self.record_stop("provider_failure", "the provider request failed; execution stopped", {
+                    "kind": "provider_failure", "error_type": type(error).__name__,
+                    "call_index": len(self.checkpoint["execution"]["calls"]) - 1})
+            self.checkpoint = self.checkpoint_store.write(self.checkpoint)
+            if self.v2:
+                # Refresh the ledger mark immediately after durable settlement, so a lost
+                # checkpoint never hides settled consumption (cost above a reservation, retries).
+                try:
+                    self.mark(self.checkpoint)
+                except Exception as mark_error:   # the mark stays "in_flight": lost-checkpoint close refuses
+                    if not self.checkpoint["execution"].get("stopped"):
+                        self.record_stop("ledger_mark_failed",
+                                    "settled consumption could not be recorded in the program ledger",
+                                    {"kind": "ledger_persistence", "phase": "post_settlement",
+                                     "error_type": type(mark_error).__name__})
+                        self.checkpoint = self.checkpoint_store.write(self.checkpoint)
+        stop_code = self.checkpoint["execution"].get("stop_code")
+        if stop_code is not None and scored_budget_failure:
+            # P0.3: an execution-integrity stop outranks the scored completion-budget outcome.
+            raise EvaluationStopped(self.checkpoint["execution"]["stopped"], code=stop_code, transmitted=True) from error
+        if error is not None and (not isinstance(error, Exception) or not _is_model_output_error(error)
+                                  or stop_code is None):
+            # Cancellation and provider/network failures keep their own classification.
+            raise error
+        if stop_code is not None:
+            # Safety stops (uncertain accounting, quota, model drift, retries, output limit)
+            # take precedence over model-quality classification: never a scorable failure.
+            raise EvaluationStopped(self.checkpoint["execution"]["stopped"], code=stop_code,
+                                    transmitted=True) from error
+        return result
+
+
 async def run_incremental_evaluation(
     manifest: dict,
     config: dict,
@@ -753,192 +961,12 @@ async def _run_incremental_evaluation(
     checkpoint["execution"]["stages"].append(stage)
     checkpoint = checkpoint_store.write(checkpoint)
 
-    def record_stop(code: str, reason: str, context: dict | None = None) -> None:
-        checkpoint["execution"]["stop_code"] = code
-        checkpoint["execution"]["stopped"] = reason
-        checkpoint["execution"]["stop_context"] = context
-
-    async def metered(role, temperature, prompt, schema, *, max_output_tokens, **settings):
-        nonlocal checkpoint, reset_continuation_authorized
-        schema_name = getattr(schema, "__name__", str(schema))
-        phase = "initial" if schema_name == "StructuredEvidenceAnswerV2" else "repair"
-        prompt_bytes = len(prompt.encode("utf-8"))
-        estimate = admission_estimate(checkpoint["execution"]["calls"], prompt_bytes=prompt_bytes,
-                                      schema_name=schema_name, schema_size=schema_bytes(schema),
-                                      max_output_tokens=max_output_tokens)
-        now = _clock_now(clock)
-        refusal = _capacity_check(checkpoint, estimate, now=now, allow_elapsed_reset=reset_continuation_authorized)
-        continuation_kind = "operator_resume_after_reset" if reset_continuation_authorized else None
-        if refusal and wait_for_token_reset:
-            delay = _short_token_wait(checkpoint, refusal, estimate, now)
-            if delay is not None:
-                # Durable before waiting: a restart here needs the normal verified continuation.
-                record_stop("rate_limit", refusal["reason"], {
-                    "kind": "preflight_capacity", "blocked_dimensions": refusal["blocked"],
-                    "observed_at_unix": now, "phase": phase, "waiting_until_unix": now + delay,
-                    "admission": estimate})
-                checkpoint = checkpoint_store.write(checkpoint)
-                await sleep(delay)
-                now = _clock_now(clock)
-                record_stop(None, None, None)
-                checkpoint = checkpoint_store.write(checkpoint)
-                refusal = _capacity_check(checkpoint, estimate, now=now, allow_elapsed_reset=True)
-                continuation_kind = "in_process_token_reset_wait"
-        if refusal:
-            resumable = refusal["code"] == "rate_limit"
-            record_stop(refusal["code"], refusal["reason"], {
-                "kind": "preflight_capacity", "blocked_dimensions": refusal["blocked"],
-                "observed_at_unix": now, "phase": phase, "admission": estimate})
-            checkpoint_store.write(checkpoint)
-            raise EvaluationStopped(refusal["reason"], code=refusal["code"], resumable=resumable)
-        if continuation_kind is not None:
-            checkpoint["execution"]["rate_limit_continuations"].append({
-                "kind": continuation_kind,
-                "authorized_at_unix": now,
-                "stage_number": stage["stage_number"],
-                "next_scenario_index": checkpoint["active_arm"]["scenario_index"],
-                "next_prompt_version": checkpoint["active_arm"]["prompt_version"],
-                "next_phase": phase,
-            })
-            reset_continuation_authorized = False
-            checkpoint = checkpoint_store.write(checkpoint)
-        reservation_input = reservation_input_tokens(config, prompt_bytes, schema)
-        if reservation_input > config["max_input_tokens"]:
-            reason = "conservative input-token ceiling reached before the call"
-            record_stop("input_ceiling", reason)
-            checkpoint_store.write(checkpoint)
-            raise EvaluationStopped(reason, code="input_ceiling")
-        reserved, _ = calculate_cost(config["provider"], config["model"], reservation_input, max_output_tokens)
-        if reserved is None or not ledger.reserve(reserved):
-            reason = "authorized call or cost ceiling reached before the call"
-            record_stop("budget", reason)
-            checkpoint_store.write(checkpoint)
-            raise EvaluationStopped(reason, code="budget")
-        prompt_sha256 = canonical_sha256(prompt)
-        checkpoint["execution"]["budget"] = ledger.snapshot()
-        checkpoint["active_attempt"] = {
-            "scenario_id": checkpoint["active_arm"]["scenario_id"],
-            "scenario_index": checkpoint["active_arm"]["scenario_index"],
-            "prompt_version": checkpoint["active_arm"]["prompt_version"],
-            "phase": phase,
-            "prompt_sha256": prompt_sha256,
-            "reserved_cost_usd": reserved,
-            "state": "reserved",
-        }
-        checkpoint = checkpoint_store.write(checkpoint)
-        try:
-            mark(checkpoint)   # the ledger must cover this in-flight reservation before anything is sent
-        except Exception as error:
-            # Nothing was transmitted: release the reservation and stop (terminal, no retry). If
-            # this state cannot be persisted, the durable reserved attempt stays unresolved.
-            ledger.release(reserved)
-            checkpoint["execution"]["budget"] = ledger.snapshot()
-            checkpoint["active_attempt"] = None
-            reason = "the pre-transmission ledger mark could not be recorded; nothing was sent"
-            record_stop("ledger_mark_failed", reason, {"kind": "ledger_persistence", "phase": "pre_transmission",
-                                                       "error_type": type(error).__name__})
-            checkpoint = checkpoint_store.write(checkpoint)
-            raise EvaluationStopped(reason, code="ledger_mark_failed") from error
-        token = llm_gateway.begin_trace(capture_rate_limits=True)
-        started = time.perf_counter()
-        result = None
-        error: BaseException | None = None
-        try:
-            result = await gateway(role, temperature, prompt, schema, max_output_tokens=max_output_tokens, **settings)
-        except BaseException as caught:
-            error = caught
-        finally:
-            summary = llm_gateway.summarize_trace(llm_gateway.end_trace(token))
-            usage = _usage_from_trace(summary, reserved)
-            failure = pf.describe_provider_failure(error, schema) if isinstance(error, Exception) else None
-            local_failure = failure is not None and failure["failure_class"] == pf.LOCAL_STRUCTURED_OUTPUT_FAILURE
-            # Predeclared policy (v2): explicit completion-budget exhaustion is a scored model
-            # outcome. Its reservation stays charged when usage is unknown; it is never re-sent.
-            scored_budget_failure = (failure is not None
-                                     and failure["failure_class"] == pf.COMPLETION_BUDGET_EXHAUSTED
-                                     and _scores_completion_budget_failures(config))
-            if failure is not None:
-                usage["provider_failure"] = failure
-            usage["latency_ms"] = round((time.perf_counter() - started) * 1000, 1)
-            usage["rate_limit_headers"] = _rate_headers(summary)
-            usage["rate_limit_observed_at_unix"] = _clock_now(clock)
-            usage["phase"] = phase
-            usage["schema"] = schema_name
-            usage["prompt_sha256"] = prompt_sha256
-            usage["prompt_bytes"] = prompt_bytes
-            usage["request_bytes"] = estimate["request_bytes"]
-            usage["reservation_input_tokens"] = reservation_input
-            usage["admission"] = estimate
-            usage.update(_reported_reasoning(summary))
-            usage["scenario_id"] = checkpoint["active_arm"]["scenario_id"]
-            usage["prompt_version"] = checkpoint["active_arm"]["prompt_version"]
-            ledger.settle(reserved, usage)
-            checkpoint["execution"]["budget"] = ledger.snapshot()
-            checkpoint["execution"]["calls"].append(usage)
-            checkpoint["execution"]["rate_limit_state"] = _rate_limit_state(
-                usage["rate_limit_headers"], usage["rate_limit_observed_at_unix"])
-            checkpoint["active_arm"]["attempts"].append({
-                **usage,
-                "result": _dump(result) if result is not None else None,
-                "error_type": type(error).__name__ if error is not None else None,
-            })
-            checkpoint["active_attempt"] = None
-            allowed = f"{config['provider']}:{config['model']}"
-            if _quota_error(error, summary, failure):
-                record_stop("rate_limit", "provider returned a rate-limit or quota-exhaustion response", {
-                    "kind": "provider_rate_limit", "call_index": len(checkpoint["execution"]["calls"]) - 1})
-            elif any(model != allowed for model in usage["provider_models"]):
-                record_stop("model_drift", "a call used a provider/model outside the authorization")
-            elif usage["cost_status"] == "complete" and usage["cost_usd"] > reserved + 1e-12:
-                # Fail closed: the measured cost is kept (never replaced by the reservation).
-                record_stop("reservation_exceeded", "measured cost exceeded the call's reservation")
-            elif ledger.charged > config["max_cost_usd"] + 1e-9:
-                record_stop("cost_ceiling_exceeded", "settled cost exceeded the cumulative cost ceiling")
-            elif v2 and failure is not None and not local_failure and not scored_budget_failure:
-                # Typed, terminal provider failure: never scored, never re-sent automatically.
-                record_stop(failure["failure_class"], "the provider request failed; execution stopped", {
-                    "kind": "provider_failure", "failure_class": failure["failure_class"],
-                    "transmission": failure["transmission"], "error_type": type(error).__name__,
-                    "call_index": len(checkpoint["execution"]["calls"]) - 1})
-            elif usage["cost_status"] != "complete" and not scored_budget_failure:
-                record_stop("billing_unknown", "provider usage was incomplete; spend is uncertain")
-            elif usage["provider_calls"] != 1:
-                record_stop("unexpected_retry", "an unexpected retry or fallback was observed")
-            elif isinstance(usage["output_tokens"], int) and usage["output_tokens"] > max_output_tokens:
-                record_stop("output_limit", "provider reported output beyond the output-token limit")
-            elif isinstance(error, Exception) and not _is_model_output_error(error) and not scored_budget_failure:
-                # A provider/network failure is not evidence about the prompt, and the next
-                # request would meet the same provider state: stop the campaign (terminal).
-                record_stop("provider_failure", "the provider request failed; execution stopped", {
-                    "kind": "provider_failure", "error_type": type(error).__name__,
-                    "call_index": len(checkpoint["execution"]["calls"]) - 1})
-            checkpoint = checkpoint_store.write(checkpoint)
-            if v2:
-                # Refresh the ledger mark immediately after durable settlement, so a lost
-                # checkpoint never hides settled consumption (cost above a reservation, retries).
-                try:
-                    mark(checkpoint)
-                except Exception as mark_error:   # the mark stays "in_flight": lost-checkpoint close refuses
-                    if not checkpoint["execution"].get("stopped"):
-                        record_stop("ledger_mark_failed",
-                                    "settled consumption could not be recorded in the program ledger",
-                                    {"kind": "ledger_persistence", "phase": "post_settlement",
-                                     "error_type": type(mark_error).__name__})
-                        checkpoint = checkpoint_store.write(checkpoint)
-        stop_code = checkpoint["execution"].get("stop_code")
-        if stop_code is not None and scored_budget_failure:
-            # P0.3: an execution-integrity stop outranks the scored completion-budget outcome.
-            raise EvaluationStopped(checkpoint["execution"]["stopped"], code=stop_code, transmitted=True) from error
-        if error is not None and (not isinstance(error, Exception) or not _is_model_output_error(error)
-                                  or stop_code is None):
-            # Cancellation and provider/network failures keep their own classification.
-            raise error
-        if stop_code is not None:
-            # Safety stops (uncertain accounting, quota, model drift, retries, output limit)
-            # take precedence over model-quality classification: never a scorable failure.
-            raise EvaluationStopped(checkpoint["execution"]["stopped"], code=stop_code,
-                                    transmitted=True) from error
-        return result
+    guard = GuardedExecution(
+        checkpoint=checkpoint, checkpoint_store=checkpoint_store, ledger=ledger, config=config, v2=v2,
+        mark=mark, clock=clock, sleep=sleep, wait_for_token_reset=wait_for_token_reset,
+        reset_continuation_authorized=reset_continuation_authorized, stage=stage, gateway=gateway)
+    record_stop = guard.record_stop
+    metered = guard.metered
 
     async def persist_repair_pending(state: dict) -> None:
         nonlocal checkpoint
