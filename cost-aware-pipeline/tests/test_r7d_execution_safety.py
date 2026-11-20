@@ -19,6 +19,7 @@ from app.benchmark.generation_evaluation import (
     build_blind_scoring_packet,
     build_public_report,
     canonical_sha256,
+    create_blind_key,
     dry_run,
     evaluate_pair,
     schema_bytes,
@@ -556,7 +557,9 @@ class ExecutionSafetyTests(unittest.IsolatedAsyncioTestCase):
                                 config_sha256="e" * 64)
         manifest = base._manifest()
         rest = [{"scenario_id": item["scenario_id"], "arms": []} for item in manifest["scenarios"][3:]]
-        packet, _ = build_blind_scoring_packet(manifest, records + rest)
+        allocation = create_blind_key(manifest)
+        packet, _ = build_blind_scoring_packet(manifest, records + rest, key=allocation,
+                                               commitment=canonical_sha256(allocation))
         self.assertEqual([True, False, False], [case["scorable"] for case in packet["cases"][:3]])
 
     # --- frozen experiment contract --------------------------------------------------------------------

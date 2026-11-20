@@ -23,6 +23,7 @@ from app.benchmark.generation_evaluation import (
     build_blind_scoring_packet,
     build_public_report,
     canonical_sha256,
+    create_blind_key,
     manifest_hash,
     question_context_hash,
 )
@@ -135,7 +136,9 @@ class TakeoverReviewReproductionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(arms["v15"]["repair_attempted"])
         self.assertEqual("completed", arms["v16"]["status"])
         others = [{"scenario_id": item["scenario_id"], "arms": []} for item in manifest["scenarios"][1:]]
-        packet, _ = build_blind_scoring_packet(manifest, resumed["records"] + others)
+        allocation = create_blind_key(manifest)
+        packet, _ = build_blind_scoring_packet(manifest, resumed["records"] + others, key=allocation,
+                                               commitment=canonical_sha256(allocation))
         self.assertTrue(packet["cases"][0]["scorable"])
         report = build_public_report(resumed["records"], scores=None,
                                      manifest_sha256=manifest["manifest_sha256"], config_sha256="x")

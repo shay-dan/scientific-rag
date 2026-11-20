@@ -1,6 +1,6 @@
 {
   "accepted_code_sha": "REPLACE_WITH_ACCEPTED_40_HEX_COMMIT_SHA",
-  "approved_by": "REPLACE_WITH_OWNER_IDENTITY",
+  "approved_by": "",
   "authorization_id": "REPLACE_WITH_FUTURE_VERSIONED_AUTHORIZATION_ID",
   "config_sha256": "REPLACE_WITH_64_HEX_CONFIG_HASH",
   "manifest_sha256": "REPLACE_WITH_64_HEX_MANIFEST_HASH",
@@ -11,5 +11,10 @@
   "model_context_tokens": 131072,
   "model": "openai/gpt-oss-120b",
   "provider": "groq",
-  "schema": "scientific-rag-generation-eval-authorization/v1"
+  "schema": "scientific-rag-generation-eval-authorization/v2",
+  "reasoning_effort": "low",
+  "completion_budget_failure_policy": "score_as_failure",
+  "program_id": "r7d-b-program",
+  "program_baseline_sha256": "REPLACE_WITH_64_HEX_BASELINE_HASH",
+  "blind_key_sha256": "REPLACE_WITH_64_HEX_PRIVATE_ALLOCATION_COMMITMENT"
 }

@@ -13,7 +13,9 @@
     "v16"
   ],
   "provider": "groq",
-  "schema": "scientific-rag-generation-eval-config/v1",
+  "schema": "scientific-rag-generation-eval-config/v2",
   "semantic_verification_mode": "off",
-  "temperature": 0
+  "temperature": 0,
+  "reasoning_effort": "low",
+  "completion_budget_failure_policy": "score_as_failure"
 }

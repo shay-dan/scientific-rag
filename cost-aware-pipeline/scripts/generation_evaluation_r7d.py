@@ -9,6 +9,8 @@ Private outputs must be written outside the public repository.
 import argparse
 import asyncio
 import json
+import os
+import stat
 from pathlib import Path
 import sys
 
@@ -24,6 +26,9 @@ from app.benchmark.generation_evaluation import (  # noqa: E402
     build_blind_scoring_packet,
     build_public_report,
     canonical_sha256,
+    create_blind_key,
+    validate_blind_key,
+    SCORE_METRICS,
     dry_run,
     unblind_owner_scores,
 )
@@ -32,6 +37,7 @@ from app.benchmark.incremental_generation_evaluation import (  # noqa: E402
     CampaignLocked,
     CheckpointError,
     run_incremental_evaluation,
+    verify_checkpoint,
 )
 
 
@@ -99,13 +105,15 @@ def _incremental_run(args) -> int:
         raise AuthorizationError("incremental-run requires a v2 config and --program-ledger (cumulative "
                                  "accounting); v1 configurations are historical")
     authorization = _load(_private(args.authorization, "authorization"))
+    blind_key = _read_blind_key(args.private_key)
+    validate_blind_key(manifest, blind_key, authorization.get("blind_key_sha256"))
     store = AtomicCheckpoint(_private(args.private_checkpoint, "private checkpoint"))
     ledger_store = programs.ProgramLedgerStore(_private(args.program_ledger, "program ledger"))
     with store.locked():
         checkpoint = asyncio.run(run_incremental_evaluation(
             manifest, config, authorization=authorization, checkpoint_store=store,
             pairs=args.pairs, resume_after_rate_limit=args.resume_after_rate_limit,
-            wait_for_token_reset=args.wait_for_token_reset, program_ledger=ledger_store,
+            wait_for_token_reset=args.wait_for_token_reset, program_ledger=ledger_store, blind_key=blind_key,
         ))
     records = checkpoint["records"]
     accounting = programs.accounting_summary(ledger_store.load(), checkpoint, checkpoint_path=store.path)
@@ -185,24 +193,104 @@ def _auth_preflight(args) -> int:
     return 0 if result["authenticated"] and result["model_listed"] else 1
 
 
-def _blind_packet(args) -> int:
+def _read_blind_key(path: Path | None) -> dict:
+    if path is None:
+        raise ValueError("a precommitted --private-key is required")
+    path = _private(path, "blind key")
+    if not path.is_file() or stat.S_IMODE(path.stat().st_mode) & 0o077:
+        raise ValueError("blind key missing or permissions are not owner-only")
+    return _load(path)
+
+
+def _write_once(path: Path, value: dict) -> None:
+    """Exclusive owner-only artifact creation. Never replace an existing key or score freeze."""
+    path = _private(path, "private artifact")
+    if not path.parent.is_dir() or stat.S_IMODE(path.parent.stat().st_mode) & 0o077:
+        raise ValueError("private artifact directory must be owner-only")
+    payload = json.dumps(value, sort_keys=True, ensure_ascii=False, allow_nan=False) + "\n"
+    with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8") as stream:
+        stream.write(payload)
+        stream.flush()
+        os.fsync(stream.fileno())
+    fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _blind_init(args) -> int:
     manifest = _load(_private(args.manifest, "manifest"))
-    payload = _load(_private(args.private_records, "private records"))
-    packet, key = build_blind_scoring_packet(manifest, payload["records"])
-    _write(_private(args.private_packet, "blind packet"), packet)
-    _write(_private(args.private_key, "blind key"), key)
+    key = create_blind_key(manifest)
+    _write_once(args.private_key, key)
+    print(json.dumps({"blind_key_sha256": canonical_sha256(key),
+                      "manifest_sha256": manifest["manifest_sha256"], "provider_calls_made": 0}))
+    return 0
+
+
+def _bound_packet(args, payload):
+    manifest = _load(_private(args.manifest, "manifest"))
+    config = _load(_private(args.config, "config"))
+    authorization = _load(_private(args.authorization, "authorization"))
+    verify_checkpoint(payload, manifest, config, authorization)
+    if payload.get("active_arm") is not None:
+        raise ValueError("checkpoint has pending work")
+    key = _read_blind_key(args.private_key)
+    return build_blind_scoring_packet(manifest, payload["records"], key=key,
+                                      commitment=authorization.get("blind_key_sha256"))
+
+
+def _blind_packet(args) -> int:
+    payload = AtomicCheckpoint(_private(args.private_records, "private records")).load()
+    packet, _ = _bound_packet(args, payload)
+    _write_once(args.private_packet, packet)
+    print(json.dumps({"packet_sha256": canonical_sha256(packet), "provider_calls_made": 0}))
+    return 0
+
+
+def _score_freeze(packet, scores):
+    if packet.get("schema") != "scientific-rag-generation-eval-blind-scoring/v1":
+        raise ValueError("invalid blind packet")
+    scorable = {row["scenario_id"] for row in packet["cases"] if row["scorable"]}
+    if set(scores) != scorable:
+        raise ValueError("scores must cover exactly the scorable cases")
+    for score in scores.values():
+        if (not isinstance(score, dict) or set(score) != {"winner", "metrics"}
+                or score["winner"] not in ("A", "B", "tie")
+                or not isinstance(score["metrics"], dict)
+                or set(score["metrics"]) - SCORE_METRICS):
+            raise ValueError("invalid blind score")
+        for values in score["metrics"].values():
+            if (not isinstance(values, dict) or set(values) != {"A", "B"}
+                    or any(type(v) not in (bool, int) or not 0 <= v <= 2 for v in values.values())):
+                raise ValueError("invalid bounded arm scores")
+    return {"schema": "scientific-rag-generation-eval-score-freeze/v1",
+            "packet_sha256": canonical_sha256(packet), "scores": scores}
+
+
+def _freeze_scores(args) -> int:
+    packet = _load(_private(args.private_packet, "blind packet"))
+    scores = _load(_private(args.scores, "blind scores"))
+    frozen = _score_freeze(packet, scores)
+    _write_once(args.frozen_scores, frozen)
+    print(json.dumps({"frozen_scores_sha256": canonical_sha256(frozen), "provider_calls_made": 0}))
     return 0
 
 
 def _public_report(args) -> int:
-    payload = _load(_private(args.private_records, "private records"))
-    if bool(args.scores) != bool(args.private_key):
-        raise ValueError("--scores and --private-key must be supplied together")
+    payload = AtomicCheckpoint(_private(args.private_records, "private records")).load()
     if args.scores:
-        key = _load(_private(args.private_key, "blind key"))
-        if key.get("manifest_sha256") != payload.get("manifest_sha256"):
-            raise ValueError("blind key does not match the run manifest")
-        scores = unblind_owner_scores(_load(_private(args.scores, "owner scores")), key)
+        if not all((args.private_key, args.manifest, args.config, args.authorization, args.frozen_scores_sha256)):
+            raise ValueError("scored report requires authorized key, manifest/config and externally recorded score freeze")
+        packet, key = _bound_packet(args, payload)
+        frozen = _load(_private(args.scores, "frozen scores"))
+        if (canonical_sha256(frozen) != args.frozen_scores_sha256
+                or frozen != _score_freeze(packet, frozen.get("scores", {}))):
+            raise ValueError("frozen scores or scoring packet mismatch")
+        manifest = _load(_private(args.manifest, "manifest"))
+        authorization = _load(_private(args.authorization, "authorization"))
+        scores = unblind_owner_scores(frozen["scores"], key, manifest=manifest,
+                                      commitment=authorization.get("blind_key_sha256"))
     else:
         scores = {}
     report = build_public_report(
@@ -233,6 +321,7 @@ def parser() -> argparse.ArgumentParser:
     incremental.add_argument("--manifest", type=Path, required=True)
     incremental.add_argument("--config", type=Path, required=True)
     incremental.add_argument("--authorization", type=Path)
+    incremental.add_argument("--private-key", type=Path, help="precommitted private blind allocation (required)")
     incremental.add_argument("--private-checkpoint", type=Path, required=True)
     incremental.add_argument("--pairs", type=int, required=True)
     incremental.add_argument("--program-ledger", type=Path,
@@ -282,16 +371,31 @@ def parser() -> argparse.ArgumentParser:
                                help="opt-in: one authenticated model-listing request; no inference")
     auth.add_argument("--config", type=Path, required=True)
     auth.set_defaults(func=_auth_preflight)
-    blind = commands.add_parser("blind-packet", help="build private owner-scoring packet and separate key")
+    blind_init = commands.add_parser("blind-init", help="create private balanced allocation before authorization")
+    blind_init.add_argument("--manifest", type=Path, required=True)
+    blind_init.add_argument("--private-key", type=Path, required=True)
+    blind_init.set_defaults(func=_blind_init)
+    blind = commands.add_parser("blind-packet", help="export packet using the precommitted private key")
     blind.add_argument("--manifest", type=Path, required=True)
+    blind.add_argument("--config", type=Path, required=True)
+    blind.add_argument("--authorization", type=Path, required=True)
     blind.add_argument("--private-records", type=Path, required=True)
     blind.add_argument("--private-packet", type=Path, required=True)
     blind.add_argument("--private-key", type=Path, required=True)
     blind.set_defaults(func=_blind_packet)
+    freeze = commands.add_parser("freeze-scores", help="freeze blind scores before key disclosure")
+    freeze.add_argument("--private-packet", type=Path, required=True)
+    freeze.add_argument("--scores", type=Path, required=True)
+    freeze.add_argument("--frozen-scores", type=Path, required=True)
+    freeze.set_defaults(func=_freeze_scores)
     report = commands.add_parser("public-report", help="build deterministic text-free aggregate report")
     report.add_argument("--private-records", type=Path, required=True)
     report.add_argument("--scores", type=Path)
     report.add_argument("--private-key", type=Path)
+    report.add_argument("--manifest", type=Path)
+    report.add_argument("--config", type=Path)
+    report.add_argument("--authorization", type=Path)
+    report.add_argument("--frozen-scores-sha256")
     report.add_argument("--out", type=Path, required=True)
     report.set_defaults(func=_public_report)
     return value
@@ -302,7 +406,7 @@ def main() -> int:
     try:
         return args.func(args)
     except (AuthorizationError, CampaignLocked, CheckpointError, ManifestError, ValueError,
-            programs.ProgramLedgerError) as error:
+            programs.ProgramLedgerError, OSError) as error:
         raise SystemExit(f"refused: {error}") from None
 
 

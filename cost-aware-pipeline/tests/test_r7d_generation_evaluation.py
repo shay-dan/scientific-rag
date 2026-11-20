@@ -15,6 +15,8 @@ from app.benchmark.generation_evaluation import (
     build_blind_scoring_packet,
     build_public_report,
     canonical_sha256,
+    create_blind_key,
+    validate_blind_key,
     check_paid_authorization,
     dry_run,
     evaluate_pair,
@@ -461,14 +463,15 @@ class GateAndReportTests(unittest.TestCase):
                 {"prompt_version": "v15", "status": "completed", "post_repair_output": {"claims": []}},
                 {"prompt_version": "v16", "status": "completed", "post_repair_output": {"claims": []}},
             ]})
-        packet, key = build_blind_scoring_packet(manifest, records)
+        allocation = create_blind_key(manifest)
+        packet, key = build_blind_scoring_packet(manifest, records, key=allocation, commitment=canonical_sha256(allocation))
         self.assertNotIn("v15", json.dumps(packet))
         self.assertNotIn("v16", json.dumps(packet))
         self.assertIn("v15", json.dumps(key))
         first = key["arms"][0]
         unblinded = unblind_owner_scores({"D001": {
             "winner": "A", "metrics": {"coverage": {"A": 2, "B": 1}}
-        }}, key)
+        }}, key, manifest=manifest, commitment=canonical_sha256(allocation))
         self.assertEqual(first["A"], unblinded["D001"]["winner"])
         self.assertEqual({first["A"]: 2, first["B"]: 1}, unblinded["D001"]["metrics"]["coverage"])
         with self.assertRaises(ValueError):
@@ -488,7 +491,8 @@ class GateAndReportTests(unittest.TestCase):
             ]})
         # A truncated persisted record is normalized to the same explicit two-arm shape.
         records[0]["arms"] = records[0]["arms"][:1]
-        packet, _ = build_blind_scoring_packet(manifest, records)
+        allocation = create_blind_key(manifest)
+        packet, _ = build_blind_scoring_packet(manifest, records, key=allocation, commitment=canonical_sha256(allocation))
         self.assertEqual(20, len(packet["cases"]))
         self.assertTrue(all(case["scorable"] is False for case in packet["cases"]))
         report = build_public_report(
@@ -596,7 +600,8 @@ class IncrementalExecutionTests(unittest.IsolatedAsyncioTestCase):
             pairs=20, gateway=gateway,
             summaries=[self._summary(headers=self._headers()) for _ in range(40)],
         )
-        packet, blind_key = build_blind_scoring_packet(self.manifest, checkpoint["records"])
+        allocation = create_blind_key(self.manifest)
+        packet, blind_key = build_blind_scoring_packet(self.manifest, checkpoint["records"], key=allocation, commitment=canonical_sha256(allocation))
         self.assertEqual(20, len(packet["cases"]))
         self.assertEqual(20, len(blind_key["arms"]))
         self.assertTrue(all(case["scorable"] for case in packet["cases"]))
