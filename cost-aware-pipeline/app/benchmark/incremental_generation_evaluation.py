@@ -380,6 +380,8 @@ def verify_checkpoint(checkpoint: dict, manifest: dict, config: dict, authorizat
         if recorded_versions != _execution_order(config, index)[:len(recorded_versions)]:
             raise CheckpointError(f"checkpoint arm order drifted for {scenario_id}")
     _verify_active_arm(checkpoint, config, scenarios, prompt_hashes)
+    from .generation_continuation import verify_inherited_records
+    verify_inherited_records(checkpoint, authorization)
     calls = execution.get("calls")
     if not isinstance(calls, list):
         raise CheckpointError("checkpoint call audit must be a list")
@@ -819,6 +821,7 @@ async def run_incremental_evaluation(
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     program_ledger: "programs.ProgramLedgerStore | None" = None,
     blind_key: dict | None = None,
+    predecessor: tuple | None = None,
 ) -> dict:
     """Run up to ``pairs`` unexecuted pairs (see ``_run_incremental_evaluation``).
 
@@ -842,13 +845,19 @@ async def run_incremental_evaluation(
                      clock=clock, wait_for_token_reset=wait_for_token_reset, sleep=sleep,
                      program_ledger=program_ledger)
     if not (v2 and program_ledger is not None):
+        if predecessor is not None or "continuation" in (authorization or {}):
+            raise AuthorizationError("successor requires v2 configuration and cumulative ledger")
         return await _run_incremental_evaluation(manifest, config, **arguments)
     campaign_id = str((authorization or {}).get("authorization_id") or "")
     if not campaign_id:
         raise AuthorizationError("authorization_id is required")
     with program_ledger.campaign_lock(campaign_id):
         # Marks are recorded before every transmission and immediately after its settlement.
-        return await _run_incremental_evaluation(manifest, config, **arguments)
+        from .generation_continuation import authorized_seed
+        seed = authorized_seed(manifest=manifest, config=config, authorization=authorization,
+                               key=blind_key, program_ledger=program_ledger,
+                               checkpoint_store=checkpoint_store, predecessor=predecessor)
+        return await _run_incremental_evaluation(manifest, config, inherited_records=seed, **arguments)
 
 
 async def _run_incremental_evaluation(
@@ -865,6 +874,7 @@ async def _run_incremental_evaluation(
     wait_for_token_reset: bool = False,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     program_ledger: "programs.ProgramLedgerStore | None" = None,
+    inherited_records: list[dict] | None = None,
 ) -> dict:
     """Execute at most ``pairs`` frozen pairs and persist every provider attempt.
 
@@ -924,7 +934,12 @@ async def _run_incremental_evaluation(
         baseline = programs.open_campaign(program_ledger, authorization=authorization, config=config,
                                           manifest_sha256=manifest["manifest_sha256"],
                                           checkpoint_path=checkpoint_store.path)
-        checkpoint = checkpoint_store.write(new_checkpoint(manifest, config, authorization, provenance, baseline))
+        initial = new_checkpoint(manifest, config, authorization, provenance, baseline)
+        if inherited_records is not None:
+            initial["records"] = inherited_records
+            initial["continuation"] = authorization["continuation"]
+            verify_checkpoint(initial, manifest, config, authorization)
+        checkpoint = checkpoint_store.write(initial)
         mark(checkpoint)
         ledger = BudgetLedger.from_snapshot(config["max_calls"], config["max_cost_usd"], checkpoint["execution"]["budget"])
     else:

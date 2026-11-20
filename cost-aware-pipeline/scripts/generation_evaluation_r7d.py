@@ -96,6 +96,37 @@ def _paid_run(args) -> int:
                              "program ledger")
 
 
+def _predecessor_inputs(args):
+    paths = (args.predecessor_checkpoint, args.predecessor_config,
+             args.predecessor_authorization, args.predecessor_plan)
+    if not any(paths):
+        return None
+    if not all(paths):
+        raise ValueError("all four predecessor paths are required")
+    return (AtomicCheckpoint(_private(paths[0], "predecessor checkpoint")),
+            *(_load(_private(p, "predecessor input")) for p in paths[1:]))
+
+
+def _continuation_plan(args) -> int:
+    from app.benchmark.generation_continuation import build_continuation_contract
+    predecessor = _predecessor_inputs(args)
+    if predecessor is None:
+        raise ValueError("continuation-plan requires all predecessor inputs")
+    old_store, old_config, old_auth, old_plan = predecessor
+    manifest = _load(_private(args.manifest, "manifest"))
+    config = _load(_private(args.config, "config"))
+    ledger = programs.ProgramLedgerStore(_private(args.program_ledger, "program ledger"))
+    contract = build_continuation_contract(
+        manifest=manifest, config=config, key=_read_blind_key(args.private_key),
+        program_ledger=ledger, predecessor_store=old_store, predecessor_config=old_config,
+        predecessor_authorization=old_auth, predecessor_plan=old_plan)
+    print(json.dumps({"continuation": contract, "config_sha256": canonical_sha256(config),
+                      "program_baseline": programs.program_baseline(ledger.load()),
+                      "maximum_new_requests": 2 * contract["remaining_arm_count"],
+                      "provider_calls_made": 0}, sort_keys=True))
+    return 0
+
+
 def _incremental_run(args) -> int:
     if args.authorization is None:
         raise AuthorizationError("incremental-run requires --authorization from an exact owner approval")
@@ -109,11 +140,13 @@ def _incremental_run(args) -> int:
     validate_blind_key(manifest, blind_key, authorization.get("blind_key_sha256"))
     store = AtomicCheckpoint(_private(args.private_checkpoint, "private checkpoint"))
     ledger_store = programs.ProgramLedgerStore(_private(args.program_ledger, "program ledger"))
+    predecessor = _predecessor_inputs(args)
     with store.locked():
         checkpoint = asyncio.run(run_incremental_evaluation(
             manifest, config, authorization=authorization, checkpoint_store=store,
             pairs=args.pairs, resume_after_rate_limit=args.resume_after_rate_limit,
             wait_for_token_reset=args.wait_for_token_reset, program_ledger=ledger_store, blind_key=blind_key,
+            predecessor=predecessor,
         ))
     records = checkpoint["records"]
     accounting = programs.accounting_summary(ledger_store.load(), checkpoint, checkpoint_path=store.path)
@@ -228,7 +261,10 @@ def _blind_init(args) -> int:
     return 0
 
 
-def _bound_packet(args, payload):
+def _report_inputs(args, payload):
+    from app.benchmark.generation_continuation import reporting_records
+    if not all((args.manifest, args.config, args.authorization, args.private_key)):
+        raise ValueError("bound report requires manifest, config, authorization and private key")
     manifest = _load(_private(args.manifest, "manifest"))
     config = _load(_private(args.config, "config"))
     authorization = _load(_private(args.authorization, "authorization"))
@@ -236,7 +272,22 @@ def _bound_packet(args, payload):
     if payload.get("active_arm") is not None:
         raise ValueError("checkpoint has pending work")
     key = _read_blind_key(args.private_key)
-    return build_blind_scoring_packet(manifest, payload["records"], key=key,
+    validate_blind_key(manifest, key, authorization.get("blind_key_sha256"))
+    if getattr(args, "allow_partial", False):
+        records = reporting_records(manifest, config, payload)
+    else:
+        records = payload["records"]
+        if "continuation" in payload:
+            # A live successor may not be scored while it has merely paused.
+            reporting_records(manifest, config, payload)
+            if any(len(r["arms"]) < 2 for r in records) or len(records) != len(manifest["scenarios"]):
+                raise ValueError("incomplete successor report requires --allow-partial")
+    return manifest, authorization, key, records
+
+
+def _bound_packet(args, payload):
+    manifest, authorization, key, records = _report_inputs(args, payload)
+    return build_blind_scoring_packet(manifest, records, key=key,
                                       commitment=authorization.get("blind_key_sha256"))
 
 
@@ -293,12 +344,33 @@ def _public_report(args) -> int:
                                       commitment=authorization.get("blind_key_sha256"))
     else:
         scores = {}
+    records = payload["records"]
+    bound_report = getattr(args, "allow_partial", False) or "continuation" in payload
+    if bound_report:
+        manifest, _, _, records = _report_inputs(args, payload)
+        if len(records) != len(manifest["scenarios"]):
+            raise ValueError("incomplete successor report requires --allow-partial")
     report = build_public_report(
-        payload["records"], scores=scores, manifest_sha256=payload["manifest_sha256"],
+        records, scores=scores, manifest_sha256=payload["manifest_sha256"],
         config_sha256=payload["config_sha256"],
     )
+    if bound_report:
+        report["planned_scenarios"] = 20
+        report["attempted_scenarios"] = sum(bool(r["arms"]) for r in payload["records"])
+        report["not_attempted_scenarios"] = 20 - report["attempted_scenarios"]
+        report["scorable_pairs"] = sum(r["scorable"] for r in report["scenarios"])
+        report["execution_stop_code"] = payload["execution"].get("stop_code")
+        if "continuation" in payload:
+            report["continuation"] = payload["continuation"]
+            report["successor_code_sha"] = payload["code_sha"]
+            report["successor_call_count"] = len(payload["execution"]["calls"])
     _write(args.out, report)
     return 0
+
+
+def _add_predecessor_arguments(command):
+    for field in ("checkpoint", "config", "authorization", "plan"):
+        command.add_argument("--predecessor-" + field, type=Path)
 
 
 def parser() -> argparse.ArgumentParser:
@@ -333,7 +405,15 @@ def parser() -> argparse.ArgumentParser:
         "--wait-for-token-reset", action="store_true",
         help="opt-in: wait in-process for a known per-minute token reset of at most 65 seconds; "
              "never for request-per-day or unknown limits")
+    _add_predecessor_arguments(incremental)
     incremental.set_defaults(func=_incremental_run)
+    continuation = commands.add_parser("continuation-plan", help="offline: bind exact closed predecessor")
+    continuation.add_argument("--manifest", type=Path, required=True)
+    continuation.add_argument("--config", type=Path, required=True)
+    continuation.add_argument("--program-ledger", type=Path, required=True)
+    continuation.add_argument("--private-key", type=Path, required=True)
+    _add_predecessor_arguments(continuation)
+    continuation.set_defaults(func=_continuation_plan)
     init = commands.add_parser("ledger-init", help="create a private program ledger with fixed ceilings")
     init.add_argument("--ledger", type=Path, required=True)
     init.add_argument("--program-id", required=True)
@@ -382,6 +462,7 @@ def parser() -> argparse.ArgumentParser:
     blind.add_argument("--private-records", type=Path, required=True)
     blind.add_argument("--private-packet", type=Path, required=True)
     blind.add_argument("--private-key", type=Path, required=True)
+    blind.add_argument("--allow-partial", action="store_true", help="derived view of terminal incomplete campaign")
     blind.set_defaults(func=_blind_packet)
     freeze = commands.add_parser("freeze-scores", help="freeze blind scores before key disclosure")
     freeze.add_argument("--private-packet", type=Path, required=True)
@@ -397,6 +478,7 @@ def parser() -> argparse.ArgumentParser:
     report.add_argument("--authorization", type=Path)
     report.add_argument("--frozen-scores-sha256")
     report.add_argument("--out", type=Path, required=True)
+    report.add_argument("--allow-partial", action="store_true", help="derived view of terminal incomplete campaign")
     report.set_defaults(func=_public_report)
     return value
 
