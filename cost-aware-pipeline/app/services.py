@@ -776,9 +776,13 @@ class ResearchService:
                     ],
                     "downstream_failure_kind": type(error).__name__,
                 }
-            if research_agent is not None and getattr(research_agent, "last_quote_recovery_audit", None):
+            if (quote_mode != "off" and research_agent is not None
+                    and getattr(research_agent, "last_quote_recovery_audit", None)):
                 validation = dict(metadata.get("claim_validation") or {"status": "failed"})
-                validation["quote_recovery"] = dict(research_agent.last_quote_recovery_audit)
+                quote_failure = dict(research_agent.last_quote_recovery_audit)
+                if quote_failure.get("semantic_verification_status") == "pending":
+                    quote_failure["semantic_verification_status"] = "failed"
+                validation["quote_recovery"] = quote_failure
                 metadata["claim_validation"] = validation
             metadata["progress"] = {"stage": "Research failed", "role": None, "model": None}
             if orchestrator is not None:

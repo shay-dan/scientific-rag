@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from bisect import bisect_left, bisect_right
 from typing import Iterable, Literal
 
 from .weak_model_synthesis import (
@@ -92,11 +93,14 @@ def _unique_span(quote: str, excerpts: list[str], method: str) -> tuple[str | No
         return None, 0
     for excerpt in excerpts:
         right_positions = list(_positions(_pattern(right), excerpt))
+        starts = [position[0] for position in right_positions]
         for start, left_end in _positions(_pattern(left), excerpt):
-            # Explicitly enumerate every endpoint, not the first regex match.
-            for right_start, end in right_positions:
-                if not 1 <= right_start - left_end <= MAX_GAP:
-                    continue
+            # Explicitly enumerate every eligible endpoint, not the first regex match.
+            # Bound the search to the allowed gap, even for highly repetitive text.
+            lo = bisect_left(starts, left_end + 1)
+            hi = bisect_right(starts, left_end + MAX_GAP)
+            for index in range(lo, hi):
+                _, end = right_positions[index]
                 spans.append(excerpt[start:end])
                 if len(spans) > 1:
                     return None, 2
@@ -140,6 +144,10 @@ def _recover_field(
                 audit.append(event)
                 return replacement
         audit.append(event)
+        # A detected ambiguity or an unsafe unique candidate may not be retried
+        # under a different equivalence rule.
+        if count > 1 or candidate is not None:
+            return claim
     return claim
 
 

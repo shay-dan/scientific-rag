@@ -1724,7 +1724,7 @@ ANSWER LINES:
                 "initial_attempts": edits,
                 "repair_attempts": [],
                 "repair_avoided": bool(initial_error_count and not validation_errors),
-                "semantic_verification_status": "pending",
+                "semantic_verification_status": "not_run",
             }
             self.last_quote_recovery_audit = quote_audit
         repair_audit = None
@@ -1768,6 +1768,8 @@ ANSWER LINES:
         semantic_audit = None
         selected_answer = structured_answer
         if self.semantic_verification_mode != "off":
+            if quote_audit is not None:
+                quote_audit["semantic_verification_status"] = "pending"
             await self._progress("Verifying answer claims against cited evidence", "gatekeeper")
             verification_started = time.monotonic()
             try:
@@ -1834,7 +1836,8 @@ ANSWER LINES:
         omitted_count = len(removals)
         if quote_audit is not None:
             # This enabled mode requires enforce; disclose semantic omissions as well.
-            assert semantic_audit is not None and semantic_audit["filtering_applied"]
+            if semantic_audit is None or not semantic_audit["filtering_applied"]:
+                raise RuntimeError("Quotation recovery requires completed semantic enforcement")
             quote_audit["semantic_verification_status"] = semantic_audit["status"]
             semantic_removed = len(semantic_audit["removed_target_ids"])
             quote_audit["semantic_removed_fields"] = semantic_removed
