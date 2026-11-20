@@ -12,7 +12,15 @@
         "any_of": [
           "14\\.2\\s*mmhg"
         ],
-        "description": "systolic reduction with velarozan"
+        "description": "systolic reduction with velarozan",
+        "arm": {
+          "with": [
+            "velarozan"
+          ],
+          "against": [
+            "placebo"
+          ]
+        }
       },
       {
         "id": "A001-F2",
@@ -22,7 +30,15 @@
         "any_of": [
           "4\\.1\\s*mmhg"
         ],
-        "description": "systolic reduction with placebo"
+        "description": "systolic reduction with placebo",
+        "arm": {
+          "with": [
+            "placebo"
+          ],
+          "against": [
+            "velarozan"
+          ]
+        }
       },
       {
         "id": "A001-F3",
@@ -34,7 +50,15 @@
           "18/1,?206",
           "1\\.5\\s*%"
         ],
-        "description": "stroke events with velarozan"
+        "description": "stroke events with velarozan",
+        "arm": {
+          "with": [
+            "velarozan"
+          ],
+          "against": [
+            "placebo"
+          ]
+        }
       },
       {
         "id": "A001-F4",
@@ -46,7 +70,15 @@
           "31/1,?206",
           "2\\.6\\s*%"
         ],
-        "description": "stroke events with placebo"
+        "description": "stroke events with placebo",
+        "arm": {
+          "with": [
+            "placebo"
+          ],
+          "against": [
+            "velarozan"
+          ]
+        }
       },
       {
         "id": "A001-F5",
@@ -282,7 +314,15 @@
         "any_of": [
           "71\\s*%"
         ],
-        "description": "PASI 90 versus placebo"
+        "description": "PASI 90 versus placebo",
+        "arm": {
+          "with": [
+            "tralvekimab"
+          ],
+          "against": [
+            "placebo"
+          ]
+        }
       },
       {
         "id": "A003-F2",
@@ -290,10 +330,17 @@
         "dimension": "numerical_fidelity",
         "scope": "answer",
         "any_of": [
-          "67\\s*%",
-          "18 percentage"
+          "67\\s*%"
         ],
-        "description": "PASI 90 versus the active comparator"
+        "description": "PASI 90 with tralvekimab versus the active comparator",
+        "arm": {
+          "with": [
+            "tralvekimab"
+          ],
+          "against": [
+            "bremilumab"
+          ]
+        }
       },
       {
         "id": "A003-F3",
@@ -403,5 +450,5 @@
       }
     ]
   },
-  "references_sha256": "dd26978879f4a285ca4b625816486bcf03f62664ef3aa202dbc766ea4d0ffbae"
+  "references_sha256": "0cae5ef4a7e8987b6d099792e68e182a690846868ae1af50d547a72b21c7f3e8"
 }

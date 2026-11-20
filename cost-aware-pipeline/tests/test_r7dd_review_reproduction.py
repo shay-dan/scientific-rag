@@ -113,14 +113,14 @@ class P01ContinuationNeverRetransmits(base._Harness):
         provider = FaultProvider({1: "process_stop"})
         with self.assertRaises(ProcessStopped):
             await self.execute(provider)
-        with self.assertRaises(CheckpointError):
+        with self.assertRaisesRegex(CheckpointError, "unresolved provider attempt"):
             await self.execute(provider)
         self.assertEqual(1, len(provider.requests))
 
     async def test_5b_transmitted_attempt_with_schema_invalid_output_is_refused(self):
         provider = FaultProvider({1: "schema_invalid"})
         await self.interrupted(provider, finalizing(1))
-        with self.assertRaises(CheckpointError):
+        with self.assertRaisesRegex(CheckpointError, "failed verification"):
             await self.execute(provider)
         self.assertEqual(1, len(provider.requests))
 
@@ -134,7 +134,7 @@ class P01ContinuationNeverRetransmits(base._Harness):
                 checkpoint = self.store.load()
                 checkpoint["active_arm"][field] = value
                 self.store.write(checkpoint)
-                with self.assertRaises(CheckpointError):
+                with self.assertRaisesRegex(CheckpointError, "not the next scheduled operation"):
                     await self.execute(provider)
                 self.assertEqual(1, len(provider.requests))
 
@@ -143,7 +143,7 @@ class P01ContinuationNeverRetransmits(base._Harness):
         with self.assertRaises(asyncio.CancelledError):
             await self.execute(provider)
         self.assertEqual("cancelled", self.store.load()["execution"]["stop_code"])
-        with self.assertRaises(CheckpointError):
+        with self.assertRaisesRegex(CheckpointError, "unresolved provider attempt"):
             await self.execute(provider)
         self.assertEqual(1, len(provider.requests))
 
@@ -178,7 +178,7 @@ class P02ReferencesAreFrozen(base._Harness):
 
     async def test_report_refuses_post_hoc_reference_changes(self):
         checkpoint = await self.execute(FaultProvider())
-        with self.assertRaises((CheckpointError, acceptance.AcceptanceError)):
+        with self.assertRaisesRegex(CheckpointError, "references_sha256"):
             acceptance.build_acceptance_report(checkpoint, self.dataset, self.modified_references(), self.config)
 
 
@@ -186,33 +186,33 @@ class P11ReportBindings(base._Harness):
     async def asyncSetUp(self):
         self.checkpoint = await self.execute(FaultProvider())
 
-    def refused(self, checkpoint=None, cfg=None):
-        with self.assertRaises((CheckpointError, acceptance.AcceptanceError)):
+    def refused(self, checkpoint=None, cfg=None, reason=""):
+        with self.assertRaisesRegex((CheckpointError, acceptance.AcceptanceError), reason):
             acceptance.build_acceptance_report(checkpoint or self.checkpoint, self.dataset, base.references(),
                                                cfg or self.config)
 
     def test_configuration_drift(self):
-        self.refused(cfg=base.config(max_cost_usd=0.1))
+        self.refused(cfg=base.config(max_cost_usd=0.1), reason="config_sha256")
 
     def test_dataset_drift(self):
         checkpoint = copy.deepcopy(self.checkpoint)
         checkpoint["manifest_sha256"] = "1" * 64
-        self.refused(checkpoint)
+        self.refused(checkpoint, reason="manifest_sha256")
 
     def test_duplicate_and_unscheduled_records(self):
         duplicate = copy.deepcopy(self.checkpoint)
         duplicate["records"].append(copy.deepcopy(duplicate["records"][0]))
-        self.refused(duplicate)
+        self.refused(duplicate, reason="duplicate")
         outside = copy.deepcopy(self.checkpoint)
         outside["records"][0]["operation"] = 99
-        self.refused(outside)
+        self.refused(outside, reason="outside the frozen schedule")
 
     def test_mismatched_prompt_version_or_configuration(self):
         for field, value in (("prompt_version", "v16"), ("configuration", "B")):
             with self.subTest(field=field):
                 checkpoint = copy.deepcopy(self.checkpoint)
                 checkpoint["records"][0][field] = value
-                self.refused(checkpoint)
+                self.refused(checkpoint, reason=f"does not match its scheduled operation: {field}")
 
 
 class P11TerminalFailureNeverSelects(base._Harness):
@@ -231,9 +231,9 @@ class P11TerminalFailureNeverSelects(base._Harness):
         self.assertEqual("interrupted", checkpoint["records"][-1]["status"])
         report = acceptance.build_acceptance_report(checkpoint, self.dataset, base.references(), self.config)
         self.assertEqual("inconclusive", report["selection"]["decision"])
+        self.assertEqual("incomplete", report["experiment_status"])
+        self.assertIn("interrupted operations (not observations): [14]", report["selection"]["global_blocks"])
         cell = report["cells"]["A/v15"]
-        self.assertEqual(2 * len(base.references()["predicates"]["A001"]) and cell["predicates_evaluated"],
-                         cell["predicates_evaluated"])
         completed = [record for record in checkpoint["records"]
                      if record["kind"] == "arm" and record["configuration"] == "A" and record["prompt_version"] == "v15"
                      and record["status"] == "completed"]

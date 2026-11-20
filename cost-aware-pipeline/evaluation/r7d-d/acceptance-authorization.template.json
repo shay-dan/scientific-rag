@@ -8,6 +8,7 @@
   "schedule_sha256": "REPLACE_WITH_DRY_RUN_schedule_sha256",
   "plan_sha256": "REPLACE_WITH_DRY_RUN_plan_sha256",
   "selection_rules_sha256": "REPLACE_WITH_DRY_RUN_selection_rules_sha256",
+  "references_sha256": "0cae5ef4a7e8987b6d099792e68e182a690846868ae1af50d547a72b21c7f3e8",
   "provider": "groq",
   "model": "openai/gpt-oss-120b",
   "reasoning_effort": "low",

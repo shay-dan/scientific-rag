@@ -3,7 +3,10 @@
 ``dry-run`` is offline and makes zero provider calls. ``run`` requires an exact acceptance
 authorization, the separate acceptance program ledger (create it with
 ``generation_evaluation_r7d.py ledger-init``) and a private checkpoint; it never retries.
-``report`` reads a checkpoint and writes metrics only (no prompts, evidence or answer text).
+``report`` reads a checkpoint (read-only) after verifying it against the dataset, config,
+schedule and the authorized reference hash, and writes metrics only (no prompts, evidence or
+answer text). ``--answers-out`` additionally writes the generated answers to a separate private
+file for the owner's scientific review, which is required before a configuration is frozen.
 Private files (config, authorization, checkpoint, ledger, outputs) stay outside the repository.
 """
 from __future__ import annotations
@@ -95,7 +98,11 @@ def _report(args) -> int:
     report = acceptance.build_acceptance_report(checkpoint, _load(args.dataset), _load(args.references),
                                                 _load(_private(args.config, "config")))
     _write_private(args.out, report)
-    print(json.dumps({"selection": report["selection"], "missing_operations": report["missing_operations"],
+    if args.answers_out is not None:
+        _write_private(args.answers_out, acceptance.review_answers(checkpoint))
+    print(json.dumps({"experiment_status": report["experiment_status"], "selection": report["selection"],
+                      "missing_operations": report["missing_operations"],
+                      "interrupted_operations": report["interrupted_operations"],
                       "stop_code": report["stop_code"]}, sort_keys=True))
     return 0
 
@@ -127,6 +134,8 @@ def parser() -> argparse.ArgumentParser:
     report.add_argument("--config", type=Path, required=True)
     report.add_argument("--checkpoint", type=Path, required=True)
     report.add_argument("--out", type=Path, required=True)
+    report.add_argument("--answers-out", type=Path,
+                        help="private file with the generated answers for the owner's scientific review")
     report.set_defaults(func=_report)
     return root
 
