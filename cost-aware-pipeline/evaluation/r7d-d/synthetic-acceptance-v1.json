@@ -1,0 +1,163 @@
+{
+  "schema": "scientific-rag-generation-acceptance-dataset/v1",
+  "dataset_id": "r7d-d-synthetic-acceptance-v1",
+  "synthetic": true,
+  "description": "Entirely synthetic scenarios with fictional interventions, trials and numbers, for configuration acceptance only. Not derived from the frozen R7D benchmark.",
+  "scenarios": [
+    {
+      "scenario_id": "A001",
+      "category": "numeric_fidelity_and_attribution",
+      "question": "In adults with stage 2 hypertension, what systolic and diastolic blood-pressure reductions and what stroke effect did the KESTREL-3 trial report for velarozan versus placebo, and what earlier stroke finding does the trial report cite?",
+      "evidence": [
+        {
+          "source_id": "S1",
+          "title": "KESTREL-3 randomized trial: primary results",
+          "section": "Results",
+          "passage": "KESTREL-3 randomized 2,412 adults aged 40 to 75 years with stage 2 hypertension 1:1 to velarozan or placebo. At 12 months, mean systolic blood pressure fell by 14.2 mmHg (95% CI 12.9 to 15.5) with velarozan and by 4.1 mmHg (95% CI 2.8 to 5.4) with placebo. Stroke occurred in 18 of 1,206 participants (1.5%) receiving velarozan and 31 of 1,206 (2.6%) receiving placebo, an absolute difference of 1.1 percentage points; the hazard ratio was 0.58 (95% CI 0.33 to 1.03).",
+          "production_notes": "synthetic acceptance evidence; primary outcome report",
+          "evidence_sha256": "6fc753843e8ddbf5b752f72fab11462ada9da599d9cfb89f98a236746348c819"
+        },
+        {
+          "source_id": "S2",
+          "title": "KESTREL-3 randomized trial: discussion",
+          "section": "Discussion",
+          "passage": "The authors cite the earlier Arden registry, an observational cohort of 9,880 adults older than 65 years, which reported 32% lower stroke incidence among velarozan users. KESTREL-3 did not enrol adults older than 75 years and was not designed to replicate the registry finding.",
+          "production_notes": "synthetic acceptance evidence; cited secondary study",
+          "evidence_sha256": "19b87cba67d4d44066787949030ad04797da2d71017244c25f3c8ead38490316"
+        },
+        {
+          "source_id": "S3",
+          "title": "KESTREL-3 randomized trial: safety supplement",
+          "section": "Supplementary results",
+          "passage": "Hyperkalaemia was reported in 2.9% of participants receiving velarozan and 1.1% receiving placebo. Treatment discontinuation because of adverse events occurred in 6.0% and 4.2%, respectively. Diastolic blood pressure was a secondary outcome whose results will be reported separately.",
+          "production_notes": "synthetic acceptance evidence; safety supplement",
+          "evidence_sha256": "ab6d32d5e385d982a357201c535b8424283977ab73e97e4e59158145a86dad10"
+        }
+      ],
+      "question_context_sha256": "6cf39436a6a2c74ee5467ce3c7d8253dc1b433b81bdce745b07fae8fa4492868"
+    },
+    {
+      "scenario_id": "A002",
+      "category": "study_design_and_interpretation",
+      "question": "Does nightly oral melzorin reduce delirium in hospitalized older adults, does the effect differ in patients with cognitive impairment, and is melzorin better than the existing multicomponent ward prevention protocol?",
+      "evidence": [
+        {
+          "source_id": "S1",
+          "title": "TWILIGHT randomized placebo-controlled trial",
+          "section": "Results",
+          "passage": "TWILIGHT randomized 640 patients aged 70 years or older admitted to medical wards to melzorin 3 mg nightly or placebo. Delirium occurred in 11.9% of the melzorin group and 14.4% of the placebo group (risk ratio 0.83, 95% CI 0.56 to 1.22). In the prespecified subgroup with baseline cognitive impairment, the risk ratio was 0.61 (95% CI 0.37 to 1.01), with an interaction p value of 0.21; the investigators described the subgroup result as hypothesis-generating.",
+          "production_notes": "synthetic acceptance evidence; randomized trial",
+          "evidence_sha256": "9daf76ac6d527b1dd890050be634c2790238bd1b11ffa0944e2317184633865b"
+        },
+        {
+          "source_id": "S2",
+          "title": "Northfield hospital cohort study",
+          "section": "Results",
+          "passage": "In an observational cohort of 4,210 admissions, patients prescribed melzorin had lower adjusted odds of delirium (adjusted odds ratio 0.62, 95% CI 0.51 to 0.75). Melzorin users were younger, less frail and more often admitted electively, and the authors state that residual confounding cannot be excluded.",
+          "production_notes": "synthetic acceptance evidence; observational cohort",
+          "evidence_sha256": "573d7f8912314b5828df2ff37ae5c1b9364e5f4ba655853fb633da47a88debfb"
+        },
+        {
+          "source_id": "S3",
+          "title": "Ward prevention protocol background",
+          "section": "Methods",
+          "passage": "Both studies delivered the multicomponent ward prevention protocol to all patients as usual care. No study has compared melzorin directly with the protocol, and no head-to-head data exist.",
+          "production_notes": "synthetic acceptance evidence; comparator context",
+          "evidence_sha256": "0900562eaea9418a1f3bde71bd8a1d68f0777362cae98a768220216e7f62d514"
+        }
+      ],
+      "question_context_sha256": "df17090dd1979bf044e2a2dbd4d51a94d0b97d20d433b727c0c83575ee036f77"
+    },
+    {
+      "scenario_id": "A003",
+      "category": "complex_synthesis_and_coverage",
+      "question": "For adults with moderate-to-severe chronic plaque psoriasis, summarize the week-16 efficacy of tralvekimab versus placebo and versus an active comparator, the durability of response, serious and common adverse events, and its effect on cardiovascular outcomes, and state the main limitations of the evidence.",
+      "evidence": [
+        {
+          "source_id": "S1",
+          "title": "ORCHID-1 placebo-controlled phase 3 trial",
+          "section": "Results",
+          "passage": "ORCHID-1 randomized 880 adults with moderate-to-severe plaque psoriasis. At week 16, PASI 90 was achieved by 71% of patients receiving tralvekimab and 4% receiving placebo, and a static investigator global assessment of clear or almost clear by 78% and 6%, respectively.",
+          "production_notes": "synthetic acceptance evidence; placebo-controlled trial",
+          "evidence_sha256": "b700fe6edbd4ecef3b7029a4af885d3fd8fbfdfa2f50010cb28bbc79881fa437"
+        },
+        {
+          "source_id": "S2",
+          "title": "ORCHID-2 active-comparator phase 3 trial",
+          "section": "Results",
+          "passage": "ORCHID-2 compared tralvekimab with the comparator bremilumab in 1,020 adults. At week 16, PASI 90 was achieved by 67% with tralvekimab and 49% with bremilumab, a difference of 18 percentage points (95% CI 11 to 25).",
+          "production_notes": "synthetic acceptance evidence; active-comparator trial",
+          "evidence_sha256": "b8a0c425155918864f2bbd638088a369b4fa9473688ff91819ae56dcd63828a6"
+        },
+        {
+          "source_id": "S3",
+          "title": "ORCHID open-label extension",
+          "section": "Results",
+          "passage": "Of 1,104 eligible patients, 612 entered the uncontrolled open-label extension. At week 104, PASI 90 was maintained in 82% of patients who remained in the study, analysed as observed; 23% of extension patients had discontinued by week 104.",
+          "production_notes": "synthetic acceptance evidence; open-label extension",
+          "evidence_sha256": "56351c014c766c9854ec0af0c1c8d3d1bc7815292575db2d54faa2642ae01d58"
+        },
+        {
+          "source_id": "S4",
+          "title": "Pooled 16-week safety analysis",
+          "section": "Safety",
+          "passage": "Serious adverse events occurred at 3.1 per 100 patient-years with tralvekimab and 3.4 per 100 patient-years with placebo. Serious infections occurred at 0.9 and 0.7 per 100 patient-years, and oral candidiasis in 2.0% and 0.4% of patients, respectively. Two major adverse cardiovascular events occurred with tralvekimab and none with placebo.",
+          "production_notes": "synthetic acceptance evidence; pooled safety",
+          "evidence_sha256": "d018a257b5c318735919deab0c22e23c0b8c3644866088a5374c21c0b4173294"
+        },
+        {
+          "source_id": "S5",
+          "title": "Evidence limitations statement",
+          "section": "Discussion",
+          "passage": "No trial was designed or powered to assess cardiovascular outcomes. Controlled follow-up ended at week 16 and no data beyond two years are available. Of all randomized participants, 84% were White.",
+          "production_notes": "synthetic acceptance evidence; limitations",
+          "evidence_sha256": "28301dfe4f4c8750bc3fa1d3393d17b56cfc6435d30c021302cb20a637509a02"
+        }
+      ],
+      "question_context_sha256": "e185a0575d40340dcd271767dc7fffbea1914a463ef8826a3cb86692fddd09a6"
+    }
+  ],
+  "repair_fixtures": [
+    {
+      "fixture_id": "RF1",
+      "scenario_id": "A001",
+      "answer": {
+        "claims": [
+          {
+            "text": "Velarozan lowered systolic blood pressure by 14.2 mmHg compared with 4.1 mmHg with placebo at 12 months.",
+            "source_id": "S1",
+            "evidence_quote": "mean systolic blood pressure fell by 14.2 mmHg (95% CI 12.9 to 15.5) with velarozan"
+          },
+          {
+            "text": "KESTREL-3 showed that velarozan lowered stroke incidence by 32%.",
+            "source_id": "S1",
+            "evidence_quote": "velarozan lowered stroke incidence by 32% in KESTREL-3"
+          }
+        ],
+        "limitations": [],
+        "unanswered_parts": []
+      }
+    },
+    {
+      "fixture_id": "RF2",
+      "scenario_id": "A002",
+      "answer": {
+        "claims": [
+          {
+            "text": "In TWILIGHT, delirium occurred in 11.9% with melzorin and 14.4% with placebo.",
+            "source_id": "S1",
+            "evidence_quote": "Delirium occurred in 11.9% of the melzorin group and 14.4% of the placebo group"
+          },
+          {
+            "text": "Melzorin prevents delirium more effectively than the ward protocol.",
+            "source_id": "S3",
+            "evidence_quote": "melzorin was superior to the ward prevention protocol"
+          }
+        ],
+        "limitations": [],
+        "unanswered_parts": []
+      }
+    }
+  ],
+  "dataset_sha256": "e6fbe08aa7a80d2f5bce0d1fb36e16b7e677a43e5ebb9858da6742230d8b2362"
+}
