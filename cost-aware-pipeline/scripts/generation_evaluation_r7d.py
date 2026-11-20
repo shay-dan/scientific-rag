@@ -340,7 +340,9 @@ def _public_report(args) -> int:
     records = payload["records"]
     bound_report = getattr(args, "allow_partial", False) or "continuation" in payload
     if bound_report:
-        _, _, _, records = _report_inputs(args, payload)
+        manifest, _, _, records = _report_inputs(args, payload)
+        if len(records) != len(manifest["scenarios"]):
+            raise ValueError("incomplete successor report requires --allow-partial")
     report = build_public_report(
         records, scores=scores, manifest_sha256=payload["manifest_sha256"],
         config_sha256=payload["config_sha256"],

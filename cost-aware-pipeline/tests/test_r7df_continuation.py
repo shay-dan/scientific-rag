@@ -1,11 +1,12 @@
 """R7D-F: offline successor and partial-report regressions; no real provider."""
 import copy
+import json
 import unittest
 
 from app.benchmark import generation_evaluation as gen
 from app.benchmark import program_ledger as programs
 from app.benchmark.incremental_generation_evaluation import (
-    CheckpointError, run_incremental_evaluation, verify_checkpoint,
+    run_incremental_evaluation, verify_checkpoint,
 )
 from app.benchmark.generation_continuation import (
     build_continuation_contract, reporting_records,
@@ -119,6 +120,16 @@ class SuccessorTests(rel._CampaignHarness):
             with self.assertRaises((ValueError, PermissionError)):
                 verify_checkpoint(bad, self.manifest, self.new_config, self.auth)
 
+    async def test_predecessor_inputs_without_continuation_refused(self):
+        await self.prepare()
+        provider = rel.ScriptedProvider()
+        auth = dict(self.auth)
+        del auth["continuation"]
+        with self.assertRaises(PermissionError):
+            await self.run_successor(provider, authorization=auth)
+        self.assertFalse(provider.requests)
+        self.assertFalse(self.new.exists())
+
     async def test_partial_export_preserves_denominator_and_excludes_interrupted(self):
         await self.prepare()
         records = reporting_records(self.manifest, self.old_config, self.old_cp)
@@ -128,7 +139,12 @@ class SuccessorTests(rel._CampaignHarness):
         self.assertEqual(1, sum(row["scorable"] for row in packet["cases"]))
         self.assertEqual(18, sum(all(a["status"] == "not_executed" for a in row["arms"].values())
                                  for row in packet["cases"]))
+        report = gen.build_public_report(records, scores={}, manifest_sha256=self.manifest["manifest_sha256"],
+                                         config_sha256=gen.canonical_sha256(self.old_config))
+        self.assertEqual(20, len(report["scenarios"]))
+        self.assertEqual(19, report["excluded_from_pairing"]["pairs"])
         self.assertEqual(self.old_bytes, self.old.path.read_bytes())
+        self.assertNotIn(self.key["nonce"], json.dumps(packet))
         with self.assertRaises(ValueError):
             reporting_records(self.manifest, self.old_config,
                               dict(self.old_cp, active_arm={}))
