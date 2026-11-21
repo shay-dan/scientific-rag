@@ -18,7 +18,8 @@ from tests.test_stage20g_routing import ANSWER, FakeAdmissionRedis, FakeClock, c
 KEYS = {"groq": "placeholder-groq", "openrouter": "placeholder-openrouter"}
 
 
-def chat_request(provider="groq", **changes):
+def chat_request(route_name="groq", **changes):
+    provider = route_name
     route = e2e_v2.CHAT_ROUTES[provider]
     body = {"model": route["model"], "temperature": 0, "max_tokens": 2000, "reasoning_effort": "low",
             "messages": [{"role": "user", "content": "test"}]}
@@ -128,7 +129,9 @@ class CampaignTests(unittest.TestCase):
         with self.assertRaises(ExecutionStopped):
             self.campaign.admit(chat_request(), "groq")
         self.assertEqual(("journal_failure", 0), (self.campaign.stop_reason, self.campaign.summary()["reserved_nanousd"]))
-        campaign = Campaign(lambda _event: None, clock=lambda: 3000)
+        clock = [0.0]
+        campaign = Campaign(lambda _event: None, clock=lambda: clock[0])
+        clock[0] = 3000.0
         with self.assertRaises(ExecutionStopped):
             campaign.begin_case("E001")
         self.assertEqual("campaign_deadline", campaign.stop_reason)

@@ -53,12 +53,13 @@ class RunnerTests(unittest.TestCase):
             fallback = json.loads(output)
             _, output = call("prepare", "--manifest", self.manifest, "--code-sha", "a" * 40, "--no-fallback")
             groq_only = json.loads(output)
+            expected = e2e_v2.fingerprint(e2e_v2.protocol(fallback=True), manifest_sha256=MANIFEST_SHA,
+                                          code_sha="a" * 40)
         self.assertEqual(0, code)
         self.assertEqual(0, fallback["provider_calls"])
         self.assertAlmostEqual(0.81632, fallback["maximum_modeled_reservation_usd"])
         self.assertNotEqual(fallback["fingerprint"], groq_only["fingerprint"])
-        self.assertEqual(fallback["fingerprint"], e2e_v2.fingerprint(
-            e2e_v2.protocol(fallback=True), manifest_sha256=MANIFEST_SHA, code_sha="a" * 40))
+        self.assertEqual(expected, fallback["fingerprint"])
 
     def test_run_refusals_happen_before_any_side_effect(self):
         results = self.root / "results"
