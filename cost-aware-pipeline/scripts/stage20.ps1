@@ -49,9 +49,13 @@ if ((Probe { docker image inspect $Image }) -ne 0) {
   Step "Building image $Image (first run for this commit only)"
   docker build --build-arg "GIT_SHA=$Sha" -t $Image $App; Assert-Native "docker build"
 }
-docker run --rm --network none $Image python -c "import sys; from app.evaluation_report import resolve_git_provenance as r; sys.exit(0 if r() == {'sha': sys.argv[1], 'source': 'build_arg'} else 1)" $Sha
+$ImageId = (docker image inspect --format '{{.Id}}' $Image).Trim()
+Assert-Native "Docker image ID"
+if ($ImageId -notmatch '^sha256:[0-9a-f]{64}$') { throw "invalid immutable image ID: $ImageId" }
+$EmbeddedSha = (docker run --rm --network none $Image printenv SCIENTIFIC_RAG_GIT_SHA).Trim()
 Assert-Native "image provenance check"
-Ok "image provenance $Sha"
+if ($EmbeddedSha -ne $Sha) { throw "Docker image provenance mismatch: $EmbeddedSha vs $Sha" }
+Ok "image provenance $Sha; immutable image $ImageId"
 
 # --- 2. Credentials (names only) and manifest ------------------------------------------------
 Step "Checking credentials file (values are never read into output)"
@@ -83,7 +87,7 @@ $ManifestName = $located.matches[0]
 Ok "manifest $ManifestName"
 
 function Get-Prepared {
-  $prepared = Json (docker run --rm --network none --mount $OperatorMount $Image python scripts/stage20_e2e.py prepare --manifest "/operator/$ManifestName" --code-sha $Sha @FallbackArgs)
+  $prepared = Json (docker run --rm --network none --mount $OperatorMount $Image python scripts/stage20_e2e.py prepare --manifest "/operator/$ManifestName" --code-sha $Sha --image-id $ImageId @FallbackArgs)
   Assert-Native "prepare protocol"
   return $prepared
 }
@@ -110,7 +114,7 @@ if ($Mode -eq "Test") {
   $Volume = "stage20-e2e-v2-$Tag-results"
   $already = Volume-Exists $Volume
   $report = [ordered]@{
-    stage = "20G"; mode = "Test"; commit = $Sha; image = $Image; variant = $Variant
+    stage = "20G"; mode = "Test"; commit = $Sha; image = $Image; image_id = $ImageId; variant = $Variant
     manifest = $ManifestName; offline_tests = "passed"; preflight_ready = $true
     campaign_id = $prepared.campaign_id; fingerprint = $prepared.fingerprint
     maximum_modeled_reservation_usd = $prepared.maximum_modeled_reservation_usd
@@ -134,6 +138,9 @@ if ($Mode -eq "Run") {
   if ($Authorization -notmatch '^[0-9a-f]{64}$') { throw "-Authorization must be the 64-character fingerprint printed by -Mode Test" }
   $prepared = Get-Prepared
   if ($prepared.fingerprint -ne $Authorization) { throw "authorization does not match this commit/manifest/protocol ($($prepared.fingerprint)); refusing" }
+  $CurrentImageId = (docker image inspect --format '{{.Id}}' $Image).Trim()
+  Assert-Native "recheck Docker image identity"
+  if ($CurrentImageId -ne $ImageId) { throw "image changed after preflight; refusing live execution" }
   Step "Preflight before the live campaign (no inference)"
   docker run --rm --env-file $Credentials $Image python scripts/stage20_e2e.py auth-preflight @FallbackArgs | Out-Null
   Assert-Native "preflight"
@@ -161,7 +168,7 @@ if ($Mode -eq "Run") {
     docker run --rm --network $Net -e "DATABASE_URL=$DatabaseUrl" $Image alembic upgrade head; Assert-Native "migrations"
 
     Step "LIVE CAMPAIGN $Tag ($Variant): at most 100 chat + 125 embedding requests, worst case `$$($prepared.maximum_modeled_reservation_usd)"
-    docker run --rm --name "stage20g-$Tag-runner" --network $Net --env-file $Credentials -e "DATABASE_URL=$DatabaseUrl" -e "REDIS_URL=redis://$Redis`:6379/0" --mount "type=volume,src=$Volume,dst=/results" --mount $OperatorMount $Image python scripts/stage20_e2e.py run --manifest "/operator/$ManifestName" --code-sha $Sha --authorization $Authorization --results /results @FallbackArgs
+    docker run --rm --name "stage20g-$Tag-runner" --network $Net --env-file $Credentials -e "DATABASE_URL=$DatabaseUrl" -e "REDIS_URL=redis://$Redis`:6379/0" -e "SCIENTIFIC_RAG_IMAGE_ID=$ImageId" --mount "type=volume,src=$Volume,dst=/results" --mount $OperatorMount $Image python scripts/stage20_e2e.py run --manifest "/operator/$ManifestName" --code-sha $Sha --image-id $ImageId --authorization $Authorization --results /results @FallbackArgs
     $runExit = $LASTEXITCODE
   } finally {
     Step "Stopping campaign database and Redis (volumes are kept)"
