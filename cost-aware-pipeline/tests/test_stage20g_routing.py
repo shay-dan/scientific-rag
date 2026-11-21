@@ -346,17 +346,32 @@ class RoutedGatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([GROQ_HOST], providers.hosts())
 
     async def test_concurrent_routed_calls_each_take_their_own_admission(self):
-        transport = httpx.MockTransport(FakeProviders(**{GROQ_HOST: ok}).handler)
+        providers = FakeProviders(**{GROQ_HOST: ok})
+        transport = httpx.MockTransport(providers.handler)
         token = llm_gateway.begin_trace(self.redis)
         try:
-            with patch.object(llm_gateway, "_outbound_transport", lambda: transport):
+            with patch.dict(os.environ, {"LLM_ROUTING_ROUTES": "groq:openai/gpt-oss-120b",
+                                         "LLM_GROQ_TPM_BUDGET": "0", "LLM_GROQ_RPM_BUDGET": "3",
+                                         "LLM_REQUEST_TIMEOUT_SECONDS": "30"}), \
+                    patch.object(llm_gateway, "_outbound_transport", lambda: transport):
                 results = await asyncio.gather(*[
-                    llm_gateway.ainvoke_structured("expert", 0, "test", StructuredEvidenceAnswerV2,
-                                                  max_output_tokens=2000, reasoning_effort="low")
-                    for _ in range(3)])
+                    llm_gateway.ainvoke_structured("planner", 0, "x", StructuredEvidenceAnswerV2,
+                                                   max_output_tokens=2000, reasoning_effort="low")
+                    for _ in range(5)], return_exceptions=True)
         finally:
             llm_gateway.end_trace(token)
-        self.assertEqual(3, len(results))
+        sent = sum(1 for item in results if isinstance(item, StructuredEvidenceAnswerV2))
+        self.assertEqual(3, sent)
+        self.assertEqual(3, len(providers.hosts()), "admissions never exceed the shared request window")
+
+
+class TextChain:
+    def __init__(self, model):
+        self.model = model
+
+    async def ainvoke(self, payload, config=None):
+        message = await self.model.ainvoke(payload["question"], config=config)
+        return message.content
 
 
 if __name__ == "__main__":
