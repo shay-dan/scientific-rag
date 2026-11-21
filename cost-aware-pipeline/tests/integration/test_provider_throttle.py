@@ -63,6 +63,19 @@ class ProviderThrottleIntegrationTests(unittest.IsolatedAsyncioTestCase):
             second = await admit(self.redis, "groq", "planner", payload, 20)
             await release(self.redis, second, None)
 
+    async def test_request_larger_than_the_whole_window_is_never_admitted(self):
+        # Stage 20G: refused as exceeds_window, without a retry time that suggests waiting helps.
+        with patch.dict(os.environ, {"LLM_GROQ_RPM_BUDGET": "20", "LLM_GROQ_TPM_BUDGET": "6000"}):
+            with self.assertRaises(ProviderThrottled) as blocked:
+                await admit(self.redis, "groq", "expert", "x" * 20000, 20, max_output_tokens=2000)
+            self.assertEqual(("exceeds_window", 0), (blocked.exception.reason, blocked.exception.retry_after_ms))
+            small = await admit(self.redis, "groq", "planner", "small", 20)
+            await release(self.redis, small, None)
+
+    async def test_bounded_request_reserves_its_output_cap(self):
+        self.assertEqual(estimate_tokens("expert", "x" * 400, 2000), estimate_tokens("expert", "x" * 400) - 1000)
+        self.assertEqual(estimate_tokens("planner", "small"), estimate_tokens("planner", "small", None))
+
     async def test_cooldown_is_shared(self):
         with patch.dict(os.environ, {"LLM_GROQ_RPM_BUDGET": "20", "LLM_GROQ_TPM_BUDGET": "6000"}):
             await cool_down(self.redis, "groq", 1)

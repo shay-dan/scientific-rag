@@ -39,6 +39,14 @@ FAILURE_CLASSES = (
     UNKNOWN_PROVIDER_FAILURE,
 )
 
+class TransmissionRefused(RuntimeError):
+    """A request guard refused an outbound request before any byte was transmitted.
+
+    Raised by accounting guards (for example an evaluation transport whose budget is
+    exhausted). The gateway never retries or reroutes around it: the refusal is final.
+    """
+
+
 TRANSMISSION_CONFIRMED = "confirmed"
 TRANSMISSION_UNCERTAIN = "uncertain"
 TRANSMISSION_NOT_SENT = "not_transmitted"
@@ -161,6 +169,9 @@ def describe_provider_failure(error: BaseException, response_schema: Any = None)
     }
     chain = list(_chain(error))
     names = [name for item in chain for name in _names(item)]
+    if any(isinstance(item, TransmissionRefused) for item in chain):
+        description.update(failure_class=AUTHENTICATION_OR_CONFIGURATION_FAILURE, transmission=TRANSMISSION_NOT_SENT)
+        return description
     if any(marker in name for name in names for marker in _NOT_TRANSMITTED_NAMES):
         sent = "BoundedRequestLimitExceeded" in names   # a first request had already been sent
         description.update(failure_class=AUTHENTICATION_OR_CONFIGURATION_FAILURE,
@@ -207,5 +218,5 @@ __all__ = [
     "JSON_VALIDATE_FAILED", "LOCAL_EVIDENCE_VALIDATION_FAILURE", "LOCAL_STRUCTURED_OUTPUT_FAILURE",
     "PRE_TRANSMISSION_CAPACITY_PAUSE", "PROVIDER_RATE_LIMIT", "PROVIDER_STRUCTURED_GENERATION_FAILURE",
     "TRANSIENT_INFRASTRUCTURE_FAILURE", "TRANSMISSION_CONFIRMED", "TRANSMISSION_NOT_SENT",
-    "TRANSMISSION_UNCERTAIN", "UNKNOWN_PROVIDER_FAILURE", "describe_provider_failure",
+    "TRANSMISSION_UNCERTAIN", "TransmissionRefused", "UNKNOWN_PROVIDER_FAILURE", "describe_provider_failure",
 ]

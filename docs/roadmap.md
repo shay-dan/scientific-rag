@@ -1,6 +1,6 @@
 # Scientific RAG — engineering roadmap
 
-**Status:** authoritative planning document. Last updated 2026-11-20 (R7D-F complete; R7E complete; Stage 20D offline E2E preparation in review).
+**Status:** authoritative planning document. Last updated 2026-11-21 (Stage 20D complete; Stage 20F v1 live campaign terminal; Stage 20G consolidated routing/recovery and v2 E2E protocol in review).
 **Origin:** owner-approved *Master Implementation Plan*, which consolidated an independent
 audit, a reconciled R0–R13 roadmap, a discovery/evidence-acquisition addendum, and the
 historical engineering handover. Changes to this file require owner approval and an entry
@@ -1157,6 +1157,7 @@ load evidence; large synthetic evaluation sets presented as gold data.
 
 | Date | Decision | Evidence / reason |
 |---|---|---|
+| 2026-11-21 | Mark Stage 20D complete (`ff8954e`) and record the terminal Stage 20F v1 stop. Put Stage 20G in review: consolidated opt-in routing/recovery policy, v2 E2E protocol with a capped same-model fallback, scoped stops and a single-command operator workflow; R9 four-arm plan. | E001 refusal was local admission (estimate over-reserved output by 1,000 tokens; no window wait; single route). Production defaults, prompts, schemas and the R7D contract are unchanged; worst-case modeled reservation unchanged at $0.81632; no live calls. |
 | 2026-11-20 | Mark R7D-C complete (PR #25, `e025a3d`); put R7D-D in review. Add a synthetic live configuration acceptance harness (low reasoning, 2,000 vs 3,000 completion tokens, v15/v16, 3 fictional scenarios, at most 26 requests) with a separate acceptance program ledger, exact authorization binding and predeclared selection rules. Extract the benchmark runner's guarded execution into a shared class without behaviour change. Review corrections: fail-closed restoration on continuation, frozen reference hash, report bindings, honest predicate scoring, a pinned matrix and a hardened Windows runbook. | PR #25 post-merge evidence: 1,011 tests (0 failures, 58 skipped), 57/57 integration, legacy 13/13, provenance, migrations, `/healthz`, Security green. The frozen R7D benchmark, its references, prompts, answer schemas, production defaults and the 80-call/$1.50 ceilings are unchanged; no live call is made in this stage. |
 | 2026-11-18 | Mark R7D-B execution-safety correction complete (PR #24, `796e0d2`); put R7D-C in review. Bind reasoning effort and a predeclared completion-budget policy in config v2. Classify provider failures by status, error code and one narrow truncation check, with sanitized diagnostics. Score confirmed truncation only under the predeclared policy, keeping its reservation. Carry cumulative benchmark-program accounting in a private ledger so a fresh checkpoint cannot reset the ceilings. Refuse the one-shot `paid-run`. | D002 truncation and the external carry-forward accounting were observed in owner runs. PR #24 post-merge evidence: 926 tests (0 failures, 58 skipped), 57/57 integration, legacy 13/13, provenance, migrations, `/healthz`, Security green. Prompts, answer schemas, validators, retrieval, production defaults and the 80-call/$1.50 ceilings are unchanged; per-campaign recovery and the live acceptance harness are deferred. |
 | 2026-11-18 | Mark R7D-B incremental execution complete (PR #23, `3923a12`); put the R7D-B execution-safety correction in review. Pre-transmission stops never become model failures; a pending repair is durable and resumes only the untransmitted operation after fingerprint verification; per-minute admission uses a provider-calibrated estimate (never called an upper bound) separate from the unchanged cost ledger; an opt-in wait covers only short known token resets; provider/network/billing interruptions are excluded from paired scoring; initial and post-repair outcomes are reported separately. Post-call safety stops outrank model-output classification; any provider/network failure stops execution; interrupted pairs never count as completed. Checkpoint v2 refuses v1 files unchanged. | Independent takeover review reproduced both defects on `3923a12`. Post-merge evidence for PR #23: 880 tests (0 failures, 58 skipped), 57/57 integration, legacy 13/13, provenance, migrations, `/healthz`, Security green. Frozen manifest, prompts, order, schemas, one-repair maximum, Groq-only route and $1.50/80-call limits unchanged; new authorization and zero-call preflight required after merge. |
@@ -1230,6 +1231,40 @@ Default off, unchanged historical benchmark/prompt/schema/provider behavior. Non
 Regression tests cover narrow recovery, rejection of prohibited substitutions/ambiguous spans, idempotence, unchanged fields and source identity, strict revalidation, replacement repair, actual fake-gateway call counts, semantic enforcement and persisted/cache identity. New CI evidence pending; local reference Docker runtime unavailable in the implementation environment. No test pass claimed before logs are verified.
 
 
-### Stage 20D — bounded end-to-end preparation (in review)
+### Stage 20G — consolidated routing and recovery; v2 production E2E protocol (in review)
+
+- **Stage 20D:** complete. PR #30 merged at `ff8954e964e14a98b746668e8341ac7fed269ca8` on
+  2026-11-20. Post-merge CI and Security on `main` were green: 1,103 production tests
+  (58 skipped, 0 failures), integration 57/57, legacy 13/13, provenance `ff8954e`,
+  migrations and `/healthz` OK.
+- **Stage 20F v1 (owner-run):** the live campaign `422aabe9…308e` is terminal. On E001 the
+  seventh Groq request (role `expert`) was refused locally by Redis TPM admission
+  (`retry_after_ms=31804`) and never transmitted. Six Groq and six embedding requests were
+  reserved, $0.0465216 modeled. Never resumed, rerun or deleted; no budget transferred.
+- **Stage 20G:** see
+  [stage20g-routing-recovery.md](../cost-aware-pipeline/docs/stage20g-routing-recovery.md).
+  - A pure WAIT / FALLBACK / SEND / STOP routing policy, applied only with
+    `LLM_ROUTING_POLICY=consolidated`; legacy remains the default.
+  - Bounded waits only when the request fits a fresh window; requests that can never fit are
+    refused immediately; bounded requests reserve their real output cap.
+  - Fallback only to approved, compatible routes after definitive provider rejections. No
+    replay after an uncertain send or an invalid output.
+  - SDK retries are disabled, and hidden upstream fallback is forbidden on OpenRouter.
+  - The successor protocol `stage20-e2e-v2` has a Groq primary and an OpenRouter fallback
+    for the same model, capped at Groq's rates, or a Groq-only variant.
+  - Exact worst-case modeled reservation: $0.81632.
+  - Stops are scoped to the case or the campaign.
+  - A single operator command, `scripts/stage20.ps1 -Mode Test|Run|Report`.
+  - No live inference.
+- **Next:**
+  1. Owner authorization of the v2 fingerprint, then the live E2E.
+  2. R9, per the plan in
+     [r9-four-arm-comparison-plan.md](../cost-aware-pipeline/docs/r9-four-arm-comparison-plan.md):
+     retrieval-only ablation, then a matched four-arm comparison after removing the
+     retrieval-depth, query and generation-settings confounders in `real_comparison.py`.
+
+### Stage 20D — bounded end-to-end preparation (complete: PR #30, `ff8954e`)
 
 R7E PR #29 merged at `d8457cbc7d0c7808d004e5724ed608a3cd878680`; post-merge CI and Security green, 1,092 production tests (1,034 passed, 58 skipped), integration 57/57, legacy 13/13; 20/20 new recovery tests passed. No live inference or default changes. Owner approved offline preparation of five new development questions under separate proposed 100 Groq / 125 Gemini embedding physical request limits and $0.85 modeled accounting ceiling. Fixed maximum reservations total $0.81632; preserve R7D closed ledger. See [Stage 20 preflight](../cost-aware-pipeline/docs/stage20-e2e-preflight.md). Production defaults unchanged; pinned-SDK mocked transport tests and full CI/Security pending. No live invocation authorized. Private manifest novelty against earlier private campaigns and exact operator authorization remain outstanding. After E2E prioritize R9 retrieval ablation and controlled four-arm comparison with equal downstream settings, context budget, and frozen corpus, then expand subject to results; distinguish planning-only frozen comparison from live discovery. R8 calibration remains a release gate. No extra agents or provider changes.
+
+- **Stage 20G PR #31 audit hardening (in review, unmerged):** tightened uncertainty safety (no automatic fallback on unknown transmission), terminal stop for unsettled tickets, late-completion classification, image-bound owner authorization, PowerShell provenance and proxy checks, and bounded private scientific evidence export. The proposed successor requires a new fingerprint and owner approval. No live inference authorized or performed by this PR. Complete only after merge and verified post-merge CI/Security.
