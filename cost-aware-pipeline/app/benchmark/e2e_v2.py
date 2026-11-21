@@ -59,7 +59,7 @@ ROLES = ("orchestrator", "planner", "gatekeeper", "expert", "qa_generator", "que
 # Routing policy values fixed by the protocol (see scientific_rag.routing_policy).
 ROUTING = {"max_wait_seconds": 65, "prefer_primary_within_seconds": 5, "max_physical_attempts": 2,
            "min_attempt_seconds": 10, "fallback_on_invalid_output": False, "fallback_after_uncertain": False,
-           "call_budget_seconds": 150, "groq_timeout_seconds": 30, "openrouter_timeout_seconds": 45,
+           "call_budget_seconds": 150, "groq_timeout_seconds": 55, "openrouter_timeout_seconds": 45,
            "groq_tpm_budget": 6000, "groq_rpm_budget": 20, "openrouter_rpm_budget": 10}
 
 CASE_STOPS = frozenset({"per_case_request_ceiling", "question_deadline", "case_failed"})

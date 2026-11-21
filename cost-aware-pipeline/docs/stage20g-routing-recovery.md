@@ -69,7 +69,7 @@ request got. The route that failed is never re-sent.
 | Definitive response | HTTP 413, or `context_length_exceeded` | Fall back (the route is too small for the request) |
 | Definitive response | 400 `json_validate_failed` or completion-budget exhaustion | Stop (invalid output); opt-in fallback only |
 | Definitive response | 401, 403 or another configuration error | Stop |
-| Uncertain | Timeout or connection reset after sending | Stop; never replayed. Opt-in fallback only (`LLM_ROUTING_FALLBACK_AFTER_UNCERTAIN`) |
+| Uncertain | Timeout or connection reset after sending | Always stop the logical call; no configuration can enable automatic fallback |
 | Completed but invalid | HTTP 200 whose JSON fails the schema, or local answer validation fails | Stop; opt-in fallback only (`LLM_ROUTING_FALLBACK_ON_INVALID_OUTPUT`) |
 
 The gateway determines the transmission state from wire facts. A request hook runs
@@ -84,7 +84,8 @@ always final.
   outbound guard refuses any request that does not carry exactly these values.
 - **Allowlist:** only `LLM_ROUTING_ROUTES` / `LLM_ROUTING_ROUTES_<ROLE>` entries
   (`provider:model`) with declared capabilities (`ROUTE_CAPABILITIES`) are ever candidates.
-- **Attempt limit:** at most 2 physical attempts per logical call (configurable).
+- **Attempt limit:** at most 2 physical attempts per logical call (configurable); unbounded routed attempts also refuse multiple outbound sends.
+- **Uncertain transmission:** automatic fallback is always prohibited, including configuration overrides.
 
 ## 3. Engineering decisions
 
@@ -118,7 +119,7 @@ always final.
     2,000 output tokens and the pinned provider preferences.
   - A `-NoFallback` Groq-only variant exists, with its own fingerprint.
 - **Routing values:** waits ≤ 65 s, primary preferred within 5 s, 2 attempts per call,
-  150 s per call, provider timeouts of 30 s (Groq) and 45 s (OpenRouter), Groq local budget
+  150 s per call, provider timeouts of 55 s (Groq, retaining the v1 allowance) and 45 s (OpenRouter), Groq local budget
   6,000 TPM / 20 RPM.
 - **Request ceilings:**
   - chat: 20 per question and 100 per campaign, shared by Groq and OpenRouter;
@@ -151,7 +152,8 @@ git checkout --detach origin/agent/stage20g-routing-recovery   # or origin/main 
 **`-Mode Test`** makes no inference request. It:
 - verifies a clean commit;
 - builds the image once per commit and checks its provenance;
-- checks the credentials file for the required names only (`$HOME\stage20f-provider.env`);
+- checks the credentials file for the required names only (`$HOME\stage20f-provider.env`) and refuses proxy routing;
+- verifies the immutable Docker image ID and includes it in the authorization fingerprint;
 - finds the manifest in `Desktop\stage20-operator`;
 - runs the offline suites in the image without network;
 - runs the non-inference preflight:
@@ -168,7 +170,7 @@ git checkout --detach origin/agent/stage20g-routing-recovery   # or origin/main 
 
 **`-Mode Report`** exports read-only:
 - `…-summary.json`: sanitized;
-- `…-review-private.json`: questions, answers, sources, candidates and routing events, for
+- `…-review-private.json`: questions, answers, selected evidence passages, retrieval/claim diagnostics, candidates and routing events, for
   your review.
 
 ## 6. Tests
@@ -213,3 +215,12 @@ All tests are offline.
   not be executed in this environment.
 - The consolidated policy is opt-in. Promoting it to the production default is a separate
   decision, after the E2E results are reviewed.
+
+## Review hardening on PR #31
+
+- A pending physical-request ticket at the end of a case now latches a **campaign-level** stop, preserves all pending tickets and reservations, and prohibits the next case. Cases that complete after their 600 s admission deadline are recorded as stopped, even if no further request is made. The 3,000 s overall admission deadline is also checked at case completion; the service additionally has its own 600 s orchestration timeout, not a hard global wall-clock kill.
+- Owner authorization now binds the exact local Docker image config ID (`docker image inspect --format '{{.Id}}'`) as well as code commit, manifest and protocol. Rebuilding the same commit changes the fingerprint if the image content changes. This is a local image ID, not a registry digest.
+- The Windows launcher uses `printenv SCIENTIFIC_RAG_GIT_SHA` instead of an inline `python -c` provenance check, to avoid PowerShell 5.1 quoting defects. Its live-run command passes the verified image ID to the runner. The metadata-only credential check may send provider **GET** requests but never inference.
+- The private owner-review export now includes bounded selected evidence and stored retrieval/source/claim diagnostics. The sanitized summary remains separate.
+- Groq's per-attempt timeout retains the v1 55-second value; OpenRouter uses 45 seconds; the combined routed call has 150 seconds including waits and fallbacks.
+- No paid inference was performed in this review. Windows native execution remains unverified until `-Mode Test` is run locally.
