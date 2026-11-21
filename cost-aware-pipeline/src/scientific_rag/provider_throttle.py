@@ -79,13 +79,25 @@ def _prefix(provider: str) -> str:
     return f"{os.getenv('LLM_THROTTLE_NAMESPACE', 'scientific_rag:llm')}:{provider}"
 
 
-def estimate_tokens(role: str, payload: object) -> int:
-    """Conservative budget estimate, not a tokenizer or a billable-token count."""
+def estimate_input_tokens(role: str, payload: object) -> int:
+    """Conservative input estimate (about four characters per token), not a tokenizer."""
     input_chars = len(str(payload))
     if role == "expert":
         input_chars += 3500  # Fixed synthesis instructions not present in payload.
-    output_reserve = int(os.getenv(f"LLM_{role.upper()}_OUTPUT_RESERVE_TOKENS", "3000" if role == "expert" else "500"))
-    return max(1, (input_chars + 3) // 4 + output_reserve)
+    return (input_chars + 3) // 4
+
+
+def estimate_tokens(role: str, payload: object, max_output_tokens: int | None = None) -> int:
+    """Conservative budget estimate, not a tokenizer or a billable-token count.
+
+    A bounded request (``max_output_tokens``) reserves exactly its enforced output cap; an
+    unbounded request keeps the configured role reserve.
+    """
+    if max_output_tokens is not None:
+        output_reserve = int(max_output_tokens)
+    else:
+        output_reserve = int(os.getenv(f"LLM_{role.upper()}_OUTPUT_RESERVE_TOKENS", "3000" if role == "expert" else "500"))
+    return max(1, estimate_input_tokens(role, payload) + output_reserve)
 
 
 def _budget(provider: str, kind: str) -> int:
@@ -93,12 +105,22 @@ def _budget(provider: str, kind: str) -> int:
     return int(os.getenv(f"LLM_{provider.upper()}_{kind}_BUDGET", str(defaults[provider][kind])))
 
 
-async def admit(redis, provider: str, role: str, payload: object, timeout_seconds: float) -> Admission | None:
-    """Wait briefly for a Groq gatekeeper lease; otherwise fail over promptly."""
-    estimate = estimate_tokens(role, payload)
+EXCEEDS_WINDOW = "exceeds_window"
+
+
+async def admit(redis, provider: str, role: str, payload: object, timeout_seconds: float, *,
+                max_output_tokens: int | None = None) -> Admission | None:
+    """Wait briefly for a Groq gatekeeper lease; otherwise fail over promptly.
+
+    A request whose estimate exceeds the provider's whole token window can never be
+    admitted; it is refused as ``exceeds_window`` without a misleading retry time.
+    """
+    estimate = estimate_tokens(role, payload, max_output_tokens)
     rpm, tpm = _budget(provider, "RPM"), _budget(provider, "TPM")
     if rpm < 0 or tpm < 0:
         raise ValueError("LLM shared budgets cannot be negative")
+    if tpm > 0 and estimate > tpm:
+        raise ProviderThrottled(provider, EXCEEDS_WINDOW, 0)
     owner = str(uuid4())
     gatekeeper = provider == "groq" and role == "gatekeeper"
     if rpm == 0 and tpm == 0 and not gatekeeper:
