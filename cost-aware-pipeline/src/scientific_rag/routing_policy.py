@@ -85,7 +85,6 @@ class PolicyConfig:
     max_physical_attempts: int = 2            # transmissions per logical call (primary + one fallback)
     min_attempt_seconds: float = 10.0         # do not start an attempt with less time than this
     fallback_on_invalid_output: bool = False  # a billed but invalid answer is an outcome, not an outage
-    fallback_after_uncertain: bool = False    # a possibly-billed request is never silently duplicated
 
     def __post_init__(self) -> None:
         if min(self.max_wait_seconds, self.prefer_primary_within_seconds, self.min_attempt_seconds) < 0:
@@ -256,7 +255,8 @@ def failure_disposition(transmission: str, failure_class: str | None, *, http_st
         # A local refusal of an outbound request (contract/limit guard) is a configuration fault.
         return FailureDisposition(False, "local_refusal")
     if transmission == UNCERTAIN:
-        return FailureDisposition(config.fallback_after_uncertain, "uncertain_transmission")
+        # An uncertain outcome is never replayed on any route, even by configuration.
+        return FailureDisposition(False, "uncertain_transmission")
     if transmission == COMPLETED_INVALID:
         return FailureDisposition(config.fallback_on_invalid_output, "invalid_output")
     if http_status in _CAPACITY_STATUSES or provider_error_code in _CAPACITY_CODES:
@@ -287,7 +287,6 @@ def config_from_environment(environ: dict[str, str]) -> PolicyConfig:
         max_physical_attempts=int(number("LLM_ROUTING_MAX_PHYSICAL_ATTEMPTS", 2)),
         min_attempt_seconds=number("LLM_ROUTING_MIN_ATTEMPT_SECONDS", 10.0),
         fallback_on_invalid_output=flag("LLM_ROUTING_FALLBACK_ON_INVALID_OUTPUT"),
-        fallback_after_uncertain=flag("LLM_ROUTING_FALLBACK_AFTER_UNCERTAIN"),
     )
 
 

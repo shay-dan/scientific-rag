@@ -162,15 +162,17 @@ class FailureDispositionTests(unittest.TestCase):
                 self.assertEqual(expected, (result.may_fallback, result.reason, result.exhaust_quota_group))
 
     def test_opt_ins_are_explicit(self):
-        config = policy.PolicyConfig(fallback_on_invalid_output=True, fallback_after_uncertain=True)
+        config = policy.PolicyConfig(fallback_on_invalid_output=True)
         self.assertTrue(policy.failure_disposition(policy.COMPLETED_INVALID, None, config=config).may_fallback)
-        self.assertTrue(policy.failure_disposition(policy.UNCERTAIN, None, config=config).may_fallback)
+        self.assertFalse(policy.failure_disposition(policy.UNCERTAIN, None, config=config).may_fallback)
+        with self.assertRaises(TypeError):
+            policy.PolicyConfig(fallback_after_uncertain=True)
 
     def test_configuration_parsing(self):
         config = policy.config_from_environment({"LLM_ROUTING_MAX_WAIT_SECONDS": "30",
                                                  "LLM_ROUTING_FALLBACK_AFTER_UNCERTAIN": "true"})
-        self.assertEqual((30.0, True, False), (config.max_wait_seconds, config.fallback_after_uncertain,
-                                               config.fallback_on_invalid_output))
+        self.assertEqual((30.0, False), (config.max_wait_seconds, config.fallback_on_invalid_output))
+        self.assertFalse(policy.failure_disposition(policy.UNCERTAIN, None, config=config).may_fallback)
         with self.assertRaises(ValueError):
             policy.PolicyConfig(max_physical_attempts=0)
 

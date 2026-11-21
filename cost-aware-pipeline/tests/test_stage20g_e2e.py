@@ -39,12 +39,16 @@ class ArithmeticAndProtocolTests(unittest.TestCase):
         self.assertEqual(816_320_000, e2e_v2.protocol()["campaign_limit_nanousd"])
 
     def test_fingerprint_binds_protocol_manifest_and_code(self):
-        base = dict(manifest_sha256=e2e_v2.EXPECTED_MANIFEST_SHA256, code_sha="a" * 40)
+        base = dict(manifest_sha256=e2e_v2.EXPECTED_MANIFEST_SHA256, code_sha="a" * 40,
+                    image_id="sha256:" + "1" * 64)
         with_fallback = e2e_v2.fingerprint(e2e_v2.protocol(fallback=True), **base)
         self.assertEqual(64, len(with_fallback))
         self.assertNotEqual(with_fallback, e2e_v2.fingerprint(e2e_v2.protocol(fallback=False), **base))
         self.assertNotEqual(with_fallback, e2e_v2.fingerprint(e2e_v2.protocol(), **{**base, "code_sha": "b" * 40}))
         self.assertNotEqual(with_fallback, e2e_v2.fingerprint(e2e_v2.protocol(), **{**base, "manifest_sha256": "0" * 64}))
+        self.assertNotEqual(with_fallback, e2e_v2.fingerprint(e2e_v2.protocol(), **{**base, "image_id": "sha256:" + "2" * 64}))
+        with self.assertRaises(ValueError):
+            e2e_v2.fingerprint(e2e_v2.protocol(), **{**base, "image_id": "mutable-tag"})
         self.assertNotEqual("422aabe98dd6ed242ea7c2b363d72a80b666404528073583e8a1cd3c082e308e", with_fallback)
         self.assertEqual("stage20-e2e-v2", e2e_v2.protocol()["campaign_id"])
         self.assertFalse(e2e_v2.protocol()["predecessor"]["resumed"])
@@ -114,6 +118,28 @@ class CampaignTests(unittest.TestCase):
         self.assertIsNone(self.campaign.stop_reason)
         self.assertEqual(2 * 6_115_200, self.campaign.summary()["reserved_nanousd"])
         self.assertEqual(0, self.campaign.summary()["pending"])
+
+    def test_unsettled_ticket_stops_entire_campaign_without_discarding_reservation(self):
+        ticket = self.campaign.admit(chat_request(), "groq")
+        outcome = self.campaign.end_case("completed")
+        self.assertEqual(("stopped", "unsettled_at_case_end"), (outcome["status"], outcome["reason"]))
+        self.assertEqual("unsettled_at_case_end", self.campaign.stop_reason)
+        self.assertEqual(1, self.campaign.summary()["pending"])
+        self.assertEqual(ticket.reserved_nanousd, self.campaign.summary()["reserved_nanousd"])
+        with self.assertRaises(ExecutionStopped):
+            self.campaign.begin_case("E002")
+
+    def test_end_case_rejects_late_success_even_without_another_provider_call(self):
+        self.now = 601
+        outcome = self.campaign.end_case("completed")
+        self.assertEqual(("stopped", "question_deadline"), (outcome["status"], outcome["reason"]))
+        self.assertIsNone(self.campaign.stop_reason)
+        self.campaign.begin_case("E002")
+        self.now = 3001
+        outcome = self.campaign.end_case("completed")
+        self.assertEqual(("stopped", "campaign_deadline"), (outcome["status"], outcome["reason"]))
+        with self.assertRaises(ExecutionStopped):
+            self.campaign.begin_case("E003")
 
     def test_question_deadline_is_case_scoped(self):
         self.now = 600

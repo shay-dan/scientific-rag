@@ -19,6 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import re
 import threading
 import time
 from typing import Callable
@@ -120,10 +121,14 @@ def protocol(*, fallback: bool = True) -> dict:
     }
 
 
-def fingerprint(protocol_value: dict, *, manifest_sha256: str, code_sha: str) -> str:
+def fingerprint(protocol_value: dict, *, manifest_sha256: str, code_sha: str, image_id: str) -> str:
+    """Bind the owner authorization to the exact Docker image, not a mutable tag."""
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
+        raise ValueError("authorization requires an exact Docker image ID")
     return canonical_sha256({"schema": AUTHORIZATION_SCHEMA, "campaign_id": protocol_value["campaign_id"],
                              "protocol_sha256": canonical_sha256(protocol_value),
-                             "manifest_sha256": manifest_sha256, "code_sha": code_sha})
+                             "manifest_sha256": manifest_sha256, "code_sha": code_sha,
+                             "image_id": image_id})
 
 
 class ExecutionStopped(TransmissionRefused):
@@ -224,8 +229,17 @@ class Campaign:
             if self._inflight:
                 # An unsettled ticket at case end is a defect; it stays reserved and is reported.
                 self._write({"event": "unsettled_at_case_end", "case": self.case, "tickets": sorted(self._inflight)})
-                self._inflight.clear()
-            outcome = {"case": self.case, "status": status, "reason": reason or self.case_failure,
+                # Do NOT clear tickets: they still represent possibly transmitting work.
+                # A terminal stop prevents all further questions.
+                self.stop("unsettled_at_case_end")
+            if self._clock() - self._started >= CAMPAIGN_SECONDS:
+                self.stop("campaign_deadline")
+            if self._case_started is not None and self._clock() - self._case_started >= QUESTION_SECONDS:
+                self.fail_case("question_deadline")
+            terminal = self.stop_reason or self.case_failure
+            if terminal:
+                status, reason = "stopped", terminal
+            outcome = {"case": self.case, "status": status, "reason": reason,
                        "requests": dict(self.per_case)}
             self._write({"event": "end_case", **outcome})
             self.completed.append(outcome)

@@ -221,11 +221,18 @@ class _WireRecorder:
         self.response_status: int | None = None
         self.refusal = None
 
-    def sync_hook(self, _request: httpx.Request) -> None:
+    def _single_request(self) -> None:
+        if self.verified_requests:
+            self.refusal = BoundedRequestLimitExceeded(
+                "a routed provider attempt may transmit at most one physical request")
+            raise self.refusal
         self.verified_requests += 1
 
+    def sync_hook(self, _request: httpx.Request) -> None:
+        self._single_request()
+
     async def async_hook(self, _request: httpx.Request) -> None:
-        self.verified_requests += 1
+        self._single_request()
 
     def sync_response_hook(self, response: httpx.Response) -> None:
         self.response_status = response.status_code
@@ -1292,11 +1299,10 @@ async def _routed_attempt(route: routing_policy.Route, role: str, temperature: f
             _ainvoke_with_usage(chain, payload, usage_handler),
             timeout=min(provider_timeout_seconds(route.provider), max(0.001, deadline - _monotonic())),
         )
-        if limit is not None:
-            if wire.refusal is not None:
+        if wire is None or wire.refusal is not None or wire.verified_requests != 1:
+            if wire is not None and wire.refusal is not None:
                 raise wire.refusal
-            if wire.verified_requests != 1:
-                raise OutputTokenLimitNotEnforced("the response did not come from one verified bounded request")
+            raise OutputTokenLimitNotEnforced("the routed attempt did not make exactly one verified request")
         _validate_role_output(role, result, payload)
         latency_ms = round((time.perf_counter() - started) * 1000, 1)
         input_tokens, output_tokens = _usage_counts(result)
