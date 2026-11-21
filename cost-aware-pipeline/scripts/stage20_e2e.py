@@ -62,12 +62,14 @@ def _bound_inputs(args) -> tuple[dict, dict, str]:
     if manifest_sha != e2e_v2.EXPECTED_MANIFEST_SHA256:
         raise SystemExit("manifest hash differs from the protocol's frozen manifest")
     protocol = e2e_v2.protocol(fallback=_fallback(args))
-    return manifest, protocol, e2e_v2.fingerprint(protocol, manifest_sha256=manifest_sha, code_sha=args.code_sha)
+    return manifest, protocol, e2e_v2.fingerprint(protocol, manifest_sha256=manifest_sha,
+                                                   code_sha=args.code_sha, image_id=args.image_id)
 
 
 def prepare(args) -> int:
     _, protocol, fingerprint = _bound_inputs(args)
     value = {"campaign_id": protocol["campaign_id"], "code_sha": args.code_sha,
+             "image_id": args.image_id,
              "protocol_sha256": e2e_v2.canonical_sha256(protocol), "fingerprint": fingerprint,
              "fallback": _fallback(args), "maximum_modeled_reservation_usd":
                  protocol["maximum_modeled_reservation_nanousd"] / e2e_v2.NANO_USD,
@@ -127,6 +129,8 @@ async def _preflight(fallback: bool) -> dict:
 
 
 def auth_preflight(args) -> int:
+    from app.benchmark.e2e_runtime import refuse_proxies
+    refuse_proxies()  # fail before creating any live campaign resources
     results = asyncio.run(_preflight(_fallback(args)))
     ok = (all(results[name]["authenticated"] and results[name]["model_listed"] for name in ("groq", "gemini_embedding"))
           and results["entrez_email"]["present"]
@@ -146,6 +150,45 @@ def _production_environment(fingerprint: str) -> None:
     })
     if not os.environ.get("GOOGLE_API_KEY") and os.environ.get("GEMINI_API_KEY"):
         os.environ["GOOGLE_API_KEY"] = os.environ["GEMINI_API_KEY"]
+
+
+def _private_review_payload(metadata: dict, evidence: list) -> dict:
+    """Owner-only, bounded selected passages and diagnostic provenance."""
+    allowed = ("retrieval_inspector", "pubmed_inspector", "arxiv_inspector",
+               "claim_validation", "source_diagnostics", "source_sufficiency",
+               "embedding_usage", "llm_gateway")
+    result = {}
+    for key in allowed:
+        value = metadata.get(key)
+        if isinstance(value, list):
+            result[key] = value[:60]
+            result[f"{key}_truncated"] = len(value) > 60
+        elif isinstance(value, dict):
+            result[key] = value
+    selected = []
+    for item in evidence[:40]:
+        content = str(item.content)
+        selected.append({"ordinal": item.ordinal, "evidence_id": str(item.id),
+                         "metadata": item.metadata_json,
+                         "passage_excerpt": content[:2000],
+                         "passage_truncated": len(content) > 2000})
+    result["selected_evidence"] = selected
+    result["selected_evidence_truncated"] = len(evidence) > 40
+    result["selected_evidence_count"] = len(evidence)
+    return result
+
+
+async def _read_private_review(session, research_id) -> dict:
+    """Read the selected evidence and inspection metadata from the persisted research run."""
+    from sqlalchemy import select
+    from app.models import ResearchRun, ResearchEvidence
+    record = await session.get(ResearchRun, research_id)
+    if record is None:
+        raise RuntimeError("research run missing from private review export")
+    evidence = (await session.scalars(select(ResearchEvidence)
+                .where(ResearchEvidence.research_run_id == research_id)
+                .order_by(ResearchEvidence.ordinal))).all()
+    return _private_review_payload(dict(record.model_metadata or {}), list(evidence))
 
 
 def _sanitized_case(outcome: dict, response, latency: float, routing: list[dict]) -> dict:
@@ -184,11 +227,14 @@ async def _run(args) -> int:
     from app.evaluation_report import resolve_git_provenance
     if resolve_git_provenance() != {"sha": args.code_sha, "source": "build_arg"}:
         raise SystemExit("image provenance does not match the authorized code commit")
+    if os.environ.get("SCIENTIFIC_RAG_IMAGE_ID") != args.image_id:
+        raise SystemExit("authorized image ID differs from the verified launcher image identity")
     results = Path(args.results)
     if not results.is_dir() or any(results.iterdir()):
         raise SystemExit("results location must be a new, empty directory (a campaign never reruns)")
     _private_write(results / "authorization.json", {
         "campaign_id": protocol["campaign_id"], "fingerprint": fingerprint, "code_sha": args.code_sha,
+        "image_id": args.image_id,
         "manifest_sha256": protocol["manifest_sha256"], "protocol": protocol,
         "started_at_unix": round(time.time(), 3)})
     journal = e2e_v2.PrivateJournal(results / "journal.jsonl")
@@ -230,7 +276,7 @@ async def _run(args) -> int:
                     rows.append({"case": case["case_id"], "status": "not_executed", "reason": campaign.stop_reason})
                     continue
                 campaign.begin_case(case["case_id"])
-                started, response, error_type, captured = time.monotonic(), None, None, {}
+                started, response, error_type, captured, private_evidence = time.monotonic(), None, None, {}, {}
                 routing.clear()
                 try:
                     with capture_candidates() as captured:
@@ -238,6 +284,7 @@ async def _run(args) -> int:
                             response = await service.run(
                                 session, case["question"], ResearchMode.fast, False,
                                 actor=f"stage20g:{fingerprint[:12]}", cache_mode=ResearchCacheMode.refresh_sources)
+                            private_evidence = await _read_private_review(session, response.id)
                     delivered = response.status == "completed" and bool(response.answer)
                     outcome = campaign.end_case("completed" if delivered else "not_delivered",
                                                 reason=None if delivered else f"status:{response.status}")
@@ -252,7 +299,8 @@ async def _run(args) -> int:
                 review.append({"case": case["case_id"], "question": case["question"], "outcome": outcome,
                                "error_type": error_type, "latency_seconds": round(latency, 1),
                                "response": response.model_dump(mode="json") if response is not None else None,
-                               "candidates": captured, "routing": list(routing)})
+                               "candidates": captured, "routing": list(routing),
+                               "scientific_review": private_evidence})
     finally:
         await redis.aclose()
         journal.close()
@@ -299,6 +347,7 @@ def main(argv=None) -> int:
         if name in ("prepare", "run"):
             item.add_argument("--manifest", required=True)
             item.add_argument("--code-sha", required=True)
+            item.add_argument("--image-id", required=True)
         if name == "prepare":
             item.add_argument("--out")
         if name == "run":

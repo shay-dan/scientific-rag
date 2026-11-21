@@ -35,7 +35,7 @@ def routing_environment(*, fallback: bool, keys: dict[str, str]) -> dict[str, st
         "LLM_ROUTING_PREFER_PRIMARY_WITHIN_SECONDS": str(ROUTING["prefer_primary_within_seconds"]),
         "LLM_ROUTING_MAX_PHYSICAL_ATTEMPTS": str(ROUTING["max_physical_attempts"]),
         "LLM_ROUTING_MIN_ATTEMPT_SECONDS": str(ROUTING["min_attempt_seconds"]),
-        "LLM_ROUTING_FALLBACK_ON_INVALID_OUTPUT": "false", "LLM_ROUTING_FALLBACK_AFTER_UNCERTAIN": "false",
+        "LLM_ROUTING_FALLBACK_ON_INVALID_OUTPUT": "false",
         "LLM_REQUEST_TIMEOUT_SECONDS": str(ROUTING["call_budget_seconds"]),
         "LLM_GROQ_TIMEOUT_SECONDS": str(ROUTING["groq_timeout_seconds"]),
         "LLM_GROQ_TPM_BUDGET": str(ROUTING["groq_tpm_budget"]), "LLM_GROQ_RPM_BUDGET": str(ROUTING["groq_rpm_budget"]),
