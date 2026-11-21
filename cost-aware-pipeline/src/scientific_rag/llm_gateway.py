@@ -725,7 +725,7 @@ def create_chat_model(provider: str, role: str, temperature: float, max_output_t
     if limit is not None:
         output_token_limit_parameters(provider)
     model = model or model_for(provider, role)
-    effort = validate_reasoning_effort(provider, model, reasoning_effort)
+    effort = validate_reasoning_effort(provider, model, reasoning_effort, routing=routing)
     if effort is not None and limit is None:
         raise UnsupportedReasoningEffort("reasoning effort requires a verified bounded request (max_output_tokens)")
     timeout = provider_timeout_seconds(provider)
@@ -1089,7 +1089,7 @@ def routing_candidates(role: str) -> list[routing_policy.Route]:
             provider=provider, model=model, quota_group=facts["quota_group"],
             context_tokens=facts["context_tokens"], max_output_tokens=facts["max_output_tokens"],
             structured_output=facts["structured_output"], bounded_output=provider in OUTPUT_TOKEN_LIMIT_PARAMETERS,
-            reasoning_efforts=REASONING_EFFORT_SUPPORT.get((provider, model), ()),
+            reasoning_efforts=tuple(facts.get("reasoning_efforts") or REASONING_EFFORT_SUPPORT.get((provider, model), ())),
             priced=rate_for(provider, model) is not None)
     routes = routing_policy.ordered_candidates(labels, declared)
     for route in routes:

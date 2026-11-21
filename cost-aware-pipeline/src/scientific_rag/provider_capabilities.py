@@ -7,14 +7,11 @@ from __future__ import annotations
 
 from typing import Any
 
-# Routes whose chat-completions request accepts ``reasoning_effort`` (Groq GPT-OSS). OpenRouter
-# documents ``reasoning_effort`` as shorthand for ``reasoning.effort``; with the consolidated
-# routing policy its requests also carry ``provider.require_parameters`` so only upstream
-# endpoints that support every sent parameter may serve them.
+# Routes whose chat-completions request accepts ``reasoning_effort`` (Groq GPT-OSS). This table
+# also defines the frozen R7D benchmark contract, so routing-only support lives below.
 REASONING_EFFORT_SUPPORT: dict[tuple[str, str], tuple[str, ...]] = {
     ("groq", "openai/gpt-oss-120b"): ("low", "medium", "high"),
     ("groq", "openai/gpt-oss-20b"): ("low", "medium", "high"),
-    ("openrouter", "openai/gpt-oss-120b"): ("low", "medium", "high"),
 }
 
 
@@ -22,13 +19,19 @@ REASONING_EFFORT_SUPPORT: dict[tuple[str, str], tuple[str, ...]] = {
 # missing here is never a routing candidate. ``context_tokens``/``max_output_tokens`` are
 # conservative declared limits (not provider guarantees); ``quota_group`` names the account
 # quota a route consumes, so a fallback that shares an exhausted quota is not attempted.
+# OpenRouter documents ``reasoning_effort`` as shorthand for ``reasoning.effort``; routed
+# OpenRouter requests also carry ``provider.require_parameters`` so only upstream endpoints
+# that support every sent parameter may serve them.
 ROUTE_CAPABILITIES: dict[tuple[str, str], dict[str, Any]] = {
     ("groq", "openai/gpt-oss-120b"): {"context_tokens": 131072, "max_output_tokens": 32768,
-                                      "structured_output": True, "quota_group": "groq"},
+                                      "structured_output": True, "quota_group": "groq",
+                                      "reasoning_efforts": ("low", "medium", "high")},
     ("groq", "openai/gpt-oss-20b"): {"context_tokens": 131072, "max_output_tokens": 32768,
-                                     "structured_output": True, "quota_group": "groq"},
+                                     "structured_output": True, "quota_group": "groq",
+                                     "reasoning_efforts": ("low", "medium", "high")},
     ("openrouter", "openai/gpt-oss-120b"): {"context_tokens": 131072, "max_output_tokens": 32768,
-                                            "structured_output": True, "quota_group": "openrouter"},
+                                            "structured_output": True, "quota_group": "openrouter",
+                                            "reasoning_efforts": ("low", "medium", "high")},
 }
 
 
@@ -36,11 +39,16 @@ class UnsupportedReasoningEffort(ValueError):
     """A reasoning-effort setting was requested for a route that cannot verifiably carry it."""
 
 
-def validate_reasoning_effort(provider: str, model: str, value: Any) -> str | None:
-    """Return the setting, or None when unspecified (the provider default is then unchanged)."""
+def validate_reasoning_effort(provider: str, model: str, value: Any, *, routing: bool = False) -> str | None:
+    """Return the setting, or None when unspecified (the provider default is then unchanged).
+
+    ``routing`` (Stage 20G) also accepts the declared routed-route support.
+    """
     if value is None:
         return None
     supported = REASONING_EFFORT_SUPPORT.get((provider, model))
+    if not supported and routing:
+        supported = (ROUTE_CAPABILITIES.get((provider, model)) or {}).get("reasoning_efforts")
     if not supported:
         raise UnsupportedReasoningEffort(f"reasoning effort is not supported on route {provider}:{model}")
     if not isinstance(value, str) or value not in supported:
