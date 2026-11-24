@@ -95,7 +95,9 @@ class NumericClaimAuditTests(unittest.TestCase):
         )
         self.assertEqual(finding["claim_values"][0]["normalized"], "0.74")
         self.assertEqual(finding["evidence_values"][0]["normalized"], "0.74")
-        self.assertEqual(finding["status"], "consistent")
+        # The existing audit intentionally does not verify a unitless ratio.
+        self.assertEqual(finding["status"], "unverifiable")
+        self.assertEqual(finding["reason_code"], "missing_unit_context")
 
     def test_middle_dot_confidence_interval_endpoints_are_decimal_values(self) -> None:
         finding = _audit(
@@ -104,6 +106,12 @@ class NumericClaimAuditTests(unittest.TestCase):
         )
         self.assertEqual(finding["claim_values"][0]["normalized"], "0.67..0.83")
         self.assertEqual(finding["evidence_values"][0]["normalized"], "0.67..0.83")
+        # The existing audit intentionally does not verify a unitless interval.
+        self.assertEqual(finding["status"], "unverifiable")
+        self.assertEqual(finding["reason_code"], "missing_unit_context")
+
+    def test_middle_dot_decimal_with_explicit_unit_can_be_verified(self) -> None:
+        finding = _audit("The response rate was 0.74%.", "The response rate was 0·74%.")
         self.assertEqual(finding["status"], "consistent")
 
     def test_ambiguous_numeric_formats_do_not_create_partial_values(self) -> None:
