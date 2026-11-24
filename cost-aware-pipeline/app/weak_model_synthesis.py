@@ -360,13 +360,6 @@ SCIENTIFIC_GENERATION_INSTRUCTIONS_V16 = """Numeric and attribution rules:
 - Keep the passage's design and certainty. Never describe a retrospective, single-arm,
   preprint, historical or indirect comparison as randomized, head-to-head or
   established, and do not turn an association into a cause.
-- Confidence intervals that include the effect's null value (1 for ratios, 0 for
-  differences) do not establish a statistically clear benefit or harm. Keep a
-  composite outcome distinct from its individual components. Relative reductions
-  are not absolute risk differences.
-- Missing search evidence is not evidence of no effect or no benefit. External
-  generalization requires external validation; internal or single-center results
-  do not establish it. Make unsupported parts of a multi-outcome question explicit.
 - If the passage does not state a detail, leave it out; do not infer it.
 """
 

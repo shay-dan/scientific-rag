@@ -54,8 +54,8 @@ means no recognized warning, not scientific validity. Unsupported interval
 formats are `unverifiable`. Existing strict structural rejection and opt-in
 semantic enforcement/recovery behavior remain. Semantic verification defaults
 to off; unsupported causal claims can still escape an audit-only configuration.
-No enforcement default was changed. Extra statistical guidance is in the
-existing opt-in v16 generation prompt and existing opt-in verifier.
+No enforcement default was changed. The frozen v15/v16 generation prompts remain byte-for-byte unchanged. Extra
+statistical guidance is limited to the existing opt-in verifier.
 
 Useful partial answers still require valid cited claims. Missing recognized
 dimensions are rendered under "Not established by the retrieved evidence".
@@ -89,7 +89,11 @@ variables triggered the frozen-campaign safety guard. The guard was retained;
 subsequent offline commands unset proxy variables only inside test containers.
 Another run was interrupted at an existing lease-keeper cancellation fixture;
 it has no complete test count and is not a passing run. No lifecycle code was
-changed to make it pass.
+changed to make it pass. The first isolated follow-up snapshot collected 1,203:
+1,134 passed, 60 skipped, five failures and four errors. Six prompt-contract
+regressions were fixed by restoring the frozen v16 prompt exactly; three
+orchestrator fixture errors were fixed by accepting the legacy preflight key
+when the additive cache key is absent. Required tests were not weakened.
 
 ## Trade-offs and acceptance gate
 

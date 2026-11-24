@@ -2099,7 +2099,7 @@ class Orchestrator:
         sufficient = self._source_sufficiency(documents, anchors, original_query)
         return documents, {
             "checked": True,
-            "decision": "reuse_postgres_evidence" if sufficient["cache_eligible"] else "postgres_evidence_insufficient",
+            "decision": "reuse_postgres_evidence" if sufficient.get("cache_eligible", sufficient["sufficient"]) else "postgres_evidence_insufficient",
             "reason": sufficient["reason"],
             "candidate_documents": len(documents),
             "anchors": anchors.as_dict(),
@@ -2314,7 +2314,8 @@ class Orchestrator:
         # this run before retrieval rather than exposing the whole database.
         self.vs.restrict_final_retrieval_to_current_run()
 
-        should_mine = cache_mode == "refresh_sources" or not self._source_sufficiency(reused_docs, anchors, original_query).get("cache_eligible", False)
+        cached_preflight = self._source_sufficiency(reused_docs, anchors, original_query)
+        should_mine = cache_mode == "refresh_sources" or not cached_preflight.get("cache_eligible", cached_preflight["sufficient"])
         if should_mine:
             mined_docs, _, source_diagnostics, pubmed_inspector, arxiv_inspector = await self.run_mining_operation(
                 refined_plan,
