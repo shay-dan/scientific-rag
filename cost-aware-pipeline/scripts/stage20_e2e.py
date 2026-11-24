@@ -205,7 +205,8 @@ def _sanitized_case(outcome: dict, response, latency: float, routing: list[dict]
     if response is not None:
         diagnostics = response.llm_diagnostics or {}
         row.update({
-            "response_status": response.status, "answer_delivered": bool(response.answer),
+            "response_status": response.status,
+            "answer_delivered": bool(response.answer) and response.status == "completed" and outcome.get("status") == "completed",
             "source_count": len(response.sources), "retrieval_version": response.retrieval_version,
             "source_sufficiency": {key: value for key, value in (response.source_sufficiency or {}).items()
                                    if isinstance(value, (bool, int, float, str)) and key != "question"},

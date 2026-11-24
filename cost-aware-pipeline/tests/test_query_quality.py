@@ -65,6 +65,44 @@ class QueryQualityTests(unittest.TestCase):
         self.assertIn("alphafold", alphafold.required)
         self.assertIn("drug discovery", alphafold.required)
 
+    def test_sleep_and_dementia_are_required_without_generic_relation_words(self):
+        question = (
+            "What is the relationship between sleep duration and incident dementia in older adults, "
+            "and to what extent can confounding and reverse causation explain observed associations?"
+        )
+        anchors = extract_anchors(question)
+        self.assertIn("sleep duration", anchors.required)
+        self.assertIn("dementia", anchors.required)
+        self.assertNotIn("relationship", anchors.required)
+        self.assertNotIn("between", anchors.required)
+        pubmed = build_pubmed_query(anchors, broad=True)
+        self.assertTrue(query_is_valid(pubmed, anchors))
+        self.assertIn('dementia', pubmed.lower())
+        self.assertIn('sleep duration', pubmed.lower())
+
+    def test_precision_comparison_discourse_is_not_required_evidence(self):
+        question = (
+            "What are the trade-offs between 4-bit and 8-bit post-training quantization of "
+            "large language models in terms of accuracy, memory consumption and inference latency?"
+        )
+        anchors = extract_anchors(question)
+        self.assertIn("large language model", anchors.required)
+        self.assertIn("4-bit", anchors.required)
+        self.assertIn("8-bit", anchors.required)
+        self.assertNotIn("trade-offs", anchors.required)
+        self.assertNotIn("post-training", anchors.required)
+        arxiv = build_arxiv_query(anchors, broad=True)
+        self.assertTrue(query_is_valid(arxiv, anchors))
+        documents = [
+            Document(
+                page_content="Large language models quantized at 4-bit and 8-bit show different memory and latency.",
+                metadata={"doc_id": "precision-study", "title": "Quantized inference study"},
+            )
+        ]
+        coverage = Orchestrator._source_sufficiency(documents, anchors)
+        self.assertTrue(coverage["sufficient"])
+        self.assertEqual(coverage["missing_concepts"], [])
+
     def test_source_sufficiency_requires_every_topic_anchor(self):
         anchors = QueryAnchors(("crispr", "cancer"), ())
         bacterial = [Document(page_content="CRISPR editing in bacteria", metadata={"doc_id": "1", "title": "Bacterial editing"})]

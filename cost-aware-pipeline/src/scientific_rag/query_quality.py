@@ -10,6 +10,7 @@ _STOP_WORDS = {
     "a", "about", "an", "and", "are", "as", "be", "been", "being", "by", "can",
     "causes", "challenges", "current", "do", "does", "evidence", "for", "from", "how",
     "in", "into", "is", "known", "latest", "limitations", "main", "of", "on",
+    "between", "relationship", "relationships", "trade", "offs", "tradeoffs",
     "opportunities", "prevention", "recent", "research", "risks", "roles", "studies",
     "strategies", "the", "their", "to", "use", "used", "uses", "using", "what",
     "which", "with",
@@ -25,6 +26,8 @@ _CONCEPTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("fourier neural operator", ("fourier neural operator", "fourier neural operators", "fno")),
     ("partial differential equation", ("partial differential equation", "partial differential equations", "pde", "pdes")),
     ("large language model", ("large language model", "large language models", "llm", "llms")),
+    ("sleep duration", ("sleep duration", "sleep durations", "sleep time", "sleep length")),
+    ("dementia", ("dementia", "dementias")),
     ("machine learning", ("machine learning", "deep learning", "artificial intelligence", "ai")),
     ("surface code", ("surface code", "surface codes", "rotated surface code", "xzzx")),
     ("breast cancer", ("breast cancer", "mammary cancer")),
@@ -42,6 +45,11 @@ _CONCEPTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("antimicrobial resistance", ("antimicrobial resistance", "antibiotic resistance", "drug-resistant infection", "drug resistant infection", "amr")),
     ("healthcare setting", ("healthcare setting", "healthcare settings", "health care setting", "health care settings", "hospital", "hospitals", "clinical setting", "clinical settings")),
 )
+
+
+# Descriptive comparisons and qualifiers are useful search details, but should
+# never become mandatory identity anchors merely because they are hyphenated.
+_NON_ENTITY_HYPHENS = frozenset({"trade-off", "trade-offs", "post-training"})
 
 
 def _normalized_text(value: str) -> str:
@@ -82,6 +90,8 @@ def extract_anchors(question: str, planner_query: str = "") -> QueryAnchors:
     # Preserve distinctive acronyms/hyphenated entities that are not in the lexicon.
     for raw in re.findall(r"\b(?:[A-Z][A-Z0-9]{2,}|[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+)\b", question):
         term = raw.lower()
+        if term in _NON_ENTITY_HYPHENS:
+            continue
         term_parts = set(re.findall(r"[a-z0-9]+", term))
         # Do not duplicate a recognized phrase solely because the user wrote it
         # with a hyphen ("lung-cancer" vs "lung cancer").
