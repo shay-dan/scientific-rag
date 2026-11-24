@@ -170,6 +170,10 @@ def _is_hyphenated_identifier(text: str, span: tuple[int, int]) -> bool:
 
 
 def _extract_quantities(text: str) -> tuple[tuple[_Quantity, ...], bool]:
+    # Some clinical abstracts (e.g. Lancet) use U+00B7 as a decimal separator:
+    # 0·74 means 0.74, not the integers 0 and 74. Normalize only within
+    # numeric tokens; never rewrite the underlying quoted source text.
+    text = re.sub(r"(?<=\d)[\u00b7\u2027](?=\d)", ".", text)
     if _has_unsupported_numeric_format(text):
         return (), True
     found: list[tuple[int, _Quantity]] = []
