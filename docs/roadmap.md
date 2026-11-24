@@ -1283,3 +1283,11 @@ bump. See [the evidence report](reports/2026-11-24-stage20h-evidence.md).
 Scientific sufficiency remains unestablished by deterministic candidate coverage.
 A second stacked follow-up addresses deadline admission and failure diagnostics.
 Owner review is required; passing synthetic fixtures is not live acceptance.
+
+The execution-budget follow-up is stacked on PR #33 (`7ba5d95`). It caps gateway
+and source work by remaining monotonic time, refuses late repair, records phase
+and provider spans, and preserves structural-only failure evidence without
+silent degradation. The available local log/database contain no affected
+natural-remedy runs, so their 600-second critical path remains unmeasured; see
+[the reliability report](reports/2026-11-24-stage20h-reliability.md) for required
+traces, cancellation limits and acceptance gates. Stage 20H remains in review.

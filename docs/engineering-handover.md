@@ -173,3 +173,19 @@ For the user-facing list see [known-limitations.md](known-limitations.md).
   owner consolidated them into the Master Implementation Plan, now
   [roadmap.md](roadmap.md). Claude took over implementation starting with R0; new
   branches use the `agent/` prefix.
+
+## 2026-11-24 — Stage 20H continuation, review gate
+
+Accepted main is `bc053c1` (merged Stage 20G PR #31). No Stage 20G live campaign
+was rerun. Foundation draft #32 at `892d999` was reviewed and its successful CI
+and Security conclusions rechecked. Its local HTMX, decimal handling and truthful
+answer-delivery reporting remain preserved. Main's exact merge-SHA workflow run
+lookup returned no runs; no independent post-merge CI claim is made here.
+
+Stage 20H remains in review: stacked PR #33 adds conservative scientific topic
+preservation, nonduplicating repair/screening, versioned passage adequacy and
+separate interpretation/completeness audits. Its follow-up adds cooperative
+execution budgets and truthful deadline/cancellation diagnostics. See the dated
+evidence, reliability and validation reports. Synthetic regressions are not
+scientific gold or evidence that the frozen live cases are solved. No paid
+inference, provider experiment, merge, deployment or next stage was performed.

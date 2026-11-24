@@ -649,6 +649,10 @@ def _merge_wire_details(usage_handler: "_TokenUsageHandler", guard: "_OutputLimi
 
 
 def _record(attempt: ProviderAttempt) -> None:
+    from .execution_budget import current_budget
+    budget = current_budget()
+    if budget is not None:
+        budget.record_attempt(attempt)
     attempts = _trace.get()
     if attempts is not None:
         attempts.append(attempt)
@@ -897,6 +901,8 @@ async def ainvoke(role: str, temperature: float, chain_builder: Callable[[Any], 
     ``reasoning_effort`` (R7D-C, optional) requires ``max_output_tokens`` and a supported
     route for every configured provider; it is never silently dropped or applied elsewhere.
     """
+    from .execution_budget import require_budget
+    require_budget("provider call", minimum_seconds=1)
     limit = validate_max_output_tokens(max_output_tokens)
     if routing_mode() == "consolidated":
         return await _ainvoke_routed(role, temperature, chain_builder, payload, limit=limit,
@@ -923,7 +929,8 @@ async def ainvoke(role: str, temperature: float, chain_builder: Callable[[Any], 
     cooldown_seconds = float(os.getenv("LLM_PROVIDER_COOLDOWN_SECONDS", "60"))
     if min(call_budget, recovery_min_remaining, cooldown_seconds) <= 0:
         raise ValueError("LLM gateway time budgets must be positive")
-    deadline = time.monotonic() + call_budget
+    from .execution_budget import capped_deadline
+    deadline = capped_deadline(time.monotonic() + call_budget)
     skipped: list[str] = []
     attempted: set[str] = set()
     pending = list(providers)
@@ -1013,6 +1020,18 @@ async def ainvoke(role: str, temperature: float, chain_builder: Callable[[Any], 
                 cooldowns.pop(provider, None)
             logger.info("llm_gateway_success provider=%s model=%s role=%s latency_ms=%s", provider, model, role, latency_ms)
             return result
+        except asyncio.CancelledError:
+            # A cancelled transmitted request may still be billed. Keep unknown
+            # usage explicit and never route cancellation into fallback.
+            _record(ProviderAttempt(
+                call_id, attempt_index, provider, model, role,
+                round((time.perf_counter() - started) * 1000, 1), False, False,
+                error_type="CancelledError",
+                input_tokens=usage_handler.input_tokens if usage_handler.has_usage else None,
+                output_tokens=usage_handler.output_tokens if usage_handler.has_usage else None,
+                diagnostics={"transmission": "uncertain", "usage_complete": usage_handler.has_usage},
+            ))
+            raise
         except Exception as error:
             last_error = error
             latency_ms = round((time.perf_counter() - started) * 1000, 1)
@@ -1167,7 +1186,8 @@ async def _ainvoke_routed(role: str, temperature: float, chain_builder: Callable
     shared_redis = _shared_redis.get()
     budget = _routing_budget.get()
     call_id = str(uuid4())
-    deadline = _monotonic() + call_budget
+    from .execution_budget import capped_deadline
+    deadline = capped_deadline(_monotonic() + call_budget, clock=_monotonic)
     state = routing_policy.CallState()
     admissions: dict[str, Any] = {}
     last_error: BaseException | None = None
@@ -1351,6 +1371,15 @@ async def _routed_attempt(route: routing_policy.Route, role: str, temperature: f
         return {"ok": False, "error": error, "transmission": transmission, "failure": failure}
     except BaseException:
         # Cancellation mid-attempt: the request may have been sent. Never replayed here.
+        _record(ProviderAttempt(
+            call_id, attempt_index, route.provider, route.model, role,
+            round((time.perf_counter() - started) * 1000, 1), False, False,
+            error_type="CancelledError",
+            input_tokens=usage_handler.input_tokens if usage_handler.has_usage else None,
+            output_tokens=usage_handler.output_tokens if usage_handler.has_usage else None,
+            diagnostics={"transmission": "uncertain" if wire is None or wire.verified_requests else "not_transmitted",
+                         "usage_complete": usage_handler.has_usage},
+        ))
         _observe({"event": "attempt_cancelled", "call_id": call_id, "role": role, "route": route.label,
                   "transmission": routing_policy.UNCERTAIN if wire is None or wire.verified_requests else
                   routing_policy.NOT_TRANSMITTED})

@@ -35,6 +35,7 @@ from model_policy import ModelPolicy
 from .domain import ArxivRelevanceAssessment, ChunkQAResponse, GatekeeperReview, PubMedRelevanceAssessment, QAPair, QueryPlan, QueryRepairProposal, ResearchPlan, SubQuery, SynthesisValidation
 from .llm_gateway import ainvoke as gateway_ainvoke
 from .llm_gateway import ainvoke_structured
+from .execution_budget import require_budget, run_with_budget, ResearchDeadlineExceeded
 from .evidence_adequacy import assess_adequacy
 from .query_quality import QueryAnchors, build_arxiv_query, build_pubmed_query, concepts_covered, extract_anchors, query_is_valid
 from .pipeline_config import PipelineConfig
@@ -122,13 +123,25 @@ class _BoundedArxivSession(requests.Session):
     delay_seconds = float(os.getenv("ARXIV_REQUEST_INTERVAL_SECONDS", "3"))
 
     def request(self, method, url, **kwargs):
-        kwargs.setdefault("timeout", (self.connect_timeout_seconds, self.read_timeout_seconds))
+        require_budget("arxiv transport")
         _ArxivSharedState.wait_for_slot(self.delay_seconds)
+        remaining = require_budget("arxiv transport")
+        kwargs.setdefault("timeout", (self.connect_timeout_seconds, self.read_timeout_seconds))
+        if remaining is not None:
+            kwargs["timeout"] = (min(self.connect_timeout_seconds, remaining / 2),
+                                 min(self.read_timeout_seconds, remaining / 2))
         response = super().request(method, url, **kwargs)
         if getattr(response, "status_code", None) == 429:
             retry_after = _ArxivSharedState.retry_after_seconds(response.headers.get("Retry-After"))
             _ArxivSharedState.set_cooldown(retry_after)
         return response
+
+
+def _budgeted_source_sleep(seconds: float) -> None:
+    # ContextVars propagate to asyncio.to_thread. Blocking transports cannot be
+    # killed by task cancellation, so never begin a wait outside the run budget.
+    require_budget("source pacing", minimum_seconds=max(0.01, seconds + 0.01))
+    time.sleep(seconds)
 
 
 class _ArxivSharedState:
@@ -184,7 +197,7 @@ class _ArxivSharedState:
                 while True:
                     cooldown_ms = client.pttl("scientific_rag:arxiv:cooldown")
                     if cooldown_ms and cooldown_ms > 0:
-                        time.sleep(cooldown_ms / 1000)
+                        _budgeted_source_sleep(cooldown_ms / 1000)
                     acquired = client.set(
                         "scientific_rag:arxiv:pacer", "1", nx=True,
                         px=max(1, int(interval_seconds * 1000)),
@@ -192,7 +205,9 @@ class _ArxivSharedState:
                     if acquired:
                         return
                     wait_ms = client.pttl("scientific_rag:arxiv:pacer")
-                    time.sleep(max(0.05, min(1.0, max(wait_ms, 50) / 1000)))
+                    _budgeted_source_sleep(max(0.05, min(1.0, max(wait_ms, 50) / 1000)))
+            except ResearchDeadlineExceeded:
+                raise
             except Exception as error:
                 logger.warning("arxiv_redis_pacer_failed error=%s", type(error).__name__)
                 cls._redis_unavailable = True
@@ -203,7 +218,7 @@ class _ArxivSharedState:
             delay = max(0.0, cls._local_next_request_at - now, cls._local_cooldown_until - now)
             cls._local_next_request_at = now + delay + interval_seconds
         if delay:
-            time.sleep(delay)
+            _budgeted_source_sleep(delay)
 
     @classmethod
     def set_cooldown(cls, seconds: float) -> None:
@@ -708,7 +723,7 @@ class MinerService:
                     print(f"DEBUG: Retained {len(selected_sections)}/{len(sections)} readable PMC sections for PMID {pmid}")
                     for sec in selected_sections:
                         docs.append(Document(page_content=sec["text"], metadata={"doc_id": f"PMID:{pmid}", "pmcid": pmcid, "title": title, "section": sec["section"], "source": "pubmed", "type": "full_text", "study_design": study_design, "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"}))
-                    time.sleep(0.35)
+                    _budgeted_source_sleep(0.35)
             except Exception as e:
                 print(f"DEBUG: Error processing PMID {pmid}: {e}")
                 trace["errors"].append(f"PMID {pmid}: {type(e).__name__}: {e}")
@@ -761,7 +776,7 @@ class MinerService:
                             trace["external_error_type"] = type(error).__name__
                             raise
                         jitter = random.uniform(0, max(0.1, backoff * 0.25))
-                        time.sleep(backoff * (2 ** (attempt - 1)) + jitter)
+                        _budgeted_source_sleep(backoff * (2 ** (attempt - 1)) + jitter)
                     finally:
                         client._session.close()
                 records = [
@@ -883,6 +898,7 @@ class MinerService:
             return retained
 
         async def search_once(search_term: str, attempt_number: int, strategy: str) -> list[Document]:
+            require_budget("academic search", minimum_seconds=1)
             if search_term in seen_queries:
                 return []
             seen_queries.add(search_term)
@@ -891,11 +907,20 @@ class MinerService:
             if not query_is_valid(search_term, anchors):
                 attempt_trace.update({"decision": "blocked_missing_required_anchor", "indexed_count": 0})
                 return []
+            async def timed(label, operation):
+                started = time.monotonic()
+                try:
+                    return await operation
+                finally:
+                    attempt_trace[label] = round(time.monotonic() - started, 3)
+
             if source == "pubmed":
                 fetch_timeout = float(os.getenv("PUBMED_FETCH_TIMEOUT_SECONDS", "90"))
+                remaining = require_budget("pubmed fetch")
+                fetch_deadline = time.monotonic() + (min(fetch_timeout, remaining) if remaining is not None else fetch_timeout)
 
                 def fetch_pubmed():
-                    _entrez_request_context.deadline = time.monotonic() + fetch_timeout
+                    _entrez_request_context.deadline = fetch_deadline
                     try:
                         return cls.mine_pubmed(query, limit, anchor_query=research_question,
                                                diagnostics=attempt_trace, search_term_override=search_term)
@@ -903,16 +928,16 @@ class MinerService:
                         if hasattr(_entrez_request_context, "deadline"):
                             del _entrez_request_context.deadline
 
-                found = await asyncio.to_thread(fetch_pubmed)
-                found = await screen_once(found, cls._screen_pubmed_documents, attempt_trace)
+                found = await timed("fetch_duration_seconds", asyncio.to_thread(fetch_pubmed))
+                found = await timed("screen_duration_seconds", screen_once(found, cls._screen_pubmed_documents, attempt_trace))
             else:
-                found = await asyncio.to_thread(
+                found = await timed("fetch_duration_seconds", asyncio.to_thread(
                     cls.mine_arxiv, query, limit, anchor_query=research_question,
                     diagnostics=attempt_trace, search_term_override=search_term,
                     allow_search_cache=allow_source_cache,
-                )
+                ))
                 if found:
-                    found = await screen_once(found, cls._screen_arxiv_documents, attempt_trace)
+                    found = await timed("screen_duration_seconds", screen_once(found, cls._screen_arxiv_documents, attempt_trace))
             attempt_trace["decision"] = "accepted_sources" if found else "no_accepted_sources"
             return found
 
@@ -947,6 +972,7 @@ Deterministic optional concepts: {list(anchors.optional)}
 Failed queries: {deterministic_queries}
 """
             try:
+                require_budget("query repair", minimum_seconds=20)
                 repair = await ainvoke_structured("query_repair", 0, prompt, QueryRepairProposal)
                 repaired = QueryAnchors(
                     tuple(dict.fromkeys(item.strip().lower() for item in repair.required_concepts if item.strip())),
@@ -967,6 +993,8 @@ Failed queries: {deterministic_queries}
                                    "decision": "duplicate_query_skipped" if duplicate else "reformulated"}
                 if not duplicate:
                     raw_results = await search_once(repaired_query, 3, "llm_repair")
+            except ResearchDeadlineExceeded:
+                raise
             except Exception as error:
                 trace["repair"] = {"used": True, "failed": True, "error": type(error).__name__}
 
@@ -1764,11 +1792,28 @@ ANSWER LINES:
             self.last_quote_recovery_audit = quote_audit
         repair_audit = None
         removals: tuple[RemovedField, ...] = ()
+        # Retain structurally valid fields for failure diagnostics only. They
+        # have NOT passed semantic verification and are never a partial answer.
+        self.last_validated_evidence = {
+            "status": "structural_only_not_delivered",
+            "sources": [{
+                "source_id": block.source_id,
+                "external_id": block.document.metadata.get("doc_id"),
+                "source_url": block.document.metadata.get("url"),
+                "study_design": block.document.metadata.get("study_design") or "unknown",
+                "passage_id": hashlib.sha256(block.excerpt.encode()).hexdigest()[:16],
+            } for block in evidence_blocks],
+            "claims": [item.model_dump() for index, item in enumerate(structured_answer.claims, 1)
+                       if f"claims.{index}" not in validation_errors],
+        }
         if validation_errors:
+            require_budget("answer repair", minimum_seconds=20)
             await self._progress("Repairing unsupported answer fields", "expert")
-            repair_batch = await ainvoke_structured(
-                "expert", 0,
-                repair_prompt_v2(query, structured_context, structured_answer, validation_errors), V2RepairBatch,
+            repair_batch = await run_with_budget(
+                "answer repair", lambda: ainvoke_structured(
+                    "expert", 0,
+                    repair_prompt_v2(query, structured_context, structured_answer, validation_errors), V2RepairBatch,
+                ), cap_seconds=90, minimum_seconds=20,
             )
             if quote_audit is not None:
                 repair_batch, edits = recover_repair_quotes(
