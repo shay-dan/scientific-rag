@@ -70,7 +70,7 @@ class EnforcementEquivalenceTests(unittest.TestCase):
                     self.assertEqual(simulated[answer_id]["retained_targets"], kept)
 
     def test_production_contract_is_unchanged(self) -> None:
-        self.assertEqual(PIPELINE_VERSION, "postgres-hybrid-rrf-mmr-parent-child-structured-v15")
+        self.assertEqual(PIPELINE_VERSION, "postgres-hybrid-rrf-mmr-parent-child-structured-v15-stage20h-v1")
 
 
 if __name__ == "__main__":

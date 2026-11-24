@@ -1,6 +1,6 @@
 # Scientific RAG — engineering roadmap
 
-**Status:** authoritative planning document. Last updated 2026-11-21 (Stage 20D complete; Stage 20F v1 live campaign terminal; Stage 20G consolidated routing/recovery and v2 E2E protocol in review).
+**Status:** authoritative planning document. Last updated 2026-11-24 (accepted main includes Stage 20G; Stage 20H foundation and stacked follow-ups in review).
 **Origin:** owner-approved *Master Implementation Plan*, which consolidated an independent
 audit, a reconciled R0–R13 roadmap, a discovery/evidence-acquisition addendum, and the
 historical engineering handover. Changes to this file require owner approval and an entry
@@ -1268,3 +1268,18 @@ Regression tests cover narrow recovery, rejection of prohibited substitutions/am
 R7E PR #29 merged at `d8457cbc7d0c7808d004e5724ed608a3cd878680`; post-merge CI and Security green, 1,092 production tests (1,034 passed, 58 skipped), integration 57/57, legacy 13/13; 20/20 new recovery tests passed. No live inference or default changes. Owner approved offline preparation of five new development questions under separate proposed 100 Groq / 125 Gemini embedding physical request limits and $0.85 modeled accounting ceiling. Fixed maximum reservations total $0.81632; preserve R7D closed ledger. See [Stage 20 preflight](../cost-aware-pipeline/docs/stage20-e2e-preflight.md). Production defaults unchanged; pinned-SDK mocked transport tests and full CI/Security pending. No live invocation authorized. Private manifest novelty against earlier private campaigns and exact operator authorization remain outstanding. After E2E prioritize R9 retrieval ablation and controlled four-arm comparison with equal downstream settings, context budget, and frozen corpus, then expand subject to results; distinguish planning-only frozen comparison from live discovery. R8 calibration remains a release gate. No extra agents or provider changes.
 
 - **Stage 20G PR #31 audit hardening (in review, unmerged):** tightened uncertainty safety (no automatic fallback on unknown transmission), terminal stop for unsettled tickets, late-completion classification, image-bound owner authorization, PowerShell provenance and proxy checks, and bounded private scientific evidence export. The proposed successor requires a new fingerprint and owner approval. No live inference authorized or performed by this PR. Complete only after merge and verified post-merge CI/Security.
+
+### Stage 20H — scientific retrieval, adequacy and execution reliability (in review)
+
+Owner authorized continuation on 2026-11-24. Accepted base is `bc053c1` (Stage 20G
+PR #31 merged); foundation draft #32 at `892d999` remains unmerged and is preserved.
+CI and Security workflow conclusions on the foundation head were rechecked as
+successful. No new live inference, frozen campaign rerun, merge or next stage.
+
+The first stacked follow-up separates required scientific topics from question
+intent, adds nonduplicating query repair and screening, passage-level adequacy,
+independent interpretation/completeness diagnostics and a pipeline cache identity
+bump. See [the evidence report](reports/2026-11-24-stage20h-evidence.md).
+Scientific sufficiency remains unestablished by deterministic candidate coverage.
+A second stacked follow-up addresses deadline admission and failure diagnostics.
+Owner review is required; passing synthetic fixtures is not live acceptance.
