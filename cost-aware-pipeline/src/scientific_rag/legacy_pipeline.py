@@ -1866,6 +1866,9 @@ ANSWER LINES:
                     "source_id": item.source_id, "evidence_quote": item.evidence_quote,
                     "source_external_id": next((b.document.metadata.get("doc_id") for b in evidence_blocks if b.source_id == item.source_id), None),
                     "source_url": next((b.document.metadata.get("url") for b in evidence_blocks if b.source_id == item.source_id), None),
+                    "source_provenance": next(({key:b.document.metadata.get(key) for key in (
+                        "source_document_id", "origin_research_run_id", "cached_provenance", "original_cached_provenance", "study_design")}
+                        for b in evidence_blocks if b.source_id == item.source_id), {}),
                     "matched_source_title": item.matched_source_title,
                     "matched_passage_context": item.matched_passage_context,
                 } for item in verification_inputs]

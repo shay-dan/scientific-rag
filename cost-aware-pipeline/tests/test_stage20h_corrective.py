@@ -149,7 +149,7 @@ class ReviewedPipeline(unittest.IsolatedAsyncioTestCase):
 
     async def test_all_rejected_retains_audit_and_provenance_without_delivery(self):
         passage='Aspirin was associated with mortality.'
-        doc=Document(page_content=passage,metadata={'doc_id':'PMID:synthetic','source':'pubmed','url':'https://example.invalid/paper'})
+        doc=Document(page_content=passage,metadata={'doc_id':'PMID:synthetic','source':'pubmed','url':'https://example.invalid/paper','cached_provenance':{'research_run_id':'older-run'}})
         vector=SimpleNamespace(retrieve_context=AsyncMock(return_value=[doc]))
         answer=StructuredEvidenceAnswerV2(claims=[EvidenceClaim(text='Aspirin prevents mortality.',source_id='S1',evidence_quote=passage)])
         verdicts=ClaimVerificationBatch(assessments=[ClaimAssessment(target='claims.1',verdict='insufficient_evidence',reason='Association does not establish causation.')])
@@ -162,6 +162,7 @@ class ReviewedPipeline(unittest.IsolatedAsyncioTestCase):
         audit=a.last_semantic_verification_audit
         self.assertEqual(audit['assessments'][0]['reason'],'Association does not establish causation.')
         self.assertEqual(audit['evidence_mapping'][0]['source_external_id'],'PMID:synthetic')
+        self.assertEqual(audit['evidence_mapping'][0]['source_provenance']['cached_provenance']['research_run_id'],'older-run')
 
     async def test_relaxation_can_recover_an_unseen_topic_without_llm_repair(self):
         for source in ('pubmed','arxiv'):
@@ -235,3 +236,18 @@ class EntityGroundingCorrection(unittest.TestCase):
         a=extract_anchors(q)
         self.assertFalse(a.required)
         self.assertFalse(Orchestrator._source_sufficiency([Document(page_content=q,metadata={'reused_from_postgres':True})],a,q)['cache_eligible'])
+
+
+class CachedProvenanceCorrection(unittest.IsolatedAsyncioTestCase):
+    async def test_cached_context_retains_original_and_immediate_provenance(self):
+        from app.pgvector_retrieval import PostgresVectorService
+        doc=Document(page_content='Aspirin was studied in a cohort.',metadata={'doc_id':'PMID:synthetic','source_document_id':'source-1','origin_research_run_id':'run-1','url':'https://example.invalid/paper'})
+        owner=SimpleNamespace(restrict_to_current_run=True,retrieve_context=AsyncMock(return_value=[doc]))
+        found=await PostgresVectorService.find_reusable_evidence(owner,'aspirin',('aspirin',),limit=1)
+        self.assertTrue(owner.restrict_to_current_run)
+        self.assertEqual(found[0].metadata['cached_provenance']['research_run_id'],'run-1')
+        doc.metadata.update(source_document_id='source-2',origin_research_run_id='run-2')
+        found=await PostgresVectorService.find_reusable_evidence(owner,'aspirin',('aspirin',),limit=1)
+        self.assertEqual(found[0].metadata['cached_provenance']['research_run_id'],'run-2')
+        self.assertEqual(found[0].metadata['original_cached_provenance']['research_run_id'],'run-1')
+        self.assertEqual(found[0].metadata['doc_id'],'PMID:synthetic')
