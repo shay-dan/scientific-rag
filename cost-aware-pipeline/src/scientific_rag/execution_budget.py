@@ -59,6 +59,7 @@ class ExecutionBudget:
             "latency_ms":attempt.latency_ms, "admission_wait_ms":attempt.admission_wait_ms,
             "success":attempt.success, "skipped":attempt.skipped, "error_type":attempt.error_type,
             "usage_known":attempt.input_tokens is not None and attempt.output_tokens is not None,
+            "transmission":(attempt.diagnostics or {}).get("transmission", "not_recorded"),
         })
 
     def snapshot(self):
@@ -91,28 +92,75 @@ def require_budget(stage, *, minimum_seconds=0.01):
     return budget.require(stage, minimum_seconds=minimum_seconds) if budget else None
 
 
+class StageAllowance:
+    def __init__(self, stage, deadline, clock):
+        self.stage, self.deadline, self.clock = stage, deadline, clock
+
+    def remaining(self):
+        return max(0.0, self.deadline-self.clock())
+
+
+_stage = ContextVar('scientific_stage_allowance', default=None)
+
+
+def current_stage_budget():
+    return _stage.get()
+
+
+def stage_admission_refused():
+    stage = current_stage_budget()
+    if stage is not None:
+        raise ResearchDeadlineExceeded(stage.stage, stage.remaining(), failure_kind="stage_admission_refused")
+
+
+def provider_attempt_fits(timeout_seconds):
+    stage = current_stage_budget()
+    # Leave a small cancellation/finalization margin; do not shrink a provider's
+    # allowed window to conceal a routed wait that cannot fit the stage.
+    return stage is None or stage.remaining() >= timeout_seconds + 1.0
+
+
 def capped_deadline(local_deadline, *, clock=time.monotonic):
     budget = current_budget()
-    if budget is None:
-        return local_deadline
-    return min(local_deadline, clock() + budget.require('provider call'))
+    remaining = budget.require('provider call') if budget else None
+    stage = current_stage_budget()
+    if stage is not None:
+        remaining = min(remaining, stage.remaining()) if remaining is not None else stage.remaining()
+        if remaining <= 0:
+            stage_admission_refused()
+    return min(local_deadline, clock()+remaining) if remaining is not None else local_deadline
 
 
-async def run_with_budget(stage, operation_factory, *, cap_seconds, minimum_seconds=0.01):
-    """Create the coroutine only after admission; cancellation always propagates."""
+async def run_with_budget(stage, operation_factory, *, cap_seconds, minimum_seconds=0.01, reserve_after_seconds=0.0):
+    """Admit before creating a coroutine and propagate the innermost deadline.
+
+    Mandatory downstream work is reserved from the global allowance. Cancellation
+    is never caught or converted into fallback or an unverifiable partial answer.
+    """
     budget = current_budget()
-    remaining = require_budget(stage, minimum_seconds=minimum_seconds)
-    timeout = min(cap_seconds, remaining) if remaining is not None else cap_seconds
-    started = budget.clock() if budget else None
+    remaining = require_budget(stage, minimum_seconds=minimum_seconds+reserve_after_seconds)
+    clock = budget.clock if budget else time.monotonic
+    started = clock()
+    allowance = min(cap_seconds, remaining-reserve_after_seconds) if remaining is not None else cap_seconds
+    parent = current_stage_budget()
+    if parent is not None:
+        allowance = min(allowance, parent.remaining())
+    child = StageAllowance(stage, started+allowance, clock)
+    token = _stage.set(child)
     try:
-        return await asyncio.wait_for(operation_factory(), timeout=timeout)
+        result = await asyncio.wait_for(operation_factory(), timeout=max(0.001,allowance))
+        if child.remaining() <= 0:
+            raise ResearchDeadlineExceeded(stage, budget.remaining() if budget else 0, failure_kind="stage_deadline_expired")
+        return result
+    except ResearchDeadlineExceeded:
+        raise
     except TimeoutError as error:
-        # An inner provider timeout with global budget left remains a provider
-        # failure. Only exhaustion of this stage allowance is a stage deadline.
-        if budget and budget.clock() - started >= timeout:
-            raise ResearchDeadlineExceeded(stage, budget.remaining(), failure_kind="stage_deadline_expired" if budget.remaining() > 0 else "research_deadline_expired") from error
+        if child.remaining() <= 0:
+            raise ResearchDeadlineExceeded(stage, budget.remaining() if budget else 0,
+                failure_kind="stage_deadline_expired" if budget is None or budget.remaining() > 0 else "research_deadline_expired") from error
         raise
     finally:
+        _stage.reset(token)
         if budget:
-            budget.events.append({'stage':stage, 'event':'finished', 'duration_seconds':round(budget.clock()-started, 3),
-                                  'remaining_seconds':round(budget.remaining(), 3)})
+            budget.events.append({'stage':stage,'event':'finished','duration_seconds':round(clock()-started,3),
+                'remaining_seconds':round(budget.remaining(),3),'reserved_downstream_seconds':reserve_after_seconds})

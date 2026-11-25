@@ -1301,3 +1301,8 @@ frozen data and all provider reservations. See
 [corrective findings](reports/2026-11-25-stage20h-corrections.md). The previous
 synthetic/API pass counts are not evidence of scientific improvement. No paid
 inference, PR merge, deployment, enforcement downgrade or next stage is authorized.
+
+Corrected #34 propagates stage allowances through gateway admission, reserves mandatory
+semantic verification after repair, and rethrows typed source deadlines. Local combined
+Docker suite: 1,245 collected, 1,185 passed, 60 skipped. Final head CI/Security and owner
+review remain the gate; no scientific-quality or merge acceptance is inferred.

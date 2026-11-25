@@ -31,6 +31,7 @@ from .provider_capabilities import (
 )
 from .provider_failures import FAILURE_CLASSES, TransmissionRefused, describe_provider_failure
 from . import routing_policy
+from .execution_budget import ResearchDeadlineExceeded
 
 
 logger = logging.getLogger("ResearchAgent.LLMGateway")
@@ -950,6 +951,9 @@ async def ainvoke(role: str, temperature: float, chain_builder: Callable[[Any], 
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
+        from .execution_budget import provider_attempt_fits, stage_admission_refused
+        if not provider_attempt_fits(provider_timeout_seconds(provider)):
+            stage_admission_refused()
         model = model_for(provider, role)
         if (provider == "openrouter" and role == "expert" and context_chars is not None
                 and openrouter_expert_max_context > 0 and context_chars > openrouter_expert_max_context and pending):
@@ -978,6 +982,7 @@ async def ainvoke(role: str, temperature: float, chain_builder: Callable[[Any], 
         actual_tokens: int | None = None
         bounded_model = None
         guard = None
+        invocation_started = False
         chain = None
         try:
             if limit is None:
@@ -987,6 +992,9 @@ async def ainvoke(role: str, temperature: float, chain_builder: Callable[[Any], 
                                                   reasoning_effort=reasoning_effort)
                 guard = _output_limit_guard(bounded_model)
                 chain = chain_builder(bounded_model)
+            if not provider_attempt_fits(provider_timeout_seconds(provider)):
+                stage_admission_refused()
+            invocation_started = True
             result = await asyncio.wait_for(
                 _ainvoke_with_usage(chain, payload, usage_handler),
                 timeout=min(provider_timeout_seconds(provider), max(0.001, deadline - time.monotonic())),
@@ -1029,8 +1037,10 @@ async def ainvoke(role: str, temperature: float, chain_builder: Callable[[Any], 
                 error_type="CancelledError",
                 input_tokens=usage_handler.input_tokens if usage_handler.has_usage else None,
                 output_tokens=usage_handler.output_tokens if usage_handler.has_usage else None,
-                diagnostics={"transmission": "uncertain", "usage_complete": usage_handler.has_usage},
+                diagnostics={"transmission": "not_transmitted" if not invocation_started or (guard is not None and guard.verified_requests == 0) else "uncertain", "usage_complete": usage_handler.has_usage},
             ))
+            raise
+        except ResearchDeadlineExceeded:
             raise
         except Exception as error:
             last_error = error
@@ -1196,13 +1206,24 @@ async def _ainvoke_routed(role: str, temperature: float, chain_builder: Callable
     def can_reserve(route: routing_policy.Route) -> bool:
         return budget is None or bool(budget.can_reserve(route.provider, route.model))
 
+    stage_refusals = []
+
     async def probe(route: routing_policy.Route) -> routing_policy.Capacity:
+        from .execution_budget import provider_attempt_fits, current_stage_budget
+        if not provider_attempt_fits(provider_timeout_seconds(route.provider)):
+            stage_refusals.append(route.label)
+            return routing_policy.Capacity(False, "stage_deadline")
         if shared_redis is None:
             return routing_policy.Capacity(True)
         try:
             admission = await shared_admit(shared_redis, route.provider, role, payload,
                                            max(0.001, deadline - _monotonic()), max_output_tokens=limit)
         except ProviderThrottled as error:
+            stage = current_stage_budget()
+            if stage is not None and error.retry_after_ms is not None and error.reason in routing_policy.WAITABLE_REASONS:
+                if stage.remaining() < error.retry_after_ms/1000 + provider_timeout_seconds(route.provider) + 1.0:
+                    stage_refusals.append(route.label)
+                    return routing_policy.Capacity(False, "stage_deadline")
             reason = (routing_policy.ADMISSION_UNAVAILABLE if error.reason.startswith("Redis unavailable")
                       else error.reason)
             _record(ProviderAttempt(call_id, state.attempts, route.provider, route.model, role, 0.0, False, True,
@@ -1226,6 +1247,7 @@ async def _ainvoke_routed(role: str, temperature: float, chain_builder: Callable
 
     try:
         while True:
+            stage_refusals.clear()
             decision = await routing_policy.decide_admission(
                 [route for route in routes], request, state, remaining_seconds=deadline - _monotonic(),
                 probe=probe, can_reserve=can_reserve, config=config)
@@ -1240,11 +1262,17 @@ async def _ainvoke_routed(role: str, temperature: float, chain_builder: Callable
                 state.waited_seconds += decision.wait_seconds
                 continue
             if decision.action == routing_policy.STOP:
+                if stage_refusals:
+                    from .execution_budget import stage_admission_refused
+                    stage_admission_refused()
                 if last_error is not None:
                     last_error.routing_reason = decision.reason
                     raise last_error
                 raise RoutingStopped(role, decision.reason)
             route = decision.route
+            from .execution_budget import provider_attempt_fits, stage_admission_refused
+            if not provider_attempt_fits(provider_timeout_seconds(route.provider)):
+                stage_admission_refused()
             admission = admissions.pop(route.label, None)
             state.attempts += 1
             state.excluded_routes.add(route.label)
@@ -1315,6 +1343,9 @@ async def _routed_attempt(route: routing_policy.Route, role: str, temperature: f
                                          reasoning_effort=reasoning_effort, model=route.model, routing=True)
         wire = getattr(getattr(model_object, "http_async_client", None), "output_limit_guard", None)
         chain = chain_builder(model_object)
+        from .execution_budget import provider_attempt_fits, stage_admission_refused
+        if not provider_attempt_fits(provider_timeout_seconds(route.provider)):
+            stage_admission_refused()
         result = await asyncio.wait_for(
             _ainvoke_with_usage(chain, payload, usage_handler),
             timeout=min(provider_timeout_seconds(route.provider), max(0.001, deadline - _monotonic())),
@@ -1346,6 +1377,8 @@ async def _routed_attempt(route: routing_policy.Route, role: str, temperature: f
         logger.info("llm_gateway_success provider=%s model=%s role=%s latency_ms=%s", route.provider, route.model,
                     role, latency_ms)
         return {"ok": True, "result": result}
+    except ResearchDeadlineExceeded:
+        raise
     except Exception as error:
         latency_ms = round((time.perf_counter() - started) * 1000, 1)
         transmission = _transmission_state(error, wire)

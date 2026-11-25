@@ -550,6 +550,8 @@ class MinerService:
                     pmc_id = link_set["Link"][0]["Id"]
                     print(f"DEBUG: Found direct PMCID: PMC{pmc_id}")
                     return f"PMC{pmc_id}"
+        except ResearchDeadlineExceeded:
+            raise
         except Exception:
             print(f"DEBUG: No PMCID found for PMID {pmid}")
             return None
@@ -655,6 +657,8 @@ class MinerService:
                 pmids = search_results.get("IdList", [])
 
             print(f"DEBUG: PubMed IDs found: {pmids}")
+        except ResearchDeadlineExceeded:
+            raise
         except Exception as e:
             print(f"DEBUG: PubMed Search Failed: {e}")
             trace["errors"].append(f"PubMed search failed: {type(e).__name__}: {e}")
@@ -710,6 +714,8 @@ class MinerService:
                 if pmcid:
                     try:
                         sections = MinerService.fetch_pmc_full_text(pmcid, expected_pmid=str(pmid))
+                    except ResearchDeadlineExceeded:
+                        raise
                     except Exception as error:
                         candidate_trace["pmc_fetch_error"] = f"{type(error).__name__}: {error}"
                         candidate_trace["decision_reason"] = f"Abstract retained; PMC full text skipped: {type(error).__name__}."
@@ -725,6 +731,8 @@ class MinerService:
                     for sec in selected_sections:
                         docs.append(Document(page_content=sec["text"], metadata={"doc_id": f"PMID:{pmid}", "pmcid": pmcid, "title": title, "section": sec["section"], "source": "pubmed", "type": "full_text", "study_design": study_design, "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"}))
                     _budgeted_source_sleep(0.35)
+            except ResearchDeadlineExceeded:
+                raise
             except Exception as e:
                 print(f"DEBUG: Error processing PMID {pmid}: {e}")
                 trace["errors"].append(f"PMID {pmid}: {type(e).__name__}: {e}")
@@ -766,6 +774,8 @@ class MinerService:
                     try:
                         results = list(client.results(search))
                         break
+                    except ResearchDeadlineExceeded:
+                        raise
                     except Exception as error:
                         if not MinerService._is_transient_arxiv_error(error):
                             raise
@@ -845,6 +855,8 @@ class MinerService:
                 if len(docs) >= limit:
                     break
             print(f"DEBUG: ArXiv Mining complete. Total docs: {len(docs)}")
+        except ResearchDeadlineExceeded:
+            raise
         except Exception as e:
             print(f"DEBUG: ArXiv Mining Failed: {e}")
             trace["errors"].append(f"arXiv search failed: {type(e).__name__}: {e}")
@@ -1775,14 +1787,15 @@ ANSWER LINES:
             "claims": [item.model_dump() for index, item in enumerate(structured_answer.claims, 1)
                        if f"claims.{index}" not in validation_errors],
         }
+        verification_reserve = self.semantic_verification_timeout_seconds + 5 if self.semantic_verification_mode == "enforce" else 0
         if validation_errors:
-            require_budget("answer repair", minimum_seconds=20)
+            require_budget("answer repair", minimum_seconds=20+verification_reserve)
             await self._progress("Repairing unsupported answer fields", "expert")
             repair_batch = await run_with_budget(
                 "answer repair", lambda: ainvoke_structured(
                     "expert", 0,
                     repair_prompt_v2(query, structured_context, structured_answer, validation_errors), V2RepairBatch,
-                ), cap_seconds=90, minimum_seconds=20,
+                ), cap_seconds=90, minimum_seconds=20, reserve_after_seconds=verification_reserve,
             )
             if quote_audit is not None:
                 repair_batch, edits = recover_repair_quotes(
@@ -1831,13 +1844,14 @@ ANSWER LINES:
                         f"{len(verification_plan)} gateway invocations, exceeding the limit of "
                         f"{self.semantic_verification_max_gateway_invocations}"
                     )
-                verification_batch = await asyncio.wait_for(
-                    verify_claims(
+                verification_batch = await run_with_budget(
+                    "semantic verification", lambda: verify_claims(
                         verification_inputs,
                         question=query,
                         max_gateway_invocations=self.semantic_verification_max_gateway_invocations,
                     ),
-                    timeout=self.semantic_verification_timeout_seconds,
+                    cap_seconds=self.semantic_verification_timeout_seconds,
+                    minimum_seconds=self.semantic_verification_timeout_seconds if self.semantic_verification_mode == "enforce" else 0.01,
                 )
                 semantic_audit = build_semantic_verification_audit(
                     structured_answer,
@@ -1863,7 +1877,7 @@ ANSWER LINES:
                     error.verification_audit = self.last_semantic_verification_audit
                 else:
                     self.last_semantic_verification_audit = {"status":"error", "mode":self.semantic_verification_mode,
-                        "failure_kind":"semantic_verification_error", "error_type":type(error).__name__, "filtering_applied":False}
+                        "failure_kind":getattr(error,"failure_kind","semantic_verification_error"), "error_type":type(error).__name__, "filtering_applied":False}
                 if self.semantic_verification_mode != "shadow":
                     raise
                 if isinstance(error, SemanticVerificationBudgetError):
@@ -2263,6 +2277,8 @@ class Orchestrator:
                     pubmed_inspector.append(pubmed_traces[index])
                 if index in arxiv_traces:
                     arxiv_inspector.append(arxiv_traces[index])
+                if isinstance(result, (ResearchDeadlineExceeded, asyncio.CancelledError)):
+                    raise result
                 if isinstance(result, Exception):
                     error_detail = str(result) or f"{source} mining exceeded {source_timeout:g} seconds"
                     print(f"Error mining {source}: {error_detail}")
