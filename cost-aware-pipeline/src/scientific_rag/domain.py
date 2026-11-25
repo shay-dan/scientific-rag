@@ -35,8 +35,14 @@ class SubQuery(BaseModel):
     reasoning: str = Field(description="Why this sub-query is necessary.")
 
 
+class QuestionEntity(BaseModel):
+    text: str = Field(min_length=2, max_length=160, description="Essential disease, intervention, population, exposure or scientific subject copied from the original question; exclude outcomes, intent and descriptors.")
+    role: Literal["disease", "intervention", "population", "exposure", "subject"]
+
+
 class QueryPlan(BaseModel):
     plan: list[SubQuery]
+    entities: list[QuestionEntity] = Field(default_factory=list, max_length=12)
 
 
 class GatekeeperReview(BaseModel):

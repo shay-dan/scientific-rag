@@ -20,10 +20,10 @@ class QueryQualityTests(unittest.TestCase):
         anchors = extract_anchors(
             "How are offline and online reinforcement learning approaches utilized and enhanced for robotic manipulation tasks?"
         )
-        self.assertEqual(anchors.required[:2], ("robotic manipulation", "reinforcement learning"))
+        self.assertTrue({"robotic manipulation", "offline reinforcement learning", "online reinforcement learning"}.issubset(anchors.required))
         query = build_arxiv_query(anchors)
         self.assertIn('all:"robotic manipulation"', query)
-        self.assertIn('all:"reinforcement learning"', query)
+        self.assertIn('all:"online reinforcement learning"', query)
 
     def test_crispr_cancer_anchors_survive_both_provider_builders(self):
         anchors = extract_anchors("What are current uses of CRISPR in cancer research?", "recent studies demonstrate uses")
@@ -110,7 +110,7 @@ class QueryQualityTests(unittest.TestCase):
         self.assertFalse(Orchestrator._source_sufficiency(bacterial, anchors)["sufficient"])
         self.assertTrue(Orchestrator._source_sufficiency(cancer, anchors)["sufficient"])
 
-    def test_llm_repair_is_only_called_after_two_empty_deterministic_attempts(self):
+    def test_failed_search_uses_native_relaxation_without_a_paid_repair(self):
         async def verify():
             attempts = []
 
@@ -129,8 +129,9 @@ class QueryQualityTests(unittest.TestCase):
                 await MinerService.mine("generic planner wording", "pubmed", 2,
                                         anchor_query="CRISPR applications in cancer", diagnostics=trace)
             self.assertEqual(len(attempts), 3)
-            llm.assert_awaited_once()
-            self.assertEqual(trace["attempts"][2]["strategy"], "llm_repair")
+            llm.assert_not_awaited()
+            self.assertNotIn("[tiab]", attempts[2])
+            self.assertEqual(trace["repair"]["additional_model_calls"], 0)
 
         asyncio.run(verify())
 

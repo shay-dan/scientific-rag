@@ -1,0 +1,73 @@
+{
+  "schema_version": "stage20h-corrective-offline-v1",
+  "date": "2026-11-25",
+  "audited_pr33_base": "7ba5d9520a557d35bd68a690e2d9b60fd45bf20e",
+  "audited_pr34_base": "e0dd601ca35b55a9e9a4ad73f4367902466cd98e",
+  "initial_review_suite": {
+    "methods": 21,
+    "failed_assertions_including_subtests": 30,
+    "errors": 2,
+    "note": "Failures are not independent test-method counts; includes diagnostics/schema checks."
+  },
+  "corrective_methods": 29,
+  "local_pr33_full": {
+    "collected": 1229,
+    "passed": 1169,
+    "skipped": 60,
+    "failed": 0,
+    "errors": 0,
+    "seconds": 89.449
+  },
+  "verifier_identity": {
+    "version": "semantic-verifier-v2",
+    "sha256": "69a946db310c4cbc499d22c959b6572abd8422a9ab4ed2a6c8a644d0ce3669b3"
+  },
+  "saved_verifier_fixture_replay": {
+    "predictions_complete.json": {
+      "answers": 4,
+      "outcomes": {
+        "complete_answer": 1,
+        "partial_answer": 1,
+        "no_supported_claims": 2,
+        "failed_closed": 0
+      },
+      "claims_removed": 5,
+      "unsupported_retained_by_saved_predictions": 2,
+      "note": "Fixed saved verdict replay; not a new model evaluation or scientific accuracy result."
+    },
+    "predictions_mixed.json": {
+      "answers": 4,
+      "outcomes": {
+        "complete_answer": 0,
+        "partial_answer": 0,
+        "no_supported_claims": 0,
+        "failed_closed": 4
+      },
+      "claims_removed": 0,
+      "unsupported_retained_by_saved_predictions": 0,
+      "note": "Fixed saved verdict replay; not a new model evaluation or scientific accuracy result."
+    }
+  },
+  "live_inference_calls": 0,
+  "scientific_gold": false,
+  "scientific_accuracy_evaluated": false,
+  "query_repair_model_calls_per_mining_call": 0,
+  "limitations": [
+    "No recorded-source recall experiment or new human adjudication",
+    "No live measurement of revised-prompt behavior",
+    "Deterministic entity bootstrap and interpretation checks remain bounded heuristics",
+    "Cached chunks are context only and can no longer skip discovery"
+  ],
+  "additional_domain_negative_controls": {
+    "methods": 2,
+    "before_failed": 2,
+    "after_passed": 2,
+    "note": "Before means the preliminary correction; positive care-cost counterpart is in the same paired control."
+  },
+  "focused_corrective_final": {
+    "collected": 29,
+    "passed": 29,
+    "failed": 0,
+    "errors": 0
+  }
+}

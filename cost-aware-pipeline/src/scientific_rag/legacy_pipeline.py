@@ -35,7 +35,8 @@ from model_policy import ModelPolicy
 from .domain import ArxivRelevanceAssessment, ChunkQAResponse, GatekeeperReview, PubMedRelevanceAssessment, QAPair, QueryPlan, QueryRepairProposal, ResearchPlan, SubQuery, SynthesisValidation
 from .llm_gateway import ainvoke as gateway_ainvoke
 from .llm_gateway import ainvoke_structured
-from .query_quality import QueryAnchors, build_arxiv_query, build_pubmed_query, concepts_covered, extract_anchors, query_is_valid
+from .evidence_adequacy import assess_adequacy
+from .query_quality import QueryAnchors, build_arxiv_query, build_pubmed_query, concepts_covered, extract_anchors, query_is_valid, topical_documents
 from .pipeline_config import PipelineConfig
 from app.untrusted_content import UNTRUSTED_DATA_RULE, has_instruction_like_content, render_untrusted
 from app.weak_model_synthesis import (
@@ -64,7 +65,7 @@ from app.claim_verification import (
     plan_verification_batches,
     verify_claims,
 )
-from app.claim_checks import audit_answer_claims
+from app.claim_checks import audit_answer_claims, audit_scientific_interpretation
 
 # --- 1. CONFIGURATION & LOGGING SETUP ---
 
@@ -642,6 +643,7 @@ class MinerService:
         except Exception as e:
             print(f"DEBUG: PubMed Search Failed: {e}")
             trace["errors"].append(f"PubMed search failed: {type(e).__name__}: {e}")
+            trace["external_unavailable"] = True
             return []
 
         trace["returned_count"] = len(pmids)
@@ -696,7 +698,7 @@ class MinerService:
                     except Exception as error:
                         candidate_trace["pmc_fetch_error"] = f"{type(error).__name__}: {error}"
                         candidate_trace["decision_reason"] = f"Abstract retained; PMC full text skipped: {type(error).__name__}."
-                        trace["errors"].append(f"PMID {pmid}: PMC full text skipped ({type(error).__name__})")
+                        trace.setdefault("warnings", []).append(f"PMID {pmid}: PMC full text skipped ({type(error).__name__})")
                         sections = []
                     selected_sections = MinerService.select_pmc_sections(sections)
                     candidate_trace["full_text_sections"] = len(selected_sections)
@@ -721,7 +723,7 @@ class MinerService:
                    search_term_override: str | None = None, allow_search_cache: bool = True) -> List[Document]:
         """Retrieve lexical arXiv candidates and record every screened search result."""
         search_query = search_term_override or MinerService._format_arxiv_query(query, anchor_query)
-        print(f"DEBUG: Searching ArXiv for: '{search_query}'")
+        logger.debug("research_pipeline_step")
         docs = []
         trace = diagnostics if diagnostics is not None else {}
         trace.update({"subquery": query, "anchor_query": anchor_query, "search_term": search_query, "returned_count": 0,
@@ -840,9 +842,9 @@ class MinerService:
 
     @classmethod
     async def mine(cls, query: str, source: str, limit: int = 3, *, anchor_query: str | None = None,
-                   diagnostics: dict | None = None, allow_source_cache: bool = True) -> List[Document]:
+                   diagnostics: dict | None = None, allow_source_cache: bool = True, entity_hints=()) -> List[Document]:
         print("DEBUG: Unified Miner started for query:\n")
-        print(f"'{query}' from source: '{source}'")
+        logger.debug("mining_started source=%s question_length=%s", source, len(query))
 
         if source not in {"pubmed", "arxiv"}:
             print(f"WARNING: Unknown source '{source}' requested.")
@@ -850,16 +852,41 @@ class MinerService:
 
         trace = diagnostics if diagnostics is not None else {}
         research_question = anchor_query or query
-        anchors = extract_anchors(research_question, query)
+        anchors = extract_anchors(research_question, query, entity_hints=entity_hints)
         trace.update({
             "subquery": query,
             "anchor_query": research_question,
             "anchors": anchors.as_dict(),
             "attempts": [],
-            "retry_policy": "precise -> required anchors only -> LLM repair",
+            "retry_policy": "precise -> essential entities -> equivalent terms / automatic mapping (no LLM repair)",
         })
 
+        seen_queries: set[str] = set()
+        screened: dict[str, dict | None] = {}
+
+        async def screen_once(found, screen, attempt_trace):
+            fresh = []
+            retained = []
+            for doc in found:
+                key = hashlib.sha256((str(doc.metadata.get("doc_id") or doc.metadata.get("url")) + doc.page_content).encode()).hexdigest()
+                if key not in screened:
+                    fresh.append((key, doc))
+                elif screened[key] is not None:
+                    doc.metadata.update(screened[key])
+                    retained.append(doc)
+            if fresh:
+                accepted = await screen([doc for _, doc in fresh], research_question=research_question, diagnostics=attempt_trace)
+                accepted_ids = {id(doc) for doc in accepted}
+                for key, doc in fresh:
+                    screened[key] = dict(doc.metadata) if id(doc) in accepted_ids else None
+                retained.extend(accepted)
+            attempt_trace["screen_cache_hits"] = len(found) - len(fresh)
+            return retained
+
         async def search_once(search_term: str, attempt_number: int, strategy: str) -> list[Document]:
+            if search_term in seen_queries:
+                return []
+            seen_queries.add(search_term)
             attempt_trace = {"attempt": attempt_number, "strategy": strategy, "search_term": search_term}
             trace["attempts"].append(attempt_trace)
             if not query_is_valid(search_term, anchors):
@@ -878,7 +905,7 @@ class MinerService:
                             del _entrez_request_context.deadline
 
                 found = await asyncio.to_thread(fetch_pubmed)
-                found = await cls._screen_pubmed_documents(found, research_question=research_question, diagnostics=attempt_trace)
+                found = await screen_once(found, cls._screen_pubmed_documents, attempt_trace)
             else:
                 found = await asyncio.to_thread(
                     cls.mine_arxiv, query, limit, anchor_query=research_question,
@@ -886,14 +913,14 @@ class MinerService:
                     allow_search_cache=allow_source_cache,
                 )
                 if found:
-                    found = await cls._screen_arxiv_documents(found, research_question=research_question, diagnostics=attempt_trace)
+                    found = await screen_once(found, cls._screen_arxiv_documents, attempt_trace)
             attempt_trace["decision"] = "accepted_sources" if found else "no_accepted_sources"
             return found
 
         builder = build_pubmed_query if source == "pubmed" else build_arxiv_query
         raw_results: list[Document] = []
-        external_unavailable = False
-        deterministic_queries = [builder(anchors, broad=False), builder(anchors, broad=True)]
+        ladder_stopped = False
+        deterministic_queries = [builder(anchors, broad=False), builder(anchors, broad=True), builder(anchors, broad=True, relaxed=True)]
         if source == "pubmed" and cls._requires_direct_clinical_evidence(research_question):
             clinical_filter = '("Clinical Trial"[pt] OR "Randomized Controlled Trial"[pt] OR "Observational Study"[pt] OR "Clinical Study"[pt] OR "Systematic Review"[pt] OR "Meta-Analysis"[pt])'
             deterministic_queries[0] = f"{deterministic_queries[0]} AND {clinical_filter}"
@@ -902,47 +929,32 @@ class MinerService:
             if raw_results:
                 break
             if trace["attempts"][-1].get("external_unavailable"):
-                external_unavailable = True
+                ladder_stopped = True
                 trace["retry_ladder_stopped"] = "external_source_unavailable"
                 break
+            if any(
+                candidate.get("decision") == "screening_failed_not_indexed"
+                for candidate in trace["attempts"][-1].get("candidates", [])
+            ):
+                # Rephrasing a source query cannot repair a provider/schema
+                # failure. Stop without spending another screening allowance;
+                # this is not evidence that PubMed/arXiv is unavailable.
+                ladder_stopped = True
+                trace["retry_ladder_stopped"] = "relevance_screening_failed"
+                break
 
-        if not raw_results and not external_unavailable:
-            prompt = f"""You repair failed academic search concepts. Return concepts, not database syntax.
-Preserve the user's scientific subject. Do not invent findings or citations.
-The next layer will build provider-specific syntax deterministically.
+        trace["repair"] = {"used": False, "decision": "deterministic_relaxation_only",
+                           "additional_model_calls": 0}
 
-Question: {research_question[:1200]}
-Source: {source}
-Deterministic required concepts: {list(anchors.required)}
-Deterministic optional concepts: {list(anchors.optional)}
-Failed queries: {deterministic_queries}
-"""
-            try:
-                repair = await ainvoke_structured("query_repair", 0, prompt, QueryRepairProposal)
-                repaired = QueryAnchors(
-                    tuple(dict.fromkeys(item.strip().lower() for item in repair.required_concepts if item.strip()))[:4],
-                    tuple(dict.fromkeys(item.strip().lower() for item in repair.optional_concepts if item.strip()))[:4],
-                    tuple(dict.fromkeys(item.strip().lower() for item in repair.excluded_concepts if item.strip()))[:4],
-                    "llm_repair",
-                )
-                # A repair may add aliases or simplify concepts, but it may not
-                # erase every deterministic topic anchor.
-                retained_anchors = concepts_covered(" ".join(repaired.required), anchors.required)
-                if not repaired.required or len(retained_anchors) != len(anchors.required):
-                    raise ValueError("LLM repair removed one or more deterministic topic anchors")
-                repaired_query = builder(repaired, broad=True)
-                raw_results = await search_once(repaired_query, 3, "llm_repair")
-                trace["repair"] = {"used": True, "anchors": repaired.as_dict(), "rationale": repair.rationale[:500]}
-            except Exception as error:
-                trace["repair"] = {"used": True, "failed": True, "error": type(error).__name__}
-
+        trace["repair_budget_exhausted"] = bool(not raw_results and not ladder_stopped)
         attempts = trace.get("attempts", [])
         trace["returned_count"] = sum(int(item.get("returned_count", 0)) for item in attempts)
         trace["screened_count"] = sum(int(item.get("screened_count", 0)) for item in attempts)
         trace["relevance_rejected_count"] = sum(int(item.get("relevance_rejected_count", 0)) for item in attempts)
         trace["indexed_count"] = len(raw_results)
         trace["candidates"] = [candidate for item in attempts for candidate in item.get("candidates", [])]
-        trace["errors"] = [error for item in attempts for error in item.get("errors", [])]
+        trace["errors"] = list(dict.fromkeys(error for item in attempts for error in item.get("errors", [])))
+        trace["warnings"] = list(dict.fromkeys(w for item in attempts for w in item.get("warnings", [])))
         trace["external_unavailable"] = any(bool(item.get("external_unavailable")) for item in attempts)
         if attempts:
             trace["search_term"] = attempts[-1].get("search_term")
@@ -1478,6 +1490,7 @@ class ResearchAgent:
         self.claim_audit_mode = claim_audit_mode
         self.generation_prompt_version = generation_prompt_version
         self.quote_recovery_mode = quote_recovery_mode
+        self.last_semantic_verification_audit: dict | None = None
         self.last_quote_recovery_audit: dict | None = None
         self.semantic_verification_timeout_seconds = semantic_verification_timeout_seconds
         self.semantic_verification_max_gateway_invocations = semantic_verification_max_gateway_invocations
@@ -1490,7 +1503,7 @@ class ResearchAgent:
 
     async def decompose_query_async(self, query: str) -> List[str]: #[new]
         await self._progress("Breaking the question into focused research topics", "planner")
-        print(f"DEBUG: 🧠 Decomposing query: '{query}'")
+        logger.debug("research_pipeline_step")
         prompt = ChatPromptTemplate.from_template(
             "You are a senior research scientist. Break this complex question into "
             "3-5 search-friendly sub-questions: {question}"
@@ -1502,14 +1515,14 @@ class ResearchAgent:
                 lambda model: prompt | model.with_structured_output(ResearchPlan),
                 {"question": query},
             )
-            print(f"DEBUG: ✅ Sub-questions generated: {plan.sub_questions}")
+            logger.debug("research_pipeline_step")
             return plan.sub_questions[:self.max_synthesis_subquestions]
         except Exception as e:
             print(f"DEBUG: ❌ Planning failed: {e}. Falling back to original query.")
             return [query]
 
     async def _get_docs_async(self, sub_query: str) -> List[Document]:
-        print(f"DEBUG: 🔍 Hybrid Retrieval started for: '{sub_query}'")
+        logger.debug("research_pipeline_step")
 
         # 1. Directly await the async method.
         # Do NOT use run_in_executor here if retrieve_context is 'async def'
@@ -1518,7 +1531,7 @@ class ResearchAgent:
             top_n=self.retrieval_documents
         )
 
-        print(f"DEBUG: 📄 Found {len(docs)} high-quality docs for: '{sub_query}'")
+        logger.debug("research_pipeline_step")
         return docs
 
     @staticmethod
@@ -1618,8 +1631,9 @@ ANSWER LINES:
             "assessments": [item.model_dump() for item in assessments],
         }
 
-    async def run_research(self, query: str, retr: str = "context") -> Dict[str, Any]: #[edit]
+    async def run_research(self, query: str, retr: str = "context", *, anchors: QueryAnchors | None = None) -> Dict[str, Any]: #[edit]
         self.last_quote_recovery_audit = None
+        self.last_semantic_verification_audit = None
         """
         Synthesizes the final answer using retrieved documents.
         This is called by the Orchestrator after mining is complete.
@@ -1732,10 +1746,8 @@ ANSWER LINES:
         if validation_errors:
             await self._progress("Repairing unsupported answer fields", "expert")
             repair_batch = await ainvoke_structured(
-                "expert",
-                0,
-                repair_prompt_v2(query, structured_context, structured_answer, validation_errors),
-                V2RepairBatch,
+                "expert", 0,
+                repair_prompt_v2(query, structured_context, structured_answer, validation_errors), V2RepairBatch,
             )
             if quote_audit is not None:
                 repair_batch, edits = recover_repair_quotes(
@@ -1792,8 +1804,6 @@ ANSWER LINES:
                     ),
                     timeout=self.semantic_verification_timeout_seconds,
                 )
-                if self.semantic_verification_mode == "enforce":
-                    selected_answer = apply_semantic_verdicts(structured_answer, verification_batch)
                 semantic_audit = build_semantic_verification_audit(
                     structured_answer,
                     verification_batch,
@@ -1802,7 +1812,26 @@ ANSWER LINES:
                     filtering_applied=self.semantic_verification_mode == "enforce",
                     batch_count=len(verification_plan),
                 )
+                semantic_audit["evidence_mapping"] = [{
+                    "target": item.target, "claim_text": item.claim_text,
+                    "source_id": item.source_id, "evidence_quote": item.evidence_quote,
+                    "source_external_id": next((b.document.metadata.get("doc_id") for b in evidence_blocks if b.source_id == item.source_id), None),
+                    "source_url": next((b.document.metadata.get("url") for b in evidence_blocks if b.source_id == item.source_id), None),
+                    "source_provenance": next(({key:b.document.metadata.get(key) for key in (
+                        "source_document_id", "origin_research_run_id", "cached_provenance", "original_cached_provenance", "study_design")}
+                        for b in evidence_blocks if b.source_id == item.source_id), {}),
+                    "matched_source_title": item.matched_source_title,
+                    "matched_passage_context": item.matched_passage_context,
+                } for item in verification_inputs]
+                self.last_semantic_verification_audit = semantic_audit
+                if self.semantic_verification_mode == "enforce":
+                    selected_answer = apply_semantic_verdicts(structured_answer, verification_batch)
             except (ClaimVerificationError, TimeoutError) as error:
+                if self.last_semantic_verification_audit is not None:
+                    error.verification_audit = self.last_semantic_verification_audit
+                else:
+                    self.last_semantic_verification_audit = {"status":"error", "mode":self.semantic_verification_mode,
+                        "failure_kind":"semantic_verification_error", "error_type":type(error).__name__, "filtering_applied":False}
                 if self.semantic_verification_mode != "shadow":
                     raise
                 if isinstance(error, SemanticVerificationBudgetError):
@@ -1842,6 +1871,24 @@ ANSWER LINES:
             semantic_removed = len(semantic_audit["removed_target_ids"])
             quote_audit["semantic_removed_fields"] = semantic_removed
             omitted_count += semantic_removed
+        answer_adequacy = assess_adequacy(query, combined_docs, anchors=anchors)
+        # Completeness is independent of individual claim support. Inspect the
+        # quotations actually selected for this answer as well as retrieved text.
+        selected_adequacy = assess_adequacy(query, [
+            Document(page_content=item.evidence_quote, metadata={**next((block.document.metadata for block in evidence_blocks if block.source_id == item.source_id), {}), "citation_id":item.source_id})
+            for item in selected_answer.claims
+        ], anchors=anchors)
+        unanswered = list(dict.fromkeys([
+            *selected_answer.unanswered_parts,
+            *(f"The selected quotations do not cover the requested entity: {term}." for term in selected_adequacy["missing_entities"]),
+            *( ["Essential entity resolution remains uncertain; this answer cannot establish complete question coverage."] if selected_adequacy["entity_resolution_uncertain"] else []),
+            *( ["A direct comparison of every requested intervention was not established; separate studies are indirect context only."] if selected_adequacy["comparison"]["status"] in {"partial", "indirect_candidates"} else []),
+            *(f"No direct candidate passage was identified for the requested {dim}; this remains unresolved." for dim in answer_adequacy["unanswered_dimensions"]),
+            *(f"The selected quotations do not establish the requested {dim}." for dim in selected_adequacy["unanswered_dimensions"]
+              if dim not in answer_adequacy["unanswered_dimensions"]),
+        ]))
+        # Preserve the existing bounded schema; all dimensions remain in audit.
+        selected_answer = selected_answer.model_copy(update={"unanswered_parts": unanswered[:8]})
         answer = render_answer_v2(selected_answer, omitted_count=omitted_count)
         def validated_claim(item):
             return {
@@ -1856,6 +1903,9 @@ ANSWER LINES:
             "unanswered_parts": list(selected_answer.unanswered_parts),
             "repair": repair_audit,
             "remaining_errors": {},
+            "evidence_adequacy": answer_adequacy,
+            "answer_completeness": selected_adequacy,
+            "scientific_interpretation": audit_scientific_interpretation(selected_answer, evidence_blocks),
         }
         if quote_audit is not None:
             claim_validation["quote_recovery"] = quote_audit
@@ -1938,7 +1988,7 @@ class Orchestrator:
                 step.external_sources = ["arxiv"]
             else:
                 step.external_sources = ["pubmed"]
-            print(f"DEBUG: Source policy selected {step.external_sources} for: {step.query}")
+            logger.debug("research_pipeline_step")
         return plan
 
     async def generate_plan(self, question: str) -> QueryPlan:
@@ -1956,6 +2006,14 @@ class Orchestrator:
             1. If the question is simple, return exactly ONE sub-query.
             2. For 'Feynman Method', the learning technique is 'internal_knowledge'. Only use 'academic' if specifically asking for physics papers.
             3. Maximize information gain while minimizing redundant searches.
+            4. Populate entities from the ORIGINAL question: every essential intervention/exposure,
+               disease, population and scientific subject, each with its correct role. Include ALL
+               arms of A versus B, A or B, A and B and comparisons of three or more treatments.
+               Include unfamiliar drug names, age/pregnancy restrictions, disease subtypes and
+               multiword interventions. Copy entity text exactly; never invent a synonym or drug.
+               Separate populations from diseases ("adolescents" and their named disease), and
+               preserve parenthetical abbreviations in the original question. Outcomes, generic
+               intent words and study-design preferences are not essential topic entities.
 
             Question: {question}
             {format_instructions}
@@ -1972,7 +2030,7 @@ class Orchestrator:
                 },
             )
             parsed_plan = QueryPlan(**result)
-            return QueryPlan(plan=parsed_plan.plan[:self.max_plan_steps])
+            return QueryPlan(plan=parsed_plan.plan[:self.max_plan_steps], entities=parsed_plan.entities)
         except Exception as e:
             print(f"Planning failed: {e}. Refusing to silently downgrade to internal knowledge.")
             raise RuntimeError(f"Research planning failed: {type(e).__name__}: {e}") from e
@@ -2027,35 +2085,35 @@ class Orchestrator:
                 # Some gatekeeper models incorrectly compare the sole useful search query
                 # to the user's question. Preserve it only when its critique specifically
                 # identifies paraphrase/redundancy and it retains multiple topic anchors.
-                print(f"DEBUG: Gatekeeper kept the only topic-aligned query despite a redundancy-only rejection: {step.query}")
+                logger.debug("research_pipeline_step")
                 filtered_sub_queries.append(step)
             else:
-                print(f"DEBUG: Gatekeeper REJECTED: {step.query} | Reason: {review['critique']}")
+                logger.debug("research_pipeline_step")
 
         if not filtered_sub_queries:
             raise RuntimeError("Research plan was rejected by the relevance gatekeeper; no safe query remains.")
 
-        return QueryPlan(plan=filtered_sub_queries), evaluations #[edit]
+        return QueryPlan(plan=filtered_sub_queries, entities=plan.entities), evaluations #[edit]
 
     async def ask_db(self, plan: QueryPlan, original_query: str):
         """Reuse only hybrid-ranked evidence that still contains every topic anchor."""
-        anchors = extract_anchors(original_query, " ".join(step.query for step in plan.plan))
+        anchors = extract_anchors(original_query, " ".join(step.query for step in plan.plan), entity_hints=getattr(plan, "entities", ()))
         documents = await self.vs.find_reusable_evidence(
             original_query,
             anchors.required,
             limit=max(self.papers_per_source * 2, 4),
         )
-        sufficient = self._source_sufficiency(documents, anchors)
+        sufficient = self._source_sufficiency(documents, anchors, original_query)
         return documents, {
             "checked": True,
-            "decision": "reuse_postgres_evidence" if sufficient["sufficient"] else "postgres_evidence_insufficient",
+            "decision": "reuse_postgres_context_and_mine" if documents else "postgres_evidence_insufficient",
             "reason": sufficient["reason"],
             "candidate_documents": len(documents),
             "anchors": anchors.as_dict(),
         }
 
     @staticmethod
-    def _source_sufficiency(documents: List[Document], anchors: QueryAnchors) -> dict:
+    def _source_sufficiency(documents: List[Document], anchors: QueryAnchors, question: str = "") -> dict:
         unique_sources = {
             str(document.metadata.get("doc_id") or document.metadata.get("url") or document.metadata.get("title"))
             for document in documents
@@ -2066,15 +2124,37 @@ class Orchestrator:
         )
         covered = concepts_covered(corpus, anchors.required)
         missing = [item for item in anchors.required if item not in covered]
-        sufficient = bool(unique_sources) and not missing
+        # Corpus-wide word union can join an intervention paper to an
+        # unrelated disease paper. Require at least one topical passage.
+        topical_passages = topical_documents(documents, anchors)
+        eligible_corpus = " ".join(f"{doc.metadata.get('title', '')} {doc.page_content}" for doc in topical_passages)
+        covered = concepts_covered(eligible_corpus, anchors.required, entity_aliases=anchors.entity_aliases)
+        missing = [term for term in anchors.required if term not in covered]
+        sufficient = bool(topical_passages) and not missing and not anchors.unresolved_subject
+        if anchors.comparison:
+            sufficient = sufficient and any(
+                len(concepts_covered(f"{doc.metadata.get('title', '')} {doc.page_content}", anchors.required,
+                                     entity_aliases=anchors.entity_aliases)) == len(anchors.required)
+                for doc in topical_passages
+            )
+        qualified_synthesis = bool(topical_passages) and bool(anchors.comparison) and not anchors.unresolved_subject and set(missing).issubset(anchors.comparison)
         reason = (
-            f"{len(unique_sources)} unique source(s) cover all required concepts"
+            f"{len(topical_passages)} passage(s) provide topic coverage for qualified synthesis; direct comparison and scientific sufficiency remain separate diagnostics"
             if sufficient else
             "no eligible source was found" if not unique_sources else
-            f"source set does not cover required concept(s): {', '.join(missing)}"
+            f"source set does not cover required concept(s): {', '.join(missing)}" if missing else
+            "no single eligible passage retains all topic constraints"
         )
+        adequacy = assess_adequacy(question, documents, anchors=anchors) if question else None
         return {
-            "sufficient": sufficient,
+            "sufficient": sufficient,  # legacy retrieval-admission key only
+            "qualified_synthesis_eligible": qualified_synthesis,
+            "scope": "retrieval_preflight_only",
+            "adequacy": adequacy,
+            "comparison": adequacy["comparison"] if adequacy else None,
+            "entity_resolution_uncertain": anchors.unresolved_subject,
+            "cache_eligible": False,
+            "cache_admission_reason": "Passage lexical coverage cannot establish verified completeness. Cached context never suppresses external mining; completed-answer caching is separate.",
             "unique_sources": len(unique_sources),
             "required_concepts": list(anchors.required),
             "covered_concepts": covered,
@@ -2084,10 +2164,16 @@ class Orchestrator:
 
     @staticmethod
     def _trace_outcome(trace: dict) -> str:
-        if trace.get("external_unavailable"):
-            return "external_source_unavailable"
         if int(trace.get("indexed_count", 0)) > 0:
             return "accepted_sources"
+        if trace.get("external_unavailable"):
+            return "external_source_unavailable"
+        if any(candidate.get("decision") == "screening_failed_not_indexed" for candidate in trace.get("candidates", [])):
+            return "relevance_screening_failed"
+        if int(trace.get("indexed_count", 0)) > 0:
+            return "accepted_sources"
+        if trace.get("repair_budget_exhausted") and not (int(trace.get("returned_count", 0)) > 0 or trace.get("candidates")):
+            return "query_repair_exhausted"
         if int(trace.get("returned_count", 0)) > 0 or trace.get("candidates"):
             return "all_candidates_rejected"
         return "no_candidates"
@@ -2103,10 +2189,16 @@ class Orchestrator:
         }
         if "external_source_unavailable" in outcomes and not sufficiency.get("unique_sources"):
             return "external_source_unavailable"
-        if sufficiency.get("unique_sources") and sufficiency.get("missing_concepts"):
+        if "source_deadline_expired" in outcomes:
+            return "retrieval_deadline_expired"
+        if "relevance_screening_failed" in outcomes:
+            return "relevance_screening_failed"
+        if sufficiency.get("unique_sources"):
             return "insufficient_anchor_coverage"
         if "all_candidates_rejected" in outcomes:
             return "all_candidates_rejected"
+        if "query_repair_exhausted" in outcomes:
+            return "query_repair_exhausted"
         return "no_candidates"
 
     async def run_mining_operation(self, plan: QueryPlan, limit=None, anchor_query: str | None = None,
@@ -2123,10 +2215,10 @@ class Orchestrator:
         limit = limit or self.papers_per_source
         for step in plan.plan:
             if step.source_type == "internal_knowledge": #[new]
-                print(f"DEBUG: Skipping Scraper for internal sub-query: {step.query}") #[new]
+                logger.debug("research_pipeline_step")
                 continue #[new]
 
-            print(f"DEBUG: Mining Academic Source: {step.query}")
+            logger.debug("research_pipeline_step")
             sources = step.external_sources
             for source in sources:
                 source_diagnostics.setdefault(source, {
@@ -2140,12 +2232,14 @@ class Orchestrator:
                     trace = {"subquery": step.query}
                     pubmed_traces[index] = trace
                     pending.append(MinerService.mine(step.query, source=source, limit=limit, anchor_query=anchor_query,
-                                                     diagnostics=trace, allow_source_cache=allow_source_cache))
+                                                     diagnostics=trace, allow_source_cache=allow_source_cache,
+                                                     **({"entity_hints":plan.entities} if plan.entities else {})))
                 elif source == "arxiv":
                     trace = {"subquery": step.query, "anchor_query": anchor_query}
                     arxiv_traces[index] = trace
                     pending.append(MinerService.mine(step.query, source=source, limit=limit, anchor_query=anchor_query,
-                                                     diagnostics=trace, allow_source_cache=allow_source_cache))
+                                                     diagnostics=trace, allow_source_cache=allow_source_cache,
+                                                     **({"entity_hints":plan.entities} if plan.entities else {})))
                 else:
                     pending.append(MinerService.mine(step.query, source=source, limit=limit))
             source_timeout = float(os.getenv("MINING_SOURCE_TIMEOUT_SECONDS", "150"))
@@ -2161,6 +2255,9 @@ class Orchestrator:
                 if isinstance(result, Exception):
                     error_detail = str(result) or f"{source} mining exceeded {source_timeout:g} seconds"
                     print(f"Error mining {source}: {error_detail}")
+                    outcome = "source_deadline_expired" if isinstance(result, TimeoutError) else "external_source_unavailable"
+                    source_diagnostics[source]["attempt_outcomes"].append(outcome)
+                    source_diagnostics[source]["outcome"] = outcome
                     source_diagnostics[source]["errors"].append(error_detail)
                     if index in pubmed_traces:
                         pubmed_traces[index].setdefault("errors", []).append(f"Mining failed: {type(result).__name__}: {error_detail}")
@@ -2173,10 +2270,17 @@ class Orchestrator:
                 source_diagnostics[source]["outcome"] = (
                     "accepted_sources" if result else outcome
                 )
-                trace_errors = [str(item) for item in trace.get("errors", [])]
-                for error_detail in trace_errors:
-                    if error_detail not in source_diagnostics[source]["errors"]:
+                # Archived traces can contain benign PMC limitations in errors.
+                # Never let a diagnostic string overwrite an accepted result.
+                warnings = list(trace.get("warnings", []))
+                for error_detail in map(str, trace.get("errors", [])):
+                    if "PMC full text skipped" in error_detail:
+                        warnings.append(error_detail)
+                    elif error_detail not in source_diagnostics[source]["errors"]:
                         source_diagnostics[source]["errors"].append(error_detail)
+                source_diagnostics[source]["warnings"] = list(dict.fromkeys([
+                    *source_diagnostics[source].get("warnings", []), *warnings,
+                ]))
                 source_diagnostics[source]["search_cache_hits"] += sum(
                     1 for attempt in trace.get("attempts", [])
                     if (attempt.get("search_cache") or {}).get("status") == "hit"
@@ -2184,6 +2288,10 @@ class Orchestrator:
                 source_diagnostics[source]["collected"] += len(result)
                 all_mined_docs.extend(result)
 
+        for details in source_diagnostics.values():
+            if details["collected"]:
+                details["outcome"] = "accepted_sources"
+                details["partial_source_failure"] = bool(details["errors"])
         return all_mined_docs, len(all_mined_docs), source_diagnostics, pubmed_inspector, arxiv_inspector
 
     async def clear_knowledge_base(self):
@@ -2200,11 +2308,11 @@ class Orchestrator:
         await self.vs.add_documents(documents)
         self.vs.restrict_final_retrieval_to_current_run()
 
-    async def synthesize_final_report(self, original_query: str):
+    async def synthesize_final_report(self, original_query: str, *, anchors: QueryAnchors | None = None):
         await self._progress("Preparing your answer from the evidence", "expert")
         print("DEBUG: Handing off to Research Agent for final synthesis...")
         # Research Agent uses both Vector Store and Internal LLM Knowledge
-        return await self.ra.run_research(original_query)
+        return await self.ra.run_research(original_query, anchors=anchors)
 
     async def execute_full_study(self, original_query: str, clear_db: bool = False, generate_evaluation_dataset: bool = False,
                                  cache_mode: str = "use_cached_answer"):
@@ -2221,7 +2329,7 @@ class Orchestrator:
         refined_plan, evals = await self.filter_plan(original_query, raw_plan)
         refined_plan = self.enforce_source_policy(refined_plan, anchor_query=original_query)
 
-        anchors = extract_anchors(original_query, " ".join(step.query for step in refined_plan.plan))
+        anchors = extract_anchors(original_query, " ".join(step.query for step in refined_plan.plan), entity_hints=getattr(refined_plan, "entities", ()))
         reused_docs: List[Document] = []
         if cache_mode == "refresh_sources":
             cache_diagnostics = {
@@ -2238,7 +2346,8 @@ class Orchestrator:
         # this run before retrieval rather than exposing the whole database.
         self.vs.restrict_final_retrieval_to_current_run()
 
-        should_mine = cache_mode == "refresh_sources" or not self._source_sufficiency(reused_docs, anchors)["sufficient"]
+        cached_preflight = self._source_sufficiency(reused_docs, anchors, original_query)
+        should_mine = cache_mode == "refresh_sources" or not cached_preflight.get("cache_eligible", cached_preflight["sufficient"])
         if should_mine:
             mined_docs, _, source_diagnostics, pubmed_inspector, arxiv_inspector = await self.run_mining_operation(
                 refined_plan,
@@ -2249,15 +2358,23 @@ class Orchestrator:
             mined_docs, source_diagnostics, pubmed_inspector, arxiv_inspector = [], {}, [], []
         docs = [*reused_docs, *mined_docs]
         doc_count = len(docs)
-        source_sufficiency = self._source_sufficiency(docs, anchors)
+        source_sufficiency = self._source_sufficiency(docs, anchors, original_query)
         source_sufficiency["outcome"] = self._evidence_outcome(source_diagnostics, source_sufficiency)
+        if source_sufficiency.get("adequacy") is not None:
+            source_sufficiency["adequacy"] = assess_adequacy(
+                original_query, docs,
+                external_unavailable=any(details.get("outcome") in {"external_source_unavailable", "retrieval_deadline_expired"} for details in source_diagnostics.values()),
+                anchors=anchors,
+            )
         self.last_source_diagnostics = source_diagnostics
         self.last_pubmed_inspector = pubmed_inspector
         self.last_arxiv_inspector = arxiv_inspector
         self.last_cache_diagnostics = cache_diagnostics
-        self.last_mined_count = doc_count
+        self.last_mined_count = len(mined_docs)
+        self.last_reused_count = len(reused_docs)
+        self.last_evidence_count = doc_count
 
-        if not source_sufficiency["sufficient"]:
+        if not source_sufficiency["sufficient"] and not source_sufficiency.get("qualified_synthesis_eligible"):
             evidence_outcome = source_sufficiency["outcome"]
             mismatch_detected = any(
             candidate.get("decision") in {
@@ -2274,16 +2391,24 @@ class Orchestrator:
                         if mismatch_detected else
                         "The academic source was temporarily unavailable, so the system could not determine whether sufficient evidence exists. Please retry later."
                         if evidence_outcome == "external_source_unavailable" else
+                        "The source search exceeded its deadline; the retrieved evidence cannot establish an answer."
+                        if evidence_outcome == "retrieval_deadline_expired" else
+                        "Relevance screening failed; candidate relevance could not be established. Please retry later."
+                        if evidence_outcome == "relevance_screening_failed" else
                         "Candidates were found, but all were rejected as irrelevant to the requested topic. The system did not generate a speculative answer."
                         if evidence_outcome == "all_candidates_rejected" else
                         "Sources were found, but they did not cover every required topic anchor. The system did not generate a speculative answer."
                         if evidence_outcome == "insufficient_anchor_coverage" else
+                        "The bounded query-repair budget was exhausted without eligible evidence. This search cannot establish an answer."
+                        if evidence_outcome == "query_repair_exhausted" else
                         "No candidate sources were returned for the validated search queries, so the system did not generate a speculative answer."
                     ),
                     "raw_docs_used": [],
                 },
                 "metadata": {
                     "mined_count": len(mined_docs),
+                    "reused_count": len(reused_docs),
+                    "evidence_document_count": doc_count,
                     "plan_executed": [step.query for step in refined_plan.plan],
                     "source_diagnostics": source_diagnostics,
                     "pubmed_inspector": pubmed_inspector,
@@ -2299,7 +2424,7 @@ class Orchestrator:
 
         # Final synthesis handles both the mined docs and internal explanations
         try:
-            final_report = await self.synthesize_final_report(original_query)
+            final_report = await self.synthesize_final_report(original_query, anchors=anchors)
         except NoRunScopedEvidence:
             source_sufficiency = {
                 **source_sufficiency,
@@ -2314,6 +2439,8 @@ class Orchestrator:
                 },
                 "metadata": {
                     "mined_count": len(mined_docs),
+                    "reused_count": len(reused_docs),
+                    "evidence_document_count": doc_count,
                     "plan_executed": [step.query for step in refined_plan.plan],
                     "source_diagnostics": source_diagnostics,
                     "pubmed_inspector": pubmed_inspector,
@@ -2333,7 +2460,9 @@ class Orchestrator:
         return {
             "report": final_report,
             "metadata": {
-                "mined_count": doc_count,
+                "mined_count": len(mined_docs),
+                "reused_count": len(reused_docs),
+                "evidence_document_count": doc_count,
                 "plan_executed": [s.query for s in refined_plan.plan],
                 "source_diagnostics": source_diagnostics,
                 "pubmed_inspector": pubmed_inspector,

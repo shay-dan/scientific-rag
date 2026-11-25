@@ -173,3 +173,20 @@ For the user-facing list see [known-limitations.md](known-limitations.md).
   owner consolidated them into the Master Implementation Plan, now
   [roadmap.md](roadmap.md). Claude took over implementation starting with R0; new
   branches use the `agent/` prefix.
+
+## 2026-11-25 — Stage 20H externally reviewed corrective work
+
+The independent review rejects #33's overconstraint and flags deadline gaps in #34.
+Owner-supplied deployed metadata additionally confirms that generic-word cached
+coverage skipped discovery, then strict verification rejected every claim. This is
+not evidence that the verifier was incorrect. Corrections remain within the existing
+three draft PRs, with explicit version/hash and cache behavior changes, and an offline
+behavioral evaluation separate from new-API and scientific-quality claims. See the
+new dated corrective report; historical reports and frozen results remain intact.
+
+The owner-authorized final P1 continuation starts from #33 `3871779` and preserves
+#34 `5662f77`'s deadline safeguards. The pre-fix regression commit `fd34263`
+records unseen entity/paraphrase, comparative coverage and screening-stop failures.
+See [the final P1 report](reports/2026-11-25-stage20h-final-p1.md) for targeted
+corrections, validation and remaining scientific limits. Stage 20H stays in review;
+offline success does not authorize a live acceptance campaign, merge or deployment.
