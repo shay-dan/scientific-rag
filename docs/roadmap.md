@@ -1291,3 +1291,13 @@ silent degradation. The available local log/database contain no affected
 natural-remedy runs, so their 600-second critical path remains unmeasured; see
 [the reliability report](reports/2026-11-24-stage20h-reliability.md) for required
 traces, cancellation limits and acceptance gates. Stage 20H remains in review.
+
+### Stage 20H corrective review — 2026-11-25 (in review)
+
+The owner authorized corrections to the independently rejected #33/#34 stack and
+provided two deployed-run metadata records confirming false cached-source admission.
+Correct #33 first, then #34 against that branch; preserve #32, the three drafts,
+frozen data and all provider reservations. See
+[corrective findings](reports/2026-11-25-stage20h-corrections.md). The previous
+synthetic/API pass counts are not evidence of scientific improvement. No paid
+inference, PR merge, deployment, enforcement downgrade or next stage is authorized.

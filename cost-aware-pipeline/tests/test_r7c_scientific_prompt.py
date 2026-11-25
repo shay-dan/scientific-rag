@@ -114,7 +114,7 @@ class ScientificPromptConfigurationTests(unittest.TestCase):
             effective_pipeline_version(
                 "enforce", "degrade", generation_prompt_version="v16"
             ),
-            f"{PIPELINE_VERSION}-semantic-enforce-v1-recovery-degrade-v1-genprompt-v16",
+            effective_pipeline_version("enforce", "degrade") + "-genprompt-v16",
         )
         service = ResearchService(Settings(
             generation_prompt_version="v16", claim_audit_mode="audit"

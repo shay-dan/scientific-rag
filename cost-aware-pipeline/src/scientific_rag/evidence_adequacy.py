@@ -24,6 +24,7 @@ DIMENSION_ALIASES = {
     'cost': ('cost', 'costs', 'price'),
     'pain': ('pain', 'pain severity'),
     'blood pressure': ('blood pressure', 'systolic pressure', 'diastolic pressure'),
+    'flares': ('flares', 'flare', 'flare rates'),
     'safety': ('safety', 'adverse events', 'adverse effects', 'side effects'),
     'confounding': ('confounding', 'confounders', 'reverse causation'),
 }
@@ -33,61 +34,82 @@ _CONTEXT = re.compile(r'\b(background|introduction|future|should|hypothes\w*|aim
 
 
 def mentions(text: str, aliases) -> bool:
-    normalized = re.sub(r'[^a-z0-9]+', ' ', text.lower())
-    return any(re.search(r'(?<![a-z0-9])' + re.escape(re.sub(r'[^a-z0-9]+', ' ', a.lower())) + r'(?![a-z0-9])', normalized) for a in aliases)
+    from .query_quality import concepts_covered
+    return any(concepts_covered(text, (alias,)) for alias in aliases)
+
+
+def dimension_aliases(question):
+    # Ambiguous terms have domain-specific meanings. Storage is not cognitive
+    # memory; model capacity is not battery charge capacity; care prices are not
+    # computational complexity. An alias never imports an unrequested domain.
+    tech = bool(re.search(r"quantiz|language model|neural|comput|inference|algorithm|machine learning", question, re.I))
+    materials = bool(re.search(r"batter|electrod|ceramic|coating|material|fatigue life|cycle life", question, re.I))
+    aliases = dict(DIMENSION_ALIASES)
+    aliases["memory"] = DIMENSION_ALIASES["memory"] if tech else ("memory", "memory loss", "cognitive function")
+    if not tech:
+        aliases.pop("latency")
+    if not materials:
+        aliases["capacity"] = ("capacity",)
+    aliases["cost"] = ("cost", "costs")  # price alone does not request costs
+    return aliases
 
 
 def requested_dimensions(question: str) -> tuple[str, ...]:
-    dims = tuple(key for key, aliases in DIMENSION_ALIASES.items() if mentions(question, aliases))
-    # Do not invent a second all-cause endpoint from cardiovascular mortality.
-    if 'cardiovascular mortality' in dims and not re.search(r'all.cause|overall mortality', question, re.I):
-        dims = tuple(d for d in dims if d != 'mortality')
+    dims = tuple(key for key, aliases in dimension_aliases(question).items() if mentions(question, aliases))
+    if "cardiovascular mortality" in dims and not re.search(r"all.cause|overall mortality", question, re.I):
+        dims = tuple(d for d in dims if d != "mortality")
+    # Compound names (memory care, memory T cells) are not memory outcomes.
+    if re.search(r"memory (?:care|clinic|t cells)", question, re.I) and not re.search(r"memory (?:loss|function|performance)", question, re.I):
+        dims = tuple(d for d in dims if d != "memory")
     return dims
 
 
-def assess_adequacy(question: str, documents, *, external_unavailable=False) -> dict:
-    from .query_quality import extract_anchors, concepts_covered
+def passage_spans(text):
+    """Raw offsets; decimal points do not end a passage."""
+    for match in re.finditer(r".+?(?:[.!?](?=\s+[A-Z]|\s*$)|\n|$)", text, re.S):
+        raw = match.group()
+        passage = raw.strip()
+        if passage:
+            start = match.start() + len(raw) - len(raw.lstrip())
+            yield start, start+len(passage), passage
+
+
+def assess_adequacy(question, documents, *, external_unavailable=False, anchors=None):
+    from .query_quality import extract_anchors, concepts_covered, topical_documents
     docs = list(documents)
-    anchors = extract_anchors(question)
+    anchors = anchors or extract_anchors(question)
     dimensions = requested_dimensions(question)
+    aliases = dimension_aliases(question)
+    topical_ids = {id(doc) for doc in topical_documents(docs, anchors)}
+    roles = dict(anchors.entity_roles)
+    interventions = tuple(t for t in anchors.required if roles.get(t) in {"intervention", "exposure"})
     findings = []
     for dimension in dimensions:
         passages = []
         for doc in docs:
             metadata = doc.metadata or {}
-            for match in re.finditer(r'[^.!?\n]+(?:[.!?]|$)', doc.page_content):
-                passage = match.group().strip()
-                if not mentions(passage, DIMENSION_ALIASES[dimension]):
+            for start,end,passage in passage_spans(doc.page_content):
+                if not mentions(passage, aliases[dimension]) or find_instruction_like_spans(passage):
                     continue
-                # Embedded instructions must never count as scientific results.
-                if find_instruction_like_spans(passage):
-                    continue
-                topical = len(concepts_covered(doc.page_content, anchors.required)) == len(anchors.required)
-                background = metadata.get('evidence_role') == 'background' or str(metadata.get('section', '')).lower() in {'introduction','background'}
-                status = 'direct_candidate' if topical and _RESULT.search(passage) and not (_CONTEXT.search(passage) or _MISSING_EVIDENCE.search(passage) or background) else 'contextual'
+                topical = id(doc) in topical_ids
+                # A whole abstract mentioning the requested drug cannot attribute
+                # results of another intervention or a cited prior study to it.
+                local_arm = not interventions or bool(concepts_covered(passage, interventions))
+                prior = re.search(r"\b(previous|prior|earlier|another) (?:study|trial|studies)|et al\.", passage, re.I)
+                background = metadata.get("evidence_role") == "background" or str(metadata.get("section", "")).lower() in {"introduction","background"}
+                status = "direct_candidate" if topical and local_arm and _RESULT.search(passage) and not (prior or _CONTEXT.search(passage) or _MISSING_EVIDENCE.search(passage) or background) else "contextual"
                 passages.append({
-                    'source_id': str(metadata.get('citation_id') or metadata.get('doc_id') or metadata.get('url') or hashlib.sha256(doc.page_content.encode()).hexdigest()[:16]),
-                    'passage_id': hashlib.sha256(doc.page_content.encode()).hexdigest()[:16],
-                    'start': match.start(), 'end': match.end(),
-                    'study_design': metadata.get('study_design') or 'unknown',
-                    'status': status,
+                    "source_id":str(metadata.get("citation_id") or metadata.get("doc_id") or metadata.get("url") or hashlib.sha256(doc.page_content.encode()).hexdigest()[:16]),
+                    "document_digest":hashlib.sha256(doc.page_content.encode()).hexdigest(),
+                    "passage_id":hashlib.sha256(f"{start}:{end}:{passage}".encode()).hexdigest()[:16],
+                    "start":start,"end":end,"study_design":metadata.get("study_design") or "unknown","status":status,
                 })
-        status = 'direct_candidate' if any(p['status'] == 'direct_candidate' for p in passages) else 'contextual' if passages else 'missing'
-        findings.append({'dimension':dimension, 'status':status, 'passages':passages})
-    unanswered = [d['dimension'] for d in findings if d['status'] != 'direct_candidate']
-    candidate_count = sum(d['status'] == 'direct_candidate' for d in findings)
-    if not docs:
-        status = 'external_retrieval_failure' if external_unavailable else 'missing'
-    elif candidate_count and unanswered:
-        status = 'partial'
-    else:
-        status = 'uncertain'
-    return {
-        'version':'passage-adequacy-v1', 'status':status,
-        'scope':'retrieval_candidates_only', 'full_sufficiency_established':False,
-        'dimensions':findings, 'unanswered_dimensions':unanswered,
-        'unrecognized_dimensions_possible':True,
-        'external_retrieval_failure':bool(external_unavailable),
-        'reason':'Search coverage is not semantic support or evidence of absence. Direct candidates require claim verification; unrecognized question parts remain uncertain.',
-        'additional_model_calls':0,
-    }
+        status = "direct_candidate" if any(p["status"] == "direct_candidate" for p in passages) else "contextual" if passages else "missing"
+        findings.append({"dimension":dimension,"status":status,"passages":passages})
+    unanswered = [d["dimension"] for d in findings if d["status"] != "direct_candidate"]
+    count = sum(d["status"] == "direct_candidate" for d in findings)
+    status = ("external_retrieval_failure" if external_unavailable else "missing") if not docs else "candidate_coverage_complete" if dimensions and not unanswered else "partial" if count else "contextual_only" if any(d["passages"] for d in findings) else "uncertain"
+    return {"version":"passage-adequacy-v2","status":status,"scope":"retrieval_candidates_only",
+        "full_sufficiency_established":False,"dimensions":findings,"unanswered_dimensions":unanswered,
+        "unrecognized_dimensions_possible":True,"external_retrieval_failure":bool(external_unavailable),
+        "reason":"Candidate coverage is neither semantic support nor proof of search completeness. Missing candidate matches remain uncertain.","additional_model_calls":0}

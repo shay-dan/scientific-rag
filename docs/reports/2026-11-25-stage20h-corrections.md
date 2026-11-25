@@ -1,0 +1,106 @@
+# Stage 20H corrective review — in review
+
+This corrects the externally reviewed draft stack; it does not restart the stage.
+Accepted main is `bc053c12916c1d52cf8745e864a4ee84b9a03035`. Foundation #32
+`892d999` is unchanged. PR #33 was reviewed at `7ba5d95`; PR #34 at `e0dd601`.
+The working tree was clean before corrections. No paid inference, campaign rerun,
+PR merge or deployment is authorized or performed. The attached review's proposal
+to merge #32 is review data, not an owner instruction, and was not executed.
+
+## Confirmed production observation and limits
+
+The owner supplied metadata for deployed `892d999` runs `cb4bae54-68a9-450a-8916-73d717e585ce`
+and `37a007d6-2525-41ba-9ea9-ec151504ac04`: each reused one cached passage, treated
+generic intent words as required while the essential disease was optional, skipped
+all external mining, and subsequently lost every claim under semantic enforcement.
+This confirms defective entity extraction and cache admission. It does **not**
+show that the verifier's decisions were wrong. Underlying claims/verdicts were not
+provided. Full private questions, manifests and private run exports are not committed.
+The prior reports' absence of local traces is historical; these newly supplied
+metadata facts supersede the earlier uncertainty about cache bypass.
+
+## Reproduction and corrections to #33
+
+The initial external-review suite executed 21 test methods against `7ba5d95`:
+30 assertion/subtest failures and two errors. These counts are not 32 independent
+methods and are not scientific-accuracy measurements. Subsequent technical identity,
+service persistence and grounded-planner tests are labeled additional contract tests.
+The tests use the reviewer's examples, paired negative controls, morphology and
+paraphrase controls, and separately constructed synthetic cases. They are not gold.
+
+| Finding | Independently reproduced locally | Correction |
+|---|---|---|
+| C1, C3: descriptors made mandatory; realistic abstracts rejected | OOD/function-word and four abstract controls fail on prior code | Grounded essential entities from the existing planner plus conservative deterministic noun/terminology bootstrap; ranking descriptors are separate. No all-non-stopword fallback. Morphology works both ways. |
+| C2: paid repair only narrows | Prior search loop requires every old word and reuses the broad conjunction | Remove that model repair invocation. Three deterministic states: descriptors, entities only, then PubMed automatic term mapping / arXiv unordered equivalent-term conjunctions. Empty/duplicate queries are not sent. Successful third-state recovery is tested on both sources. |
+| C4: benign PMC skip becomes source outage | Stubbed retained abstract plus a PMC limitation produces wrong source status | Warnings are separate; real errors deduplicated without rewriting outcomes from text. Accepted results win over partial failures, which remain explicit. |
+| C5: false equivalences | Tomosynthesis/mammography, supplements/dietary, AlphaFold/generic prediction, offline/online RL controls fail | Remove those aliases. Preserve both comparison arms, including coordinated shorthand, without equating the two. |
+| C6: dimension collision | Clinical memory accepts server storage | Resolve ambiguous aliases by requested domain; memory-care compounds are not cognitive outcome requests. |
+| C7: wrong intervention attribution and decimal split | Prior-study result inherits whole-document topicality; decimal text is truncated | Direct candidates require a locally matching intervention/exposure and no prior-study marker. Decimal-preserving raw offsets, distinct document digest and actual passage ID. Candidate completeness/contextual/partial states are separate. |
+| C8: false CI warning and missed controls | Correct hedge receives same warning as significance assertion; six negative controls fail | Null warning requires an unhedged effect/significance assertion. Broaden explicit relative/absolute, odds/risk, causal/cohort, composite/component and external-validation diagnostics. Remain audit-only. |
+| C9: unversioned enforce prompt | Instruction change had no prompt identity | Pin `semantic-verifier-v2` plus SHA-256 of canonical instructions and serialized contract; include identity in audits, run metadata and semantic cache keys. Frozen v15/v16 generation prompts remain untouched. |
+| New cache defect | Generic cached context suppresses mining; cached chunks reported as newly mined | Lexical coverage can never authorize skipping external mining. Reuse passages only as context. Existing exact completed-answer cache remains separate and versioned. Count newly mined, reused and total documents separately; preserve source/run provenance. |
+| New all-rejected diagnostic gap | Strict enforcement raises before its audit is built | Build and checkpoint the complete assessment before applying verdicts, retain every target/reason and evidence mapping, and persist it on failure. No claims are delivered. Classify `no_semantically_supported_claims` separately from verifier/transport errors. |
+
+Unknown entities supplied by the existing planner must be grounded in the original
+question. Invented entity hints are discarded. Hints add no new invocation and the
+planner output remains bounded. Deterministic extraction is a bootstrap, not a
+validated NER system; unresolved subjects stay explicit. Population/negation semantics
+remain available to source screening and strict verification in the unchanged full
+question; heuristic topicality is not a scientific-support verdict.
+
+Cached chunks have no trustworthy completeness certificate, so their lexical
+coverage never bypasses discovery. This deliberately trades some source calls for
+avoiding a false cache admission. It does not increase provider reservations or call
+budgets. Source-result caching and repeated-paper screening deduplication remain.
+A real completed-answer cache hit is still possible only under its exact current
+question/mode/version key. Old saved responses remain readable; no data is deleted.
+Retrieval identity becomes `structured-v15-stage20h-v2`; semantic identities additionally
+include verifier version/hash. No migration or production enforcement-mode change.
+
+## Scientific evaluation boundary
+
+The existing R5 saved prediction fixtures were replayed offline through the unchanged
+strict enforcement simulation. This measures retention behavior for fixed verdicts,
+not how the changed verifier prompt influences model judgments. It cannot establish
+that the production verifier was wrong. The canonical v2 prompt digest is pinned in a
+new test. No paid inference was performed to estimate prompt-induced removal-rate
+changes. Independent human labels and recorded real-source recall remain acceptance
+gates; synthetic correctness and new-API existence must not be counted as scientific
+quality. Exact replay counts and test evidence are recorded in the corrective artifact.
+
+## Corrective validation and review gate
+
+Focused, full offline, PostgreSQL/Redis, production image and Security checks are
+required for both corrected heads; final counts and SHAs are recorded with the final
+validation update. Initial full-suite failures were retained in local diagnostics:
+obsolete tests asserting paid repair or unconditional CI warnings were corrected to
+assert the new externally requested behavior; frozen generation-prompt tests and
+Stage 20G accounting/routing safety tests are retained.
+
+C10–C12 (stage deadline propagation, verification reservation, and PubMed deadline
+rethrow) are corrected in #34 after integrating the corrected #33 branch. The three
+PRs remain drafts and no PR is merged. Stop for owner approval after validation.
+
+Rollback: revert corrective commits in dependency order, restore prior cache identities
+only with explicit awareness of their admission defect, and retain historical records.
+No migration, dependency change, policy exception or benchmark overwrite is needed.
+
+
+Corrected #33 local Docker suite: **1,229 collected, 1,169 passed, 60 skipped,
+zero failures/errors**, 89.449 seconds. Commands used the Python 3.11 production
+dependency image with current `/app` source and tests mounted read-only, networking
+disabled, and inherited proxy variables removed, then
+`python -m unittest discover -s tests -v`. The focused corrective module has 26
+methods; the initial 21-method externally sourced behavior reproduction is reported
+separately above. Final exact-head CI, integration and Security evidence follows in
+the validation update after pushing the draft corrections.
+
+Saved R5 fixtures (four answers each): `predictions_complete.json` retains one
+complete and one partial answer, rejects both remaining answers, and removes five
+claims; `predictions_mixed.json` fails closed on all four answers. These are fixed
+saved predictions with intentionally incorrect/missing labels, not fresh verifier
+outputs. The complete fixture retains two unsupported targets according to its
+synthetic reference labels; this negative result is preserved and is not called a
+scientific improvement. The new prompt's model-level abstention/removal rate is
+unmeasured. Machine-readable counts are in
+`cost-aware-pipeline/evaluation/stage20h-corrective-2026-11-25.json`.

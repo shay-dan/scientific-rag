@@ -57,7 +57,7 @@ def _responses_for_evidence_documents(evidence_documents: list) -> list[SourceRe
     return list(sources_by_identity.values())
 # v15 (R3): untrusted-content framing and injection guards. v14 answers were produced
 # under the pre-R3 security contract and must not be reused as cache hits.
-PIPELINE_VERSION = "postgres-hybrid-rrf-mmr-parent-child-structured-v15-stage20h-v1"
+PIPELINE_VERSION = "postgres-hybrid-rrf-mmr-parent-child-structured-v15-stage20h-v2"
 ENQUEUE_TIMEOUT_SECONDS = 10
 
 
@@ -76,7 +76,9 @@ def effective_pipeline_version(
     if semantic_verification_mode == "off":
         version = PIPELINE_VERSION
     elif semantic_verification_mode in {"shadow", "enforce"}:
-        version = f"{PIPELINE_VERSION}-semantic-{semantic_verification_mode}-v1"
+        from .claim_verification import semantic_verifier_identity
+        identity = semantic_verifier_identity()
+        version = f"{PIPELINE_VERSION}-semantic-{semantic_verification_mode}-v1-{identity['version']}-{identity['sha256'][:12]}"
     else:
         raise ValueError(f"Unsupported semantic verification mode: {semantic_verification_mode}")
     if claim_recovery_mode == "degrade":
@@ -202,6 +204,9 @@ class ResearchService:
             "semantic_claim_verification_mode": verification_mode,
             "progress": {"stage": stage, "role": role, "model": self._model_for_role(role)},
         }
+        if verification_mode != "off":
+            from .claim_verification import semantic_verifier_identity
+            metadata["semantic_verifier_identity"] = semantic_verifier_identity()
         # Strict is represented by absence for backward-compatible metadata and
         # so historical queued jobs resolve safely to the production default.
         if recovery_mode != "strict":
@@ -708,6 +713,8 @@ class ResearchService:
             metadata["timeline"] = stored_metadata.get("timeline", [])
             metadata["duration_seconds"] = round((record.completed_at - record.created_at).total_seconds(), 2)
             metadata["mined_count"] = int(pipeline_result.get("metadata", {}).get("mined_count", 0))
+            metadata["reused_count"] = int(pipeline_result.get("metadata", {}).get("reused_count", 0))
+            metadata["evidence_document_count"] = int(pipeline_result.get("metadata", {}).get("evidence_document_count", 0))
             trace_closed = True
             cache_diagnostics = dict(pipeline_result.get("metadata", {}).get("cache", {}))
             metadata["cache_hit"] = cache_diagnostics.get("decision") == "reuse_postgres_evidence"
@@ -807,6 +814,12 @@ class ResearchService:
                     quote_failure["semantic_verification_status"] = "failed"
                 validation["quote_recovery"] = quote_failure
                 metadata["claim_validation"] = validation
+            semantic_failure = getattr(research_agent, "last_semantic_verification_audit", None)
+            if isinstance(semantic_failure, dict):
+                if semantic_failure.get("status") == "error" or getattr(error, "failure_kind", None) == "no_semantically_supported_claims":
+                    metadata["failure_kind"] = getattr(error, "failure_kind", "semantic_verification_error")
+                metadata["claim_validation"] = {**metadata.get("claim_validation", {}), "status":"failed",
+                    "semantic_verification":semantic_failure}
             metadata["progress"] = {"stage": "Research failed", "role": None, "model": None}
             if orchestrator is not None:
                 metadata["source_diagnostics"] = getattr(orchestrator, "last_source_diagnostics", {})
@@ -814,6 +827,8 @@ class ResearchService:
                 metadata["arxiv_inspector"] = getattr(orchestrator, "last_arxiv_inspector", [])
                 metadata["cache"] = getattr(orchestrator, "last_cache_diagnostics", metadata.get("cache", {}))
                 metadata["mined_count"] = getattr(orchestrator, "last_mined_count", 0)
+                metadata["reused_count"] = getattr(orchestrator, "last_reused_count", 0)
+                metadata["evidence_document_count"] = getattr(orchestrator, "last_evidence_count", 0)
             if vector_service is not None:
                 metadata["retrieval_inspector"] = list(vector_service.retrieval_traces)
                 metadata["embedding_usage"] = dict(vector_service.embedding_usage)

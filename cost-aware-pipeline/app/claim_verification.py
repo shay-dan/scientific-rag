@@ -52,6 +52,8 @@ class SemanticVerificationBudgetError(ClaimVerificationError):
 class NoSemanticallySupportedClaimsError(ClaimVerificationError):
     """Raised when enforcement would remove every answer claim."""
 
+    failure_kind = "no_semantically_supported_claims"
+
 
 class ClaimVerdict(str, Enum):
     supported = "supported"
@@ -548,6 +550,7 @@ def build_semantic_verification_audit(
     }
     return {
         "mode": mode,
+        "verifier_identity": semantic_verifier_identity(),
         "status": "completed",
         "total_assessed_targets": len(validated),
         "supported_count": counts[ClaimVerdict.supported.value],
@@ -632,3 +635,14 @@ async def verify_claims(
     expected_targets = tuple(item.target for group, _ in planned for item in group)
     final_assessments = validate_assessment_batch(merged, expected_targets)
     return ClaimVerificationBatch(assessments=guard_instruction_like_support(final_assessments, input_tuple))
+
+
+SEMANTIC_VERIFIER_VERSION = "semantic-verifier-v2"
+
+
+def semantic_verifier_identity():
+    """Hash stable instructions AND serialized field contract, never user text."""
+    import hashlib
+    fixture = ClaimVerificationInput("claims.1", "CLAIM", "S1", "QUOTE", "TITLE", "QUOTE")
+    prompt = build_semantic_verification_prompt((fixture,), "QUESTION")
+    return {"version": SEMANTIC_VERIFIER_VERSION, "sha256":hashlib.sha256(prompt.encode()).hexdigest()}

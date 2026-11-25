@@ -146,7 +146,11 @@ class PostgresVectorService:
             if identity in seen:
                 continue
             seen.add(identity)
-            document.metadata = {**document.metadata, "reused_from_postgres": True}
+            document.metadata = {**document.metadata, "reused_from_postgres": True,
+                                 "cached_provenance": {"source_document_id":document.metadata.get("source_document_id"),
+                                                       "research_run_id":document.metadata.get("origin_research_run_id"),
+                                                       "external_id":document.metadata.get("doc_id"),
+                                                       "source_url":document.metadata.get("url")}}
             retained.append(document)
             if len(retained) >= limit:
                 break
@@ -422,6 +426,8 @@ class PostgresVectorService:
                 page_content=parents_by_id[candidate.chunk.parent_document_id].content if candidate.chunk.parent_document_id in parents_by_id else candidate.chunk.content,
                 metadata={
                     **candidate.chunk.metadata_json,
+                    "source_document_id": str(candidate.source.id),
+                    "origin_research_run_id": (str(getattr(candidate.source, "research_run_id", "")) or None),
                     "doc_id": candidate.source.external_id,
                     "title": candidate.source.title,
                     "source": candidate.source.source,
