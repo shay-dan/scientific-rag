@@ -45,6 +45,29 @@ class RunnerTests(unittest.TestCase):
             code, output = call("locate-manifest", "--dir", str(self.root))
         self.assertEqual((0, ["questions.json"]), (code, json.loads(output)["matches"]))
 
+    def test_abstention_text_is_not_counted_as_delivered_research_answer(self):
+        from types import SimpleNamespace
+
+        response = SimpleNamespace(
+            status="insufficient_evidence",
+            answer="No candidate sources were returned.",
+            sources=[],
+            retrieval_version="test",
+            source_sufficiency={},
+            llm_diagnostics={},
+        )
+        abstention = runner._sanitized_case(
+            {"case": "E002", "status": "not_delivered"}, response, 1.0, [],
+        )
+        self.assertFalse(abstention["answer_delivered"])
+        self.assertEqual(abstention["response_status"], "insufficient_evidence")
+        response.status = "completed"
+        response.answer = "A source-grounded scientific answer."
+        completed = runner._sanitized_case(
+            {"case": "E001", "status": "completed"}, response, 1.0, [],
+        )
+        self.assertTrue(completed["answer_delivered"])
+
     def test_private_review_has_bounded_evidence_and_verification_diagnostics(self):
         from types import SimpleNamespace
         evidence = [SimpleNamespace(id="source-1", ordinal=0, content="z" * 2500,
