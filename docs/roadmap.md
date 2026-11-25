@@ -1297,3 +1297,12 @@ inference, PR merge, deployment, enforcement downgrade or next stage is authoriz
 The corrective Security rebuild also applies the available Debian libzstd1 fix for
 CVE-2026-124851 through the existing OS security upgrade step; no scan suppression
 or Python dependency change.
+
+Final P1 continuation (2026-11-25) remains **in review**: independently reproduced
+missing entities/paraphrase recall, false comparative candidate coverage and a
+screening-failure outage label. Grounded extraction, explicit partial/indirect/direct
+coverage, qualified partial answers and truthful failure reasons are corrected;
+retrieval/cache identity advances to Stage 20H v3. See the
+[final P1 report](reports/2026-11-25-stage20h-final-p1.md) for controls, validation,
+limits and rollback. Preserve the #32 → #33 → #34 chain. No live acceptance,
+paid inference, merge, deployment or next stage is authorized by these offline results.

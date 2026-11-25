@@ -56,7 +56,7 @@ def _responses_for_evidence_documents(evidence_documents: list) -> list[SourceRe
     return list(sources_by_identity.values())
 # v15 (R3): untrusted-content framing and injection guards. v14 answers were produced
 # under the pre-R3 security contract and must not be reused as cache hits.
-PIPELINE_VERSION = "postgres-hybrid-rrf-mmr-parent-child-structured-v15-stage20h-v2"
+PIPELINE_VERSION = "postgres-hybrid-rrf-mmr-parent-child-structured-v15-stage20h-v3"
 ENQUEUE_TIMEOUT_SECONDS = 10
 
 

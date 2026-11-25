@@ -194,5 +194,64 @@ class SourceFailures(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(Orchestrator._evidence_outcome({"pubmed": {"attempt_outcomes": ["source_deadline_expired"]}}, {"sufficient": False}), "retrieval_deadline_expired")
 
 
+class AnswerCoverageContracts(unittest.IsolatedAsyncioTestCase):
+    """Additional integration contracts, separate from the pre-fix holdout."""
+    async def test_supported_one_arm_quote_cannot_mark_comparison_complete(self):
+        from app.weak_model_synthesis import EvidenceClaim, StructuredEvidenceAnswerV2
+        from app.claim_verification import ClaimAssessment, ClaimVerificationBatch
+        q = ComparativeCoverage.question
+        passage = "Rimegepant reduced pain in adults with migraine."
+        docs = [document(passage), document("Ubrogepant reduced pain in adults with migraine.", "other")]
+        structured = StructuredEvidenceAnswerV2(claims=[EvidenceClaim(text="Rimegepant reduced pain.", source_id="S1", evidence_quote=passage)])
+        verdict = ClaimVerificationBatch(assessments=[ClaimAssessment(target="claims.1", verdict="supported", reason="Synthetic fixed verdict for the one-arm claim only.")])
+        with patch("scientific_rag.legacy_pipeline.ainvoke_structured", new=AsyncMock(return_value=structured)), patch("scientific_rag.legacy_pipeline.verify_claims", new=AsyncMock(return_value=verdict)) as verifier:
+            agent = ResearchAgent(SimpleNamespace(retrieve_context=AsyncMock(return_value=docs)), semantic_verification_mode="enforce")
+            agent.decompose_query_async = AsyncMock(return_value=[q])
+            result = await agent.run_research(q)
+        verifier.assert_awaited_once()
+        validation = result["claim_validation"]
+        self.assertIn("ubrogepant", validation["answer_completeness"]["missing_entities"])
+        self.assertNotEqual(validation["answer_completeness"]["status"], "candidate_coverage_complete")
+        self.assertTrue(any("direct comparison" in part for part in validation["unanswered_parts"]))
+        self.assertTrue(validation["semantic_verification"]["filtering_applied"])
+        self.assertEqual(validation["claims"][0]["validation"], "source_id_and_verbatim_quote_verified")
+
+    def test_irrelevant_grounded_hint_cannot_replace_missing_intervention(self):
+        q = "Does lacosamide reduce pain in adolescents with Dravet syndrome?"
+        hints = [QuestionEntity(text="pain", role="intervention"), QuestionEntity(text="insulin", role="intervention")]
+        a = extract_anchors(q, entity_hints=hints)
+        self.assertIn("lacosamide", a.required)
+        self.assertNotIn("pain", a.required)
+        self.assertNotIn("insulin", a.required)
+
+    def test_nonmedical_three_arm_comparison_and_alternative_spelling(self):
+        q = "Compare aerogel versus mineral wool versus cellulose for energy efficiency in buildings."
+        positive = document("In buildings, aerogel achieved higher energy efficiency compared with mineral wool and cellulose.")
+        negative = document("In buildings, aerogel achieved higher energy efficiency compared with mineral wool.")
+        self.assertEqual(assess_adequacy(q, [positive])["comparison"]["status"], "direct_candidate")
+        self.assertNotEqual(assess_adequacy(q, [negative])["comparison"]["status"], "direct_candidate")
+
+    async def test_partial_comparison_can_synthesize_but_wrong_disease_cannot(self):
+        from scientific_rag.domain import QueryPlan, SubQuery
+        q = ComparativeCoverage.question
+        plan = QueryPlan(plan=[SubQuery(query=q, source_type="academic", domains=["medical"], external_sources=["pubmed"], reasoning="offline")])
+        for condition, allowed in (("migraine", True), ("arthritis", False)):
+            with self.subTest(condition=condition):
+                doc = document(f"Rimegepant reduced pain in adults with {condition}.")
+                o = Orchestrator(SimpleNamespace(restrict_final_retrieval_to_current_run=lambda: None), None)
+                o.generate_plan = AsyncMock(return_value=plan)
+                o.filter_plan = AsyncMock(return_value=(plan, []))
+                o.ask_db = AsyncMock(return_value=([], {}))
+                o.run_mining_operation = AsyncMock(return_value=([doc], 1, {}, [], []))
+                o.populate_knowledge_base = AsyncMock()
+                o.synthesize_final_report = AsyncMock(return_value={"answer": "qualified partial answer", "raw_docs_used": [doc]})
+                result = await o.execute_full_study(q)
+                self.assertEqual(o.synthesize_final_report.await_count, int(allowed))
+                preflight = result["metadata"]["source_sufficiency"]
+                self.assertFalse(preflight["sufficient"])
+                self.assertIn("ubrogepant", preflight["missing_concepts"])
+                self.assertFalse(preflight["cache_eligible"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -183,3 +183,10 @@ not evidence that the verifier was incorrect. Corrections remain within the exis
 three draft PRs, with explicit version/hash and cache behavior changes, and an offline
 behavioral evaluation separate from new-API and scientific-quality claims. See the
 new dated corrective report; historical reports and frozen results remain intact.
+
+The owner-authorized final P1 continuation starts from #33 `3871779` and preserves
+#34 `5662f77`'s deadline safeguards. The pre-fix regression commit `fd34263`
+records unseen entity/paraphrase, comparative coverage and screening-stop failures.
+See [the final P1 report](reports/2026-11-25-stage20h-final-p1.md) for targeted
+corrections, validation and remaining scientific limits. Stage 20H stays in review;
+offline success does not authorize a live acceptance campaign, merge or deployment.
