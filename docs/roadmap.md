@@ -1314,3 +1314,10 @@ or Python dependency change.
 Final corrective checks include retention of original/immediate cached provenance,
 typed stage-deadline propagation through the verifier wrapper, and a source-timeout
 versus missing-evidence negative control. No inference or PR merge is authorized.
+
+Final corrective validation is recorded in
+[the review-gate addendum](reports/2026-11-25-stage20h-corrective-validation.md):
+corrected #33 production CI collects 1,232 tests, corrected #34 collects 1,250;
+both have 60 skips and 59/59 integration passes. Security includes the Debian
+libzstd1 fix. These engineering checks do not establish scientific accuracy.
+Owner review/approval remains required, with no automatic PR merge or inference.

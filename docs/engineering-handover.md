@@ -199,3 +199,11 @@ not evidence that the verifier was incorrect. Corrections remain within the exis
 three draft PRs, with explicit version/hash and cache behavior changes, and an offline
 behavioral evaluation separate from new-API and scientific-quality claims. See the
 new dated corrective report; historical reports and frozen results remain intact.
+
+Corrected implementation heads were checked in production CI: #33 `3871779`
+(1,232 collected, 1,172 passed, 60 skipped) and #34 `7503473` (1,250 collected,
+1,190 passed, 60 skipped), each with 59/59 PostgreSQL/Redis integration passes
+and green Security including the libzstd1 fix. The final validation addendum and
+original-API cache reproduction script preserve the before/after distinction.
+These results do not establish scientific accuracy or that the live verifier
+was wrong. The stack remains draft at the owner review gate.

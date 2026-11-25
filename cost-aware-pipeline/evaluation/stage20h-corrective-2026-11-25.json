@@ -108,5 +108,56 @@
     "passed": 6,
     "failed": 0,
     "errors": 0
+  },
+  "verified_ci": {
+    "pr33": {
+      "sha": "387177965ecbe25016ec334ef9eccc611499baeb",
+      "ci_run": 45617014918,
+      "security_run": 45617015050,
+      "unit": {
+        "collected": 1232,
+        "passed": 1172,
+        "skipped": 60,
+        "failed": 0,
+        "errors": 0,
+        "seconds": 62.993
+      },
+      "integration": {
+        "collected": 59,
+        "passed": 59,
+        "skipped": 0,
+        "failed": 0,
+        "errors": 0,
+        "seconds": 8.007
+      }
+    },
+    "pr34_implementation": {
+      "sha": "75034733bedf7e00a44e65269f679836c98b3460",
+      "ci_run": 45617076799,
+      "security_run": 45617076738,
+      "unit": {
+        "collected": 1250,
+        "passed": 1190,
+        "skipped": 60,
+        "failed": 0,
+        "errors": 0,
+        "seconds": 91.029
+      },
+      "integration": {
+        "collected": 59,
+        "passed": 59,
+        "skipped": 0,
+        "failed": 0,
+        "errors": 0,
+        "seconds": 10.981
+      }
+    }
+  },
+  "current_deterministic_runtime": {
+    "documents": 8,
+    "repetitions": 100,
+    "median_ms": 55.591,
+    "max_ms": 84.746,
+    "model_calls": 0
   }
 }
