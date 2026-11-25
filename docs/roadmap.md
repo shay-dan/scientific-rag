@@ -1330,3 +1330,10 @@ retrieval/cache identity advances to Stage 20H v3. See the
 [final P1 report](reports/2026-11-25-stage20h-final-p1.md) for controls, validation,
 limits and rollback. Preserve the #32 → #33 → #34 chain. No live acceptance,
 paid inference, merge, deployment or next stage is authorized by these offline results.
+
+Comparison-wording blocker (2026-11-26), still **in review**: recognize `compar\w*`
+in both comparison-detection expressions and preserve the existing grounded planner
+anchors through answer-completeness checks. The required selected-answer regression
+exposed that data-flow gap after the regex-only fix. See the
+[wording correction report](reports/2026-11-26-stage20h-comparison-wording.md).
+No extraction redesign, P2 expansion, inference, merge or deployment.

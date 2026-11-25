@@ -275,8 +275,8 @@ def extract_anchors(question: str, planner_query: str = "", *, entity_hints=()) 
         if match:
             explicit_aliases.append((term, (match.group(1).lower(),)))
     arms = tuple(t for t in required if roles.get(t) in {"intervention", "exposure"})
-    multiple = len(arms) > 1 and bool(re.search(r"\b(compare|comparison|versus|vs|than|between|and|or)\b", question, re.I))
-    intent = ("comparison",) if multiple and re.search(r"\b(compare|comparison|versus|vs|than|between)\b", question, re.I) else ("alternatives",) if multiple else ()
+    multiple = len(arms) > 1 and bool(re.search(r"\b(compar\w*|versus|vs|than|between|and|or)\b", question, re.I))
+    intent = ("comparison",) if multiple and re.search(r"\b(compar\w*|versus|vs|than|between)\b", question, re.I) else ("alternatives",) if multiple else ()
     return QueryAnchors(tuple(dict.fromkeys(required)), optional, dimensions=dimensions,
         study_design=tuple(w for w in ("randomized", "observational", "cohort", "review") if w in normalized.split()),
         entity_roles=tuple(roles.items()), unresolved_subject=not bool(required) or bool(unresolved),
