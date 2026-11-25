@@ -81,11 +81,21 @@ alembic current --check-heads
 python -B -m unittest discover -s tests/integration -t . -v
 ```
 
-Final #33 source-mounted offline run: **1,252 collected, 1,192 passed, 60 skipped,
+Initial #33 source-mounted offline run at `961b1c8`: **1,252 collected, 1,192 passed, 60 skipped,
 zero failures/errors** (104.614 seconds). The focused Stage 20H modules pass
 **80/80**, including 20 final-P1 methods. The skipped tests are existing opt-in
 integration checks and an existing local artifact-dependent case; the dedicated
 PostgreSQL/Redis run is reported separately. Python 3.11 compilation passes.
+
+Final review additionally reproduced the legacy `sufficient` flag returning true
+for two separate one-arm papers despite the new indirect-comparison diagnostic.
+The strengthened existing comparison test failed once before tightening this flag:
+at least one eligible passage must retain all requested comparison entities.
+Separate studies now keep `sufficient=false` and `qualified_synthesis_eligible=true`;
+they remain available as explicitly qualified indirect evidence. Same-passage
+entity coverage alone still does not establish direct comparative support; the
+result/relation checks and strict semantic verifier remain separate. Final repeated
+counts and workflow conclusions are recorded on the final PR heads.
 
 Integration runs opt in with `RUN_INTEGRATION_TESTS=1` against dedicated ephemeral
 PostgreSQL 16/pgvector and Redis 7 containers on an internal Docker network. There

@@ -137,6 +137,8 @@ class ComparativeCoverage(unittest.TestCase):
         self.assertEqual(len(topical_documents(docs, extract_anchors(self.question))), 2)
         preflight = Orchestrator._source_sufficiency(docs, extract_anchors(self.question), self.question)
         self.assertFalse(preflight["cache_eligible"])
+        self.assertFalse(preflight["sufficient"])
+        self.assertTrue(preflight["qualified_synthesis_eligible"])
         self.assertEqual(preflight.get("comparison", {}).get("status"), "indirect_candidates")
 
     def test_same_document_without_comparison_relation_is_not_direct(self):

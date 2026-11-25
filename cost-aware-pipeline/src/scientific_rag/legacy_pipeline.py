@@ -2131,6 +2131,12 @@ class Orchestrator:
         covered = concepts_covered(eligible_corpus, anchors.required, entity_aliases=anchors.entity_aliases)
         missing = [term for term in anchors.required if term not in covered]
         sufficient = bool(topical_passages) and not missing and not anchors.unresolved_subject
+        if anchors.comparison:
+            sufficient = sufficient and any(
+                len(concepts_covered(f"{doc.metadata.get('title', '')} {doc.page_content}", anchors.required,
+                                     entity_aliases=anchors.entity_aliases)) == len(anchors.required)
+                for doc in topical_passages
+            )
         qualified_synthesis = bool(topical_passages) and bool(anchors.comparison) and not anchors.unresolved_subject and set(missing).issubset(anchors.comparison)
         reason = (
             f"{len(topical_passages)} passage(s) provide topic coverage for qualified synthesis; direct comparison and scientific sufficiency remain separate diagnostics"
