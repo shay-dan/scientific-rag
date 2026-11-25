@@ -146,11 +146,13 @@ class PostgresVectorService:
             if identity in seen:
                 continue
             seen.add(identity)
+            provenance = {"source_document_id":document.metadata.get("source_document_id"),
+                          "research_run_id":document.metadata.get("origin_research_run_id"),
+                          "external_id":document.metadata.get("doc_id"),
+                          "source_url":document.metadata.get("url")}
             document.metadata = {**document.metadata, "reused_from_postgres": True,
-                                 "cached_provenance": {"source_document_id":document.metadata.get("source_document_id"),
-                                                       "research_run_id":document.metadata.get("origin_research_run_id"),
-                                                       "external_id":document.metadata.get("doc_id"),
-                                                       "source_url":document.metadata.get("url")}}
+                                 "cached_provenance":provenance,
+                                 "original_cached_provenance":document.metadata.get("original_cached_provenance") or document.metadata.get("cached_provenance") or provenance}
             retained.append(document)
             if len(retained) >= limit:
                 break
