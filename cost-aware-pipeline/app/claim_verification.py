@@ -16,6 +16,7 @@ from typing import Iterable
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from scientific_rag.llm_gateway import ainvoke_structured
+from scientific_rag.execution_budget import ResearchDeadlineExceeded
 
 from .untrusted_content import (
     has_instruction_like_content,
@@ -614,6 +615,8 @@ async def verify_claims(
                 response_schema=ClaimVerificationBatch,
                 **gateway_options,
             )
+        except ResearchDeadlineExceeded:
+            raise
         except Exception as error:
             raise ClaimVerificationError(
                 "semantic verification gateway failed for targets "

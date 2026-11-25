@@ -77,3 +77,32 @@ class ReviewedVerificationReserve(unittest.IsolatedAsyncioTestCase):
         with patch('scientific_rag.legacy_pipeline.Entrez.esearch',return_value=handle),patch('scientific_rag.legacy_pipeline.Entrez.efetch',return_value=handle),patch('scientific_rag.legacy_pipeline.Entrez.read',side_effect=[{'IdList':['1']},records]),patch.object(MinerService,'get_pmcid_from_pmid',return_value='PMC1'),patch.object(MinerService,'fetch_pmc_full_text',return_value=[]),patch('scientific_rag.legacy_pipeline._budgeted_source_sleep',side_effect=failure):
             with self.assertRaises(ResearchDeadlineExceeded):
                 MinerService.mine_pubmed('synthetic topic',1)
+
+
+    async def test_verifier_gateway_preserves_typed_stage_refusal(self):
+        from app.claim_verification import verify_claims,ClaimVerificationInput
+        failure=ResearchDeadlineExceeded('semantic verification',12,failure_kind='stage_admission_refused')
+        evidence=ClaimVerificationInput('claims.1','The outcome was measured.','S1','Measured outcome.','Synthetic source','Measured outcome.')
+        with patch('app.claim_verification.ainvoke_structured',new=AsyncMock(side_effect=failure)):
+            try:
+                await verify_claims([evidence],question='Synthetic outcome')
+            except Exception as error:
+                self.assertIs(error,failure)
+            else:
+                self.fail('Expected classified stage refusal')
+
+    async def test_source_timeout_is_not_reported_as_absent_search_evidence(self):
+        from scientific_rag.domain import QueryPlan,SubQuery
+        from scientific_rag.legacy_pipeline import Orchestrator
+        q='Does aspirin affect mortality?'
+        plan=QueryPlan(plan=[SubQuery(query=q,source_type='academic',domains=['medical'],external_sources=['pubmed'],reasoning='topic')])
+        vector=SimpleNamespace(find_reusable_evidence=AsyncMock(return_value=[]),restrict_final_retrieval_to_current_run=lambda:None)
+        orch=Orchestrator(vector,None)
+        orch.generate_plan=AsyncMock(return_value=plan)
+        orch.filter_plan=AsyncMock(return_value=(plan,[]))
+        orch.enforce_source_policy=lambda p,**kw:p
+        with patch.object(MinerService,'mine',new=AsyncMock(side_effect=TimeoutError('source deadline'))):
+            result=await orch.execute_full_study(q)
+        suff=result['metadata']['source_sufficiency']
+        self.assertEqual(suff['outcome'],'retrieval_deadline_expired')
+        self.assertTrue(suff['adequacy']['external_retrieval_failure'])

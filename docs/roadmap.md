@@ -1310,3 +1310,7 @@ review remain the gate; no scientific-quality or merge acceptance is inferred.
 The corrective Security rebuild also applies the available Debian libzstd1 fix for
 CVE-2026-124851 through the existing OS security upgrade step; no scan suppression
 or Python dependency change.
+
+Final corrective checks include retention of original/immediate cached provenance,
+typed stage-deadline propagation through the verifier wrapper, and a source-timeout
+versus missing-evidence negative control. No inference or PR merge is authorized.

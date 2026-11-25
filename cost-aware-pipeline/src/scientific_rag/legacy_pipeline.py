@@ -2393,7 +2393,7 @@ class Orchestrator:
         if source_sufficiency.get("adequacy") is not None:
             source_sufficiency["adequacy"] = assess_adequacy(
                 original_query, docs,
-                external_unavailable=any(details.get("outcome") in {"external_source_unavailable", "retrieval_deadline_expired"} for details in source_diagnostics.values()),
+                external_unavailable=any(details.get("outcome") in {"external_source_unavailable", "retrieval_deadline_expired", "source_deadline_expired"} for details in source_diagnostics.values()),
                 anchors=anchors,
             )
         self.last_source_diagnostics = source_diagnostics

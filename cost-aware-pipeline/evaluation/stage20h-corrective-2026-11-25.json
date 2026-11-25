@@ -59,13 +59,11 @@
     "Cached chunks are context only and can no longer skip discovery"
   ],
   "stage_deadline_behavior_reproduction": {
-    "methods": 4,
+    "methods": 5,
     "before_passed": 1,
-    "before_failed": 3,
+    "before_failed": 4,
     "before_errors": 0,
-    "after_passed": 4,
-    "after_failed": 0,
-    "after_errors": 0
+    "note": "The extra source-timeout flag control reproduced an additional mismatch on the preliminary corrective tree."
   },
   "foundation_cached_source_behavior_reproduction": {
     "before_commit": "892d999c6c28cf6212a323fe21ab0ccc82f78dce",
@@ -77,12 +75,13 @@
     "note": "Synthetic analogue, no private full question or original claim/verdict evidence."
   },
   "local_stack_full": {
-    "collected": 1245,
-    "passed": 1185,
+    "collected": 1247,
+    "passed": 1187,
     "failed": 0,
     "errors": 0,
     "skipped": 60,
-    "seconds": 104.046
+    "seconds": 98.423,
+    "scope": "Before final one-line source-timeout adequacy flag correction; final exact-head CI reruns all tests."
   },
   "os_security_fix": {
     "package": "libzstd1",
@@ -90,5 +89,12 @@
     "fixed_version": "1.5.7+dfsg-1+deb13u1",
     "policy_exception_added": false
   },
-  "deadline_fault_injection_live_provider_calls": 0
+  "deadline_fault_injection_live_provider_calls": 0,
+  "additional_provenance_contract_methods": 1,
+  "focused_deadline_final": {
+    "methods": 6,
+    "passed": 6,
+    "failed": 0,
+    "errors": 0
+  }
 }
