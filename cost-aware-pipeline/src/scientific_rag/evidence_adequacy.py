@@ -51,6 +51,11 @@ def dimension_aliases(question):
     if not materials:
         aliases["capacity"] = ("capacity",)
     aliases["cost"] = ("cost", "costs")  # price alone does not request costs
+    if re.search(r"\b(?:care|healthcare|medical|treatment|financial|economic)\b.*\bcosts?\b|\bcosts?\b.*\b(?:care|healthcare|medical|treatment)\b", question, re.I):
+        aliases["cost"] = ("care costs", "cost of care", "healthcare costs", "medical costs", "treatment costs", "financial costs", "healthcare expenditure")
+    measurement = tech or bool(re.search(r"predict|diagnos|model|classifier|imaging|detection", question, re.I))
+    if not measurement:
+        aliases["accuracy"] = ("accuracy",)
     return aliases
 
 

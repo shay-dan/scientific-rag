@@ -116,3 +116,13 @@ The Dockerfile's existing `apt-get --only-upgrade zlib1g` step now also upgrades
 the already installed libzstd1. No Python dependency, scan exception or security
 policy is changed. This corrective OS package update is required by the existing
 Security gate, not a scientific-result optimization. Final scans are rerun.
+
+
+Two additional C6 paired negative controls also failed against the preliminary
+correction: financial care costs were satisfied by computational costs, and
+social discrimination created a predictive-accuracy dimension. Financial-cost
+aliases now require care/medical/economic phrasing, and ambiguous accuracy
+aliases are used only in measurement/prediction domains. Both controls pass,
+including the positive financial-cost counterpart. The final #33 corrective
+module passes **29/29**. These controls expose bounded heuristic limitations;
+they are not a new scientific benchmark or human-adjudicated labels.
