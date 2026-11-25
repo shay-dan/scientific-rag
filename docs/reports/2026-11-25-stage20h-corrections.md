@@ -83,7 +83,7 @@ PRs remain drafts and no PR is merged. Stop for owner approval after validation.
 
 Rollback: revert corrective commits in dependency order, restore prior cache identities
 only with explicit awareness of their admission defect, and retain historical records.
-No migration, dependency change, policy exception or benchmark overwrite is needed.
+No migration, Python dependency change, policy exception or benchmark overwrite is needed; the OS security update is recorded below.
 
 
 Corrected #33 local Docker suite: **1,229 collected, 1,169 passed, 60 skipped,
@@ -146,3 +146,23 @@ with proxy variables unset followed by `python -m unittest discover -s tests -v`
 The four deadline controls are behavioral reproductions, not tests of a missing API.
 The 26 additional tests in #33 include prompt-identity and persistence contracts;
 no total is presented as a scientific-accuracy score.
+
+### Base-image Security correction
+
+The corrected #33 application CI passed (`45613904741`) but container Security
+run `45613904656` failed on one HIGH OS vulnerability: libzstd1
+CVE-2026-124851, installed `1.5.7+dfsg-1`, fixed by Debian in
+`1.5.7+dfsg-1+deb13u1`. Source/secret scans and Python dependency audit passed.
+The Dockerfile's existing `apt-get --only-upgrade zlib1g` step now also upgrades
+the already installed libzstd1. No Python dependency, scan exception or security
+policy is changed. This corrective OS package update is required by the existing
+Security gate, not a scientific-result optimization. Final scans are rerun.
+
+
+The cache-bypass analogue was also run directly against foundation `892d999`
+with only original APIs: one behavior test failed because the external mining
+mock was awaited **zero** times. The identical analogue passes against the
+corrected stack with one mining invocation and zero newly mined documents when
+only the cached passage remains. This is a genuine behavior reproduction,
+separate from the two new metadata fields; it supports the owner's confirmed
+admission finding without inferring anything about the missing original verdicts.

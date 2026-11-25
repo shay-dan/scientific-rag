@@ -57,5 +57,38 @@
     "No live measurement of revised-prompt behavior",
     "Deterministic entity bootstrap and interpretation checks remain bounded heuristics",
     "Cached chunks are context only and can no longer skip discovery"
-  ]
+  ],
+  "stage_deadline_behavior_reproduction": {
+    "methods": 4,
+    "before_passed": 1,
+    "before_failed": 3,
+    "before_errors": 0,
+    "after_passed": 4,
+    "after_failed": 0,
+    "after_errors": 0
+  },
+  "foundation_cached_source_behavior_reproduction": {
+    "before_commit": "892d999c6c28cf6212a323fe21ab0ccc82f78dce",
+    "methods": 1,
+    "before_failed": 1,
+    "before_mining_invocations": 0,
+    "after_passed": 1,
+    "after_mining_invocations": 1,
+    "note": "Synthetic analogue, no private full question or original claim/verdict evidence."
+  },
+  "local_stack_full": {
+    "collected": 1245,
+    "passed": 1185,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 60,
+    "seconds": 104.046
+  },
+  "os_security_fix": {
+    "package": "libzstd1",
+    "cve": "CVE-2026-124851",
+    "fixed_version": "1.5.7+dfsg-1+deb13u1",
+    "policy_exception_added": false
+  },
+  "deadline_fault_injection_live_provider_calls": 0
 }

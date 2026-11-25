@@ -11,8 +11,10 @@ ENV SCIENTIFIC_RAG_GIT_SHA=${GIT_SHA}
 # The upstream python:3.11-slim image still ships zlib1g 1:1.3.dfsg+really1.3.1-1+b1
 # (CVE-2026-85091, CVE-2026-76844). Upgrade only that package to the Debian
 # security fix; remove this step once the base image includes +deb13u1 or later.
+# CVE-2026-124851: the same base also carries libzstd1 1.5.7+dfsg-1;
+# Debian fixes it in 1.5.7+dfsg-1+deb13u1. Upgrade that existing package too.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends --only-upgrade zlib1g \
+    && apt-get install -y --no-install-recommends --only-upgrade zlib1g libzstd1 \
     && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt constraints.txt ./
 RUN pip install --no-cache-dir -r requirements.txt \

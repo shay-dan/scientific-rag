@@ -1306,3 +1306,7 @@ Corrected #34 propagates stage allowances through gateway admission, reserves ma
 semantic verification after repair, and rethrows typed source deadlines. Local combined
 Docker suite: 1,245 collected, 1,185 passed, 60 skipped. Final head CI/Security and owner
 review remain the gate; no scientific-quality or merge acceptance is inferred.
+
+The corrective Security rebuild also applies the available Debian libzstd1 fix for
+CVE-2026-124851 through the existing OS security upgrade step; no scan suppression
+or Python dependency change.
