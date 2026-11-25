@@ -190,3 +190,12 @@ production-image CI additionally reruns the complete suite and PostgreSQL/Redis
 integration, compile, migration, health and Security checks. No broader scientific
 accuracy claim follows from any count. Final reviewed heads/check conclusions are
 reported in the completion message and the final validation addendum.
+
+Two additional C6 paired negative controls also failed against the preliminary
+correction: financial care costs were satisfied by computational costs, and
+social discrimination created a predictive-accuracy dimension. Financial-cost
+aliases now require care/medical/economic phrasing, and ambiguous accuracy
+aliases are used only in measurement/prediction domains. Both controls pass,
+including the positive financial-cost counterpart. The final #33 corrective
+module passes **29/29**. These controls expose bounded heuristic limitations;
+they are not a new scientific benchmark or human-adjudicated labels.

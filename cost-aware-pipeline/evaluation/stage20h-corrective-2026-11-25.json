@@ -9,7 +9,7 @@
     "errors": 2,
     "note": "Failures are not independent test-method counts; includes diagnostics/schema checks."
   },
-  "corrective_methods": 26,
+  "corrective_methods": 29,
   "local_pr33_full": {
     "collected": 1229,
     "passed": 1169,
@@ -58,6 +58,18 @@
     "Deterministic entity bootstrap and interpretation checks remain bounded heuristics",
     "Cached chunks are context only and can no longer skip discovery"
   ],
+  "additional_domain_negative_controls": {
+    "methods": 2,
+    "before_failed": 2,
+    "after_passed": 2,
+    "note": "Before means the preliminary correction; positive care-cost counterpart is in the same paired control."
+  },
+  "focused_corrective_final": {
+    "collected": 29,
+    "passed": 29,
+    "failed": 0,
+    "errors": 0
+  },
   "stage_deadline_behavior_reproduction": {
     "methods": 5,
     "before_passed": 1,

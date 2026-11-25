@@ -251,3 +251,15 @@ class CachedProvenanceCorrection(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(found[0].metadata['cached_provenance']['research_run_id'],'run-2')
         self.assertEqual(found[0].metadata['original_cached_provenance']['research_run_id'],'run-1')
         self.assertEqual(found[0].metadata['doc_id'],'PMID:synthetic')
+
+class DomainDimensionControls(unittest.TestCase):
+    def test_care_costs_are_not_computational_costs(self):
+        q='What are dementia care costs?'
+        wrong=assess_adequacy(q,[Document(page_content='Dementia data analysis had lower computational cost.')])
+        self.assertIn('cost',wrong['unanswered_dimensions'])
+        right=assess_adequacy(q,[Document(page_content='Dementia treatment costs were higher in this cohort.')])
+        self.assertNotIn('cost',right['unanswered_dimensions'])
+
+    def test_social_discrimination_does_not_request_predictive_accuracy(self):
+        from scientific_rag.evidence_adequacy import requested_dimensions
+        self.assertNotIn('accuracy',requested_dimensions('What is the association between discrimination and health outcomes?'))
