@@ -1284,6 +1284,14 @@ Scientific sufficiency remains unestablished by deterministic candidate coverage
 A second stacked follow-up addresses deadline admission and failure diagnostics.
 Owner review is required; passing synthetic fixtures is not live acceptance.
 
+The execution-budget follow-up is stacked on PR #33 (`7ba5d95`). It caps gateway
+and source work by remaining monotonic time, refuses late repair, records phase
+and provider spans, and preserves structural-only failure evidence without
+silent degradation. The available local log/database contain no affected
+natural-remedy runs, so their 600-second critical path remains unmeasured; see
+[the reliability report](reports/2026-11-24-stage20h-reliability.md) for required
+traces, cancellation limits and acceptance gates. Stage 20H remains in review.
+
 ### Stage 20H corrective review — 2026-11-25 (in review)
 
 The owner authorized corrections to the independently rejected #33/#34 stack and
@@ -1294,9 +1302,25 @@ frozen data and all provider reservations. See
 synthetic/API pass counts are not evidence of scientific improvement. No paid
 inference, PR merge, deployment, enforcement downgrade or next stage is authorized.
 
+Corrected #34 propagates stage allowances through gateway admission, reserves mandatory
+semantic verification after repair, and rethrows typed source deadlines. Local combined
+Docker suite: 1,245 collected, 1,185 passed, 60 skipped. Final head CI/Security and owner
+review remain the gate; no scientific-quality or merge acceptance is inferred.
+
 The corrective Security rebuild also applies the available Debian libzstd1 fix for
 CVE-2026-124851 through the existing OS security upgrade step; no scan suppression
 or Python dependency change.
+
+Final corrective checks include retention of original/immediate cached provenance,
+typed stage-deadline propagation through the verifier wrapper, and a source-timeout
+versus missing-evidence negative control. No inference or PR merge is authorized.
+
+Final corrective validation is recorded in
+[the review-gate addendum](reports/2026-11-25-stage20h-corrective-validation.md):
+corrected #33 production CI collects 1,232 tests, corrected #34 collects 1,250;
+both have 60 skips and 59/59 integration passes. Security includes the Debian
+libzstd1 fix. These engineering checks do not establish scientific accuracy.
+Owner review/approval remains required, with no automatic PR merge or inference.
 
 Final P1 continuation (2026-11-25) remains **in review**: independently reproduced
 missing entities/paraphrase recall, false comparative candidate coverage and a

@@ -177,7 +177,9 @@ class SearchFailureRegressions(unittest.IsolatedAsyncioTestCase):
             return [Document(page_content='CRISPR cancer candidate', metadata={'doc_id':'same'})]
         repair = QueryRepairProposal(required_concepts=['crispr','cancer'], optional_concepts=['treatment'], excluded_concepts=[], rationale='Refine detail')
         with patch.object(MinerService, 'mine_pubmed', side_effect=fetch) as miner, patch.object(MinerService, '_screen_pubmed_documents', new=AsyncMock(return_value=[])) as screen, patch('scientific_rag.legacy_pipeline.ainvoke_structured', new=AsyncMock(return_value=repair)):
-            await MinerService.mine('CRISPR cancer therapy', 'pubmed', anchor_query='CRISPR cancer')
+            trace = {}
+            await MinerService.mine('CRISPR cancer therapy', 'pubmed', anchor_query='CRISPR cancer', diagnostics=trace)
+        self.assertTrue(all(a['fetch_duration_seconds'] >= 0 and a['screen_duration_seconds'] >= 0 for a in trace['attempts']))
         self.assertGreater(miner.call_count, 1)
         screen.assert_awaited_once()
 

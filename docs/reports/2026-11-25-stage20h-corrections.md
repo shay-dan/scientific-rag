@@ -106,6 +106,47 @@ unmeasured. Machine-readable counts are in
 `cost-aware-pipeline/evaluation/stage20h-corrective-2026-11-25.json`.
 
 
+## Deadline corrections to #34
+
+The branch was updated by integrating corrected #33 history, without force-push
+or rewriting existing commits; this is a local ancestry update, not a PR merge.
+Both draft PRs remain open. No deployment or main-branch merge is performed.
+
+Four offline fault-injection controls were run against audited #34 `e0dd601`:
+three behavior failures (C10, C11, C12), one positive control passed. The same
+four pass after correction. They reuse the Stage 20G real gateway/SDK mock
+transport and throttle harness; no test-provider network traffic is possible.
+
+- **C10:** `run_with_budget` now installs the innermost stage allowance in a
+  ContextVar. `capped_deadline` consults both global and stage remaining time.
+  Routed and legacy admission require the full configured provider window plus
+  a small finalization margin. A throttled route whose wait plus provider window
+  cannot fit is refused before transmission; eligible approved fallbacks may
+  still be considered. The 40-second wait + 55-second provider/90-second stage
+  control sends zero requests, while a 120-second stage succeeds once.
+- **C11:** enforce-mode repair reserves the configured mandatory semantic
+  verification allowance (120 seconds by default) plus five seconds of cleanup.
+  Its 90-second cap is shortened to leave that reserve intact. If the minimum
+  repair admission plus reserve cannot fit, the coroutine is never created.
+  Verification itself has a propagated stage cap and classified early refusal.
+  No verification, routing, reservation or recovery defaults were weakened.
+- **C12:** typed research deadlines propagate through the PubMed search, PMC
+  lookup, inner full-text catch, per-PMID loop and mining aggregator, instead of
+  becoming PMID/source errors. arXiv nested source catches also retain this type.
+
+Stage deadlines do not become provider failures or trigger fallback. Cancellation
+continues to propagate. Pre-send wire facts are used for legacy cancellation
+where known; missing usage remains unknown. Blocking transports remain cooperative,
+not forcibly killable, so no process-level hard real-time guarantee is claimed.
+
+Combined local Docker validation after these corrections: **1,245 collected,
+1,185 passed, 60 skipped, zero failed/errors**, 104.046 seconds, using
+`docker run --rm --network none -v "$PWD:/app:ro" scientific-rag-stage20h:local`
+with proxy variables unset followed by `python -m unittest discover -s tests -v`.
+The four deadline controls are behavioral reproductions, not tests of a missing API.
+The 26 additional tests in #33 include prompt-identity and persistence contracts;
+no total is presented as a scientific-accuracy score.
+
 ### Base-image Security correction
 
 The corrected #33 application CI passed (`45613904741`) but container Security
@@ -117,6 +158,38 @@ the already installed libzstd1. No Python dependency, scan exception or security
 policy is changed. This corrective OS package update is required by the existing
 Security gate, not a scientific-result optimization. Final scans are rerun.
 
+
+The cache-bypass analogue was also run directly against foundation `892d999`
+with only original APIs: one behavior test failed because the external mining
+mock was awaited **zero** times. The identical analogue passes against the
+corrected stack with one mining invocation and zero newly mined documents when
+only the cached passage remains. This is a genuine behavior reproduction,
+separate from the two new metadata fields; it supports the owner's confirmed
+admission finding without inferring anything about the missing original verdicts.
+
+
+### Additional error/provenance controls
+
+The cached-context test now checks both the immediate parent run/source and the
+original cached run/source across repeated reuse, and all-rejected audits retain
+that cached provenance. The focused corrective module passes **27/27**.
+
+The verifier gateway wrapper now rethrows `ResearchDeadlineExceeded` unchanged,
+instead of converting a stage-admission refusal into `ClaimVerificationError`.
+Five audited-deadline controls run against `e0dd601`: one passed, four failed
+with assertions (no missing-API errors). A sixth control found a preliminary
+corrective metadata mismatch: ordinary source timeouts were correctly labeled
+`retrieval_deadline_expired` but adequacy called them missing evidence. The flag
+now includes the source-deadline outcome, preserving the infrastructure/evidence
+boundary. All **six** final focused deadline controls pass.
+
+The latest complete local Docker suite before that one-line adequacy flag correction
+collected **1,247: 1,187 passed, 60 skipped, zero failed/errors**, 98.423 seconds.
+The final flag correction is covered by the six focused controls; exact final-head
+production-image CI additionally reruns the complete suite and PostgreSQL/Redis
+integration, compile, migration, health and Security checks. No broader scientific
+accuracy claim follows from any count. Final reviewed heads/check conclusions are
+reported in the completion message and the final validation addendum.
 
 Two additional C6 paired negative controls also failed against the preliminary
 correction: financial care costs were satisfied by computational costs, and

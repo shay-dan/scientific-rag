@@ -1,0 +1,143 @@
+{
+  "schema_version": "stage20h-offline-v1",
+  "date": "2026-11-24",
+  "foundation_commit": "892d999c6c28cf6212a323fe21ab0ccc82f78dce",
+  "evidence_commit": "7ba5d9520a557d35bd68a690e2d9b60fd45bf20e",
+  "reliability_implementation_commit": "405add3e0717b6415e81da9f171597730e61220e",
+  "environment": "Python 3.11 production Docker, same dependency image for before/after probes",
+  "local_image_id": "sha256:87a23908037e68a7d538e73fc1e376017637f07559e68fbb0e8e0b5e27406027",
+  "scientific_gold": false,
+  "live_performance_evaluated": false,
+  "live_provider_calls": 0,
+  "additional_default_judge_calls": 0,
+  "probe_matrix": [
+    {
+      "group": "test_stage20h_evidence.RetrievalRegressions",
+      "collected": 7,
+      "before": {
+        "passed": 0,
+        "failures": 7,
+        "errors": 0
+      },
+      "after": {
+        "passed": 7,
+        "failures": 0,
+        "errors": 0
+      }
+    },
+    {
+      "group": "test_stage20h_evidence.AdequacyRegressions",
+      "collected": 7,
+      "before": {
+        "passed": 0,
+        "failures": 0,
+        "errors": 7
+      },
+      "after": {
+        "passed": 7,
+        "failures": 0,
+        "errors": 0
+      }
+    },
+    {
+      "group": "test_stage20h_evidence.InterpretationRegressions",
+      "collected": 7,
+      "before": {
+        "passed": 0,
+        "failures": 0,
+        "errors": 7
+      },
+      "after": {
+        "passed": 7,
+        "failures": 0,
+        "errors": 0
+      }
+    },
+    {
+      "group": "test_stage20h_evidence.UnseenScientificRegressions",
+      "collected": 5,
+      "before": {
+        "passed": 0,
+        "failures": 2,
+        "errors": 3
+      },
+      "after": {
+        "passed": 5,
+        "failures": 0,
+        "errors": 0
+      }
+    },
+    {
+      "group": "test_stage20h_evidence.SearchFailureRegressions",
+      "collected": 5,
+      "before": {
+        "passed": 0,
+        "failures": 2,
+        "errors": 3
+      },
+      "after": {
+        "passed": 5,
+        "failures": 0,
+        "errors": 0
+      }
+    },
+    {
+      "group": "test_stage20h_deadlines.DeadlineRegressions",
+      "collected": 3,
+      "before": {
+        "passed": 0,
+        "failures": 0,
+        "errors": 3
+      },
+      "after": {
+        "passed": 3,
+        "failures": 0,
+        "errors": 0
+      }
+    },
+    {
+      "group": "test_stage20h_deadlines.GatewayBudgetRegressions",
+      "collected": 9,
+      "before": {
+        "passed": 0,
+        "failures": 1,
+        "errors": 8
+      },
+      "after": {
+        "passed": 9,
+        "failures": 0,
+        "errors": 0
+      }
+    }
+  ],
+  "combined_unit": {
+    "collected": 1215,
+    "passed": 1155,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 60,
+    "seconds": 126.149
+  },
+  "integration": {
+    "collected": 59,
+    "passed": 59,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 14.299
+  },
+  "adequacy_microbenchmark": {
+    "synthetic_documents": 8,
+    "repetitions": 100,
+    "median_ms": 1.762,
+    "max_ms": 15.502,
+    "live_latency_measurement": false
+  },
+  "limitations": [
+    "No affected local deadline-run logs or records available",
+    "Bounded heuristic dimensions; no full scientific sufficiency established",
+    "Interpretation diagnostics are audit-only",
+    "Repair admission reserve is not calibrated against live latency",
+    "Blocking transports use cooperative deadlines; no process-level cancellation guarantee"
+  ]
+}

@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from arq.connections import ArqRedis
 
+from scientific_rag.execution_budget import ExecutionBudget, use_budget, ResearchDeadlineExceeded
 from scientific_rag import legacy_pipeline
 from scientific_rag.llm_gateway import begin_trace, end_trace, primary_route_label, summarize_trace
 
@@ -613,6 +614,7 @@ class ResearchService:
         orchestrator = None
         vector_service = None
         research_agent = None
+        execution_budget = None
         # Fencing token (R2): the attempt this execution owns. A cancellation or
         # recovery increments it, after which every write from here fails.
         fence = getattr(record, "attempt", None)
@@ -624,6 +626,8 @@ class ResearchService:
                 await self._set_progress(session, record, "Planning the research approach", "orchestrator")
 
                 async def progress(stage: str, role: str | None = None) -> None:
+                    if execution_budget is not None:
+                        execution_budget.set_stage(stage, role)
                     await self._set_progress(session, record, stage, role)
 
                 vector_service = PostgresVectorService(session, self.settings, record.id)
@@ -653,15 +657,21 @@ class ResearchService:
                     else self.settings.request_timeout_seconds
                 )
                 try:
-                    pipeline_result = await asyncio.wait_for(
-                        orchestrator.execute_full_study(question, clear_db=False, generate_evaluation_dataset=generate_evaluation_dataset, cache_mode=cache_mode.value),
-                        timeout=timeout_seconds,
-                    )
+                    execution_budget = ExecutionBudget(timeout_seconds)
+                    with use_budget(execution_budget):
+                        pipeline_result = await asyncio.wait_for(
+                            orchestrator.execute_full_study(question, clear_db=False, generate_evaluation_dataset=generate_evaluation_dataset, cache_mode=cache_mode.value),
+                            timeout=timeout_seconds,
+                        )
+                except ResearchDeadlineExceeded:
+                    raise
                 except TimeoutError as error:
+                    # Inner provider and stage timeouts are not proof that the
+                    # outer research deadline expired.
+                    if execution_budget is not None and execution_budget.remaining() > 0:
+                        raise
                     stage = str((record.model_metadata or {}).get("progress", {}).get("stage") or "unknown stage")
-                    raise TimeoutError(
-                        f"Research exceeded {timeout_seconds} seconds during {stage}"
-                    ) from error
+                    raise ResearchDeadlineExceeded(stage, 0) from error
                 report = pipeline_result["report"]
 
             record.status = str(pipeline_result.get("status") or "completed")
@@ -694,6 +704,8 @@ class ResearchService:
                 quote_recovery_mode=quote_mode,
             )
             metadata["retrieval_version"] = version
+            if execution_budget is not None:
+                metadata["execution_budget"] = execution_budget.snapshot()
             metadata["llm_gateway"] = summarize_trace(end_trace(trace_token))
             metadata["embedding_usage"] = dict(vector_service.embedding_usage)
             stored_metadata = dict(record.model_metadata)
@@ -765,6 +777,17 @@ class ResearchService:
                 trace_closed = True
             _close_active_timeline(metadata, record.completed_at)
             metadata["failure_stage"] = (metadata.get("progress") or {}).get("stage")
+            if execution_budget is not None:
+                metadata["execution_budget"] = execution_budget.snapshot()
+            if isinstance(error, ResearchDeadlineExceeded):
+                metadata["failure_kind"] = error.failure_kind
+                metadata["deadline_stage"] = error.stage
+            elif isinstance(error, TimeoutError):
+                metadata["failure_kind"] = "provider_or_stage_timeout"
+            else:
+                metadata["failure_kind"] = getattr(error, "failure_kind", type(error).__name__)
+            if research_agent is not None and getattr(research_agent, "last_validated_evidence", None):
+                metadata["preserved_evidence"] = research_agent.last_validated_evidence
             if isinstance(error, legacy_pipeline.NoValidClaimsRemain):
                 metadata["failure_kind"] = error.failure_kind
                 metadata["claim_validation"] = {

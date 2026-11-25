@@ -120,6 +120,42 @@ are deferred; existing #34 deadline/reservation safeguards are preserved and tes
 PubMed automatic-term-mapping translation remains unverified against live eSearch;
 no external scientific request was made. Such a request needs separate authorization.
 
+### Additional #34 typed-screening deadline correction
+
+After the P1 integration, one targeted deadline injection exposed an additional
+boundary: both relevance screeners swallowed `ResearchDeadlineExceeded` under
+their generic screening-error handler. One test method failed both PubMed/arXiv
+subtests before the correction. Both handlers now rethrow that exact typed exception,
+preserving its stage, identity and `stage_admission_refused` classification through
+the existing mining/service deadline handlers. Ordinary screening/provider/schema
+errors still use P1-D's screening-failure path. This adds no retry, call, budget,
+provider-admission change or new gateway behavior. The original #34 stage admission,
+mandatory-verification reservation and uncertain-transmission controls remain.
+
+Initial combined #34 source-mounted offline run at `b0472ed`: **1,271 collected, 1,211 passed,
+60 skipped, zero failures/errors** (143.390 seconds). Focused Stage 20H modules:
+**99/99**. The integration merge retains both original heads; only the two typed
+screening rethrows are additional reliability implementation changes.
+
+### Final comparison-guard validation
+
+After the final legacy comparison-admission guard, source-mounted production
+dependency-image results are:
+
+| Source commit | Collected | Passed | Skipped | Failures/errors | Focused |
+|---|---:|---:|---:|---:|---:|
+| #33 `ce0a4ac` | 1,252 | 1,192 | 60 | 0/0 | 80/80 |
+| #34 `344118a` | 1,271 | 1,211 | 60 | 0/0 | 99/99 |
+
+Durations: 106.347 seconds (#33 fresh retry) and 120.813 seconds (#34). The
+dedicated #34 final-source PostgreSQL/Redis run passes 59/59 in 16.789 seconds;
+Python 3.11 compilation passes. One #33 rerun stalled in the unchanged
+lease-heartbeat cancellation test and was explicitly stopped (exit 137), not
+counted as a pass. Its log was preserved locally; the fresh full retry above
+passes without modifying the lease code, test, cancellation or timing assertions.
+Final exact-head production build/provenance, integration, health and Security
+conclusions are recorded in the PR descriptions and linked workflows.
+
 Publish #33 by a normal fast-forward update, then merge its corrected ancestry into
 #34 without rebase/force-push, preserving `main → #32 → #33 → #34`. Keep all drafts
 unmerged and await owner review. Rollback is a new revert in reverse dependency

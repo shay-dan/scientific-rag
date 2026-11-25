@@ -174,6 +174,22 @@ For the user-facing list see [known-limitations.md](known-limitations.md).
   [roadmap.md](roadmap.md). Claude took over implementation starting with R0; new
   branches use the `agent/` prefix.
 
+## 2026-11-24 — Stage 20H continuation, review gate
+
+Accepted main is `bc053c1` (merged Stage 20G PR #31). No Stage 20G live campaign
+was rerun. Foundation draft #32 at `892d999` was reviewed and its successful CI
+and Security conclusions rechecked. Its local HTMX, decimal handling and truthful
+answer-delivery reporting remain preserved. Main's exact merge-SHA workflow run
+lookup returned no runs; no independent post-merge CI claim is made here.
+
+Stage 20H remains in review: stacked PR #33 adds conservative scientific topic
+preservation, nonduplicating repair/screening, versioned passage adequacy and
+separate interpretation/completeness audits. Its follow-up adds cooperative
+execution budgets and truthful deadline/cancellation diagnostics. See the dated
+evidence, reliability and validation reports. Synthetic regressions are not
+scientific gold or evidence that the frozen live cases are solved. No paid
+inference, provider experiment, merge, deployment or next stage was performed.
+
 ## 2026-11-25 — Stage 20H externally reviewed corrective work
 
 The independent review rejects #33's overconstraint and flags deadline gaps in #34.
@@ -183,6 +199,14 @@ not evidence that the verifier was incorrect. Corrections remain within the exis
 three draft PRs, with explicit version/hash and cache behavior changes, and an offline
 behavioral evaluation separate from new-API and scientific-quality claims. See the
 new dated corrective report; historical reports and frozen results remain intact.
+
+Corrected implementation heads were checked in production CI: #33 `3871779`
+(1,232 collected, 1,172 passed, 60 skipped) and #34 `7503473` (1,250 collected,
+1,190 passed, 60 skipped), each with 59/59 PostgreSQL/Redis integration passes
+and green Security including the libzstd1 fix. The final validation addendum and
+original-API cache reproduction script preserve the before/after distinction.
+These results do not establish scientific accuracy or that the live verifier
+was wrong. The stack remains draft at the owner review gate.
 
 The owner-authorized final P1 continuation starts from #33 `3871779` and preserves
 #34 `5662f77`'s deadline safeguards. The pre-fix regression commit `fd34263`
