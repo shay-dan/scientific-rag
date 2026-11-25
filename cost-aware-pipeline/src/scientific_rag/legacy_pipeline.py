@@ -1631,7 +1631,7 @@ ANSWER LINES:
             "assessments": [item.model_dump() for item in assessments],
         }
 
-    async def run_research(self, query: str, retr: str = "context") -> Dict[str, Any]: #[edit]
+    async def run_research(self, query: str, retr: str = "context", *, anchors: QueryAnchors | None = None) -> Dict[str, Any]: #[edit]
         self.last_quote_recovery_audit = None
         self.last_semantic_verification_audit = None
         """
@@ -1871,13 +1871,13 @@ ANSWER LINES:
             semantic_removed = len(semantic_audit["removed_target_ids"])
             quote_audit["semantic_removed_fields"] = semantic_removed
             omitted_count += semantic_removed
-        answer_adequacy = assess_adequacy(query, combined_docs)
+        answer_adequacy = assess_adequacy(query, combined_docs, anchors=anchors)
         # Completeness is independent of individual claim support. Inspect the
         # quotations actually selected for this answer as well as retrieved text.
         selected_adequacy = assess_adequacy(query, [
             Document(page_content=item.evidence_quote, metadata={**next((block.document.metadata for block in evidence_blocks if block.source_id == item.source_id), {}), "citation_id":item.source_id})
             for item in selected_answer.claims
-        ])
+        ], anchors=anchors)
         unanswered = list(dict.fromkeys([
             *selected_answer.unanswered_parts,
             *(f"The selected quotations do not cover the requested entity: {term}." for term in selected_adequacy["missing_entities"]),
@@ -2308,11 +2308,11 @@ class Orchestrator:
         await self.vs.add_documents(documents)
         self.vs.restrict_final_retrieval_to_current_run()
 
-    async def synthesize_final_report(self, original_query: str):
+    async def synthesize_final_report(self, original_query: str, *, anchors: QueryAnchors | None = None):
         await self._progress("Preparing your answer from the evidence", "expert")
         print("DEBUG: Handing off to Research Agent for final synthesis...")
         # Research Agent uses both Vector Store and Internal LLM Knowledge
-        return await self.ra.run_research(original_query)
+        return await self.ra.run_research(original_query, anchors=anchors)
 
     async def execute_full_study(self, original_query: str, clear_db: bool = False, generate_evaluation_dataset: bool = False,
                                  cache_mode: str = "use_cached_answer"):
@@ -2424,7 +2424,7 @@ class Orchestrator:
 
         # Final synthesis handles both the mined docs and internal explanations
         try:
-            final_report = await self.synthesize_final_report(original_query)
+            final_report = await self.synthesize_final_report(original_query, anchors=anchors)
         except NoRunScopedEvidence:
             source_sufficiency = {
                 **source_sufficiency,
