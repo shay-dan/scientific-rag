@@ -173,3 +173,13 @@ For the user-facing list see [known-limitations.md](known-limitations.md).
   owner consolidated them into the Master Implementation Plan, now
   [roadmap.md](roadmap.md). Claude took over implementation starting with R0; new
   branches use the `agent/` prefix.
+
+## 2026-11-25 — Stage 20H externally reviewed corrective work
+
+The independent review rejects #33's overconstraint and flags deadline gaps in #34.
+Owner-supplied deployed metadata additionally confirms that generic-word cached
+coverage skipped discovery, then strict verification rejected every claim. This is
+not evidence that the verifier was incorrect. Corrections remain within the existing
+three draft PRs, with explicit version/hash and cache behavior changes, and an offline
+behavioral evaluation separate from new-API and scientific-quality claims. See the
+new dated corrective report; historical reports and frozen results remain intact.

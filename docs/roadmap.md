@@ -1283,3 +1283,13 @@ bump. See [the evidence report](reports/2026-11-24-stage20h-evidence.md).
 Scientific sufficiency remains unestablished by deterministic candidate coverage.
 A second stacked follow-up addresses deadline admission and failure diagnostics.
 Owner review is required; passing synthetic fixtures is not live acceptance.
+
+### Stage 20H corrective review — 2026-11-25 (in review)
+
+The owner authorized corrections to the independently rejected #33/#34 stack and
+provided two deployed-run metadata records confirming false cached-source admission.
+Correct #33 first, then #34 against that branch; preserve #32, the three drafts,
+frozen data and all provider reservations. See
+[corrective findings](reports/2026-11-25-stage20h-corrections.md). The previous
+synthetic/API pass counts are not evidence of scientific improvement. No paid
+inference, PR merge, deployment, enforcement downgrade or next stage is authorized.

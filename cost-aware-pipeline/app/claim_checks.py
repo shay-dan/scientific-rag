@@ -431,6 +431,8 @@ def interpretation_findings(claim: str, quote: str) -> list[dict]:
     ci = re.compile(r'(?:\d+(?:\.\d+)?\s*%\s*)?(?:ci|confidence interval)\s*[:=]?\s*[\[(]?\s*'
                     r'(?P<lo>[-+−]?\d+(?:\.\d+)?)\s*(?:to|[-–—,])\s*'
                     r'(?P<hi>[-+−]?\d+(?:\.\d+)?)', re.I)
+    hedged = bool(re.search(r"no (?:clear|significant)|not (?:statistically )?significant|did not|does not|uncertain|point estimate|\b(?:may|might|could)\b|(?:hr|hazard ratio|risk ratio|odds ratio) was", c))
+    effect_assertion = bool(re.search(r"\b(significant(?:ly)?|reduces?|reduced|prevents?|improve[ds]?|lowers?|lowered|increases?|increased|benefit|beneficial|proved)\b", c)) and not hedged
     parsed = list(ci.finditer(normalized))
     if re.search(r'\bci\b|confidence interval', normalized) and not parsed:
         add('unsupported_confidence_interval_format', 'unverifiable')
@@ -445,18 +447,21 @@ def interpretation_findings(claim: str, quote: str) -> list[dict]:
         low, high = _decimal(match['lo']), _decimal(match['hi'])
         if low > high or (null == 1 and low < 0):
             add('unsupported_confidence_interval_format', 'unverifiable')
-        elif low <= null <= high:
+        elif low <= null <= high and effect_assertion:
             add('confidence_interval_includes_null', effect=kind, null_value=str(null))
 
     observational = bool(re.search(r'\b(observational|cohort|case.control|association|associated|correlation)\b', q))
-    if observational and re.search(r'\b(causes?|caused|prevents?|proved|proves|establishes causation)\b', c):
+    if observational and not hedged and re.search(r'\b(causes?|caused|prevents?|reduces?|reduced|proved|proves|establishes causation)\b', c):
         add('causal_language_from_observational_evidence')
     if re.search(r'\b(randomized|randomised|rct)\b', c) and not re.search(r'\b(randomized|randomised|rct)\b', q):
         add('study_design_mismatch', 'warning' if observational or 'review' in q else 'unverifiable')
     if 'trial' in c and re.search(r'\b(systematic review|meta.analysis|narrative review)\b', q):
         add('review_described_as_primary_trial')
-    if 'absolute' in c and re.search(r'\b(relative|hazard ratio|risk ratio|odds ratio)\b', q) and 'absolute' not in q:
+    if ('absolute' in c or 'percentage points' in c) and re.search(r'\b(relative|hazard ratio|risk ratio|odds ratio)\b', q) and 'absolute' not in q:
         add('relative_absolute_effect_mismatch')
+
+    if re.search(r"odds ratio|\bor\s*[:=]?\s*0\.", q) and re.search(r"\brisk\b", c) and 'odds' not in c:
+        add('odds_risk_effect_mismatch')
 
     # Explicit outcome/group conflicts; this is not an exhaustive ontology.
     from scientific_rag.evidence_adequacy import requested_dimensions
@@ -466,7 +471,7 @@ def interpretation_findings(claim: str, quote: str) -> list[dict]:
         add('outcome_mismatch')
     if 'cardiovascular mortality' in claim_outcomes and 'cardiovascular mortality' not in quote_outcomes:
         add('outcome_specificity_unverifiable', 'unverifiable')
-    if 'mortality' in claim_outcomes and 'composite' in q and not re.search(r'mortality (?:alone|separately)', q):
+    if any('mortality' in d for d in claim_outcomes) and ('composite' in q or re.search(r'endpoint.*(?:hospitali[sz]ation.*(?:or|and).*death|death.*(?:or|and).*hospitali[sz]ation)', q)) and not re.search(r'mortality (?:alone|separately)', q):
         add('composite_endpoint_overstatement')
     for a, b in ((r'children|pediatric|paediatric', r'adults|elderly'), (r'adults|elderly', r'children|pediatric|paediatric')):
         if re.search(rf'\b(?:{a})\b', c) and not re.search(rf'\b(?:{a})\b', q) and re.search(rf'\b(?:{b})\b', q):
@@ -477,7 +482,7 @@ def interpretation_findings(claim: str, quote: str) -> list[dict]:
     cc, qc = comparator.search(c), comparator.search(q)
     if cc and qc and cc[1] != qc[1]:
         add('comparator_mismatch')
-    if re.search(r'externally validated|external validation|generalizes|generalisable|generalizable', c):
+    if re.search(r'externally validated|external validation|generalizes|generalisable|generalizable|validat.*other hospitals', c):
         if not re.search(r'externally validated|external validation', q) or re.search(r'no external validation|without external validation|not externally validated', q):
             add('external_validation_overstatement')
     if re.search(r'no (?:evidence|benefit|effect)|does not work|ineffective', c) and re.search(r'no (?:eligible )?studies|not (?:find|identify)|search.*(?:missing|empty)', q):
