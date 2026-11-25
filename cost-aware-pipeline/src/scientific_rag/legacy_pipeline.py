@@ -1159,6 +1159,8 @@ Paper (title attribute and abstract or available full-text excerpt):
                     "evidence_role": role,
                 })
                 return paper_id, not rejected
+            except ResearchDeadlineExceeded:
+                raise
             except Exception as error:
                 logger.warning("pubmed_relevance_screen_failed paper_id=%s error_type=%s", paper_id, type(error).__name__)
                 candidate.update({
@@ -1283,6 +1285,8 @@ Paper (title attribute and abstract):
                     document.metadata["relevance_label"] = decision
                     document.metadata["relevance_confidence"] = round(confidence, 3)
                 return document, not rejected
+            except ResearchDeadlineExceeded:
+                raise
             except Exception as error:
                 logger.warning("arxiv_relevance_screen_failed arxiv_id=%s error_type=%s", arxiv_id, type(error).__name__)
                 candidate.update({

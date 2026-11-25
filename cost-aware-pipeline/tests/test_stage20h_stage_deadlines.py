@@ -46,6 +46,21 @@ class ReviewedStageAdmission(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(result,StructuredEvidenceAnswerV2)
 
 class ReviewedVerificationReserve(unittest.IsolatedAsyncioTestCase):
+    async def test_relevance_screening_preserves_typed_stage_deadline(self):
+        for source in ("pubmed", "arxiv"):
+            with self.subTest(source=source):
+                failure = ResearchDeadlineExceeded("relevance_screening", 0.0, failure_kind="stage_admission_refused")
+                doc_id = "PMID:offline" if source == "pubmed" else "arxiv:offline"
+                docs = [Document(page_content="Aspirin was studied in adults with a sufficiently detailed trial abstract. " * 3,
+                                 metadata={"doc_id": doc_id, "title": "Offline aspirin study"})]
+                trace = {"candidates": [{"pmid": "offline", "arxiv_id": "offline"}]}
+                with patch("scientific_rag.legacy_pipeline.ainvoke_structured", new=AsyncMock(side_effect=failure)):
+                    with self.assertRaises(ResearchDeadlineExceeded) as raised:
+                        await getattr(MinerService, "_screen_" + source + "_documents")(
+                            docs, research_question="Does aspirin reduce mortality in adults?", diagnostics=trace)
+                self.assertIs(raised.exception, failure)
+                self.assertEqual(raised.exception.failure_kind, "stage_admission_refused")
+
     async def test_refuse_repair_if_mandatory_verification_cannot_be_reserved(self):
         now=[0.0];budget=ExecutionBudget(600,clock=lambda:now[0])
         passage='The cohort reported a measured outcome.'

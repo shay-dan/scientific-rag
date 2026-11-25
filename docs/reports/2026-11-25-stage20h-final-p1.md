@@ -110,6 +110,23 @@ are deferred; existing #34 deadline/reservation safeguards are preserved and tes
 PubMed automatic-term-mapping translation remains unverified against live eSearch;
 no external scientific request was made. Such a request needs separate authorization.
 
+### Additional #34 typed-screening deadline correction
+
+After the P1 integration, one targeted deadline injection exposed an additional
+boundary: both relevance screeners swallowed `ResearchDeadlineExceeded` under
+their generic screening-error handler. One test method failed both PubMed/arXiv
+subtests before the correction. Both handlers now rethrow that exact typed exception,
+preserving its stage, identity and `stage_admission_refused` classification through
+the existing mining/service deadline handlers. Ordinary screening/provider/schema
+errors still use P1-D's screening-failure path. This adds no retry, call, budget,
+provider-admission change or new gateway behavior. The original #34 stage admission,
+mandatory-verification reservation and uncertain-transmission controls remain.
+
+Final combined #34 source-mounted offline run: **1,271 collected, 1,211 passed,
+60 skipped, zero failures/errors** (143.390 seconds). Focused Stage 20H modules:
+**99/99**. The integration merge retains both original heads; only the two typed
+screening rethrows are additional reliability implementation changes.
+
 Publish #33 by a normal fast-forward update, then merge its corrected ancestry into
 #34 without rebase/force-push, preserving `main → #32 → #33 → #34`. Keep all drafts
 unmerged and await owner review. Rollback is a new revert in reverse dependency
