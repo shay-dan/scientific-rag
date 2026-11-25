@@ -31,6 +31,8 @@ DIMENSION_ALIASES = {
 _RESULT = re.compile(r'\b(result\w*|found|observed|associated|achieved|measured|reduced|lower|higher|increased|decreased|hazard ratio|risk ratio|no difference)\b', re.I)
 _MISSING_EVIDENCE = re.compile(r'no (?:eligible )?(?:studies|trials|evidence)|(?:search|review) (?:did not|failed to) (?:find|identify)', re.I)
 _CONTEXT = re.compile(r'\b(background|introduction|future|should|hypothes\w*|aims?|objective|protocol)\b', re.I)
+_COMPARATIVE = re.compile(r'\b(versus|vs\.?|compar\w*|relative to|than|between|head.to.head)\b', re.I)
+_INDIRECT = re.compile(r'\b(indirect|network meta.analysis|separate (?:studies|trials))\b', re.I)
 
 
 def mentions(text: str, aliases) -> bool:
@@ -88,6 +90,14 @@ def assess_adequacy(question, documents, *, external_unavailable=False, anchors=
     topical_ids = {id(doc) for doc in topical_documents(docs, anchors)}
     roles = dict(anchors.entity_roles)
     interventions = tuple(t for t in anchors.required if roles.get(t) in {"intervention", "exposure"})
+    def covered(text, terms):
+        return concepts_covered(text, terms, entity_aliases=anchors.entity_aliases)
+    topical_docs = [doc for doc in docs if id(doc) in topical_ids]
+    corpus = " ".join(doc.page_content for doc in topical_docs)
+    missing_entities = [t for t in anchors.required if t not in covered(corpus, anchors.required)]
+    comparison_arms = anchors.comparison
+    covered_arms = covered(corpus, comparison_arms)
+    direct_comparison = False
     findings = []
     for dimension in dimensions:
         passages = []
@@ -99,22 +109,38 @@ def assess_adequacy(question, documents, *, external_unavailable=False, anchors=
                 topical = id(doc) in topical_ids
                 # A whole abstract mentioning the requested drug cannot attribute
                 # results of another intervention or a cited prior study to it.
-                local_arm = not interventions or bool(concepts_covered(passage, interventions))
+                local_arm = not interventions or bool(covered(passage, interventions))
+                # One-arm results remain usable context. A direct comparative
+                # candidate needs every arm and a comparison relation in the
+                # SAME result passage, never a corpus-wide union.
+                comparative = not comparison_arms or (
+                    len(covered(passage, comparison_arms)) == len(comparison_arms)
+                    and bool(_COMPARATIVE.search(passage)) and not _INDIRECT.search(passage)
+                )
                 prior = re.search(r"\b(previous|prior|earlier|another) (?:study|trial|studies)|et al\.", passage, re.I)
                 background = metadata.get("evidence_role") == "background" or str(metadata.get("section", "")).lower() in {"introduction","background"}
-                status = "direct_candidate" if topical and local_arm and _RESULT.search(passage) and not (prior or _CONTEXT.search(passage) or _MISSING_EVIDENCE.search(passage) or background) else "contextual"
+                result_candidate = topical and local_arm and _RESULT.search(passage) and not (prior or _CONTEXT.search(passage) or _MISSING_EVIDENCE.search(passage) or background or anchors.unresolved_subject)
+                status = "direct_candidate" if result_candidate and comparative else "contextual"
+                direct_comparison |= bool(comparison_arms and status == "direct_candidate")
                 passages.append({
                     "source_id":str(metadata.get("citation_id") or metadata.get("doc_id") or metadata.get("url") or hashlib.sha256(doc.page_content.encode()).hexdigest()[:16]),
                     "document_digest":hashlib.sha256(doc.page_content.encode()).hexdigest(),
                     "passage_id":hashlib.sha256(f"{start}:{end}:{passage}".encode()).hexdigest()[:16],
                     "start":start,"end":end,"study_design":metadata.get("study_design") or "unknown","status":status,
+                    "covered_arms":covered(passage, comparison_arms),
                 })
         status = "direct_candidate" if any(p["status"] == "direct_candidate" for p in passages) else "contextual" if passages else "missing"
         findings.append({"dimension":dimension,"status":status,"passages":passages})
     unanswered = [d["dimension"] for d in findings if d["status"] != "direct_candidate"]
     count = sum(d["status"] == "direct_candidate" for d in findings)
     status = ("external_retrieval_failure" if external_unavailable else "missing") if not docs else "candidate_coverage_complete" if dimensions and not unanswered else "partial" if count else "contextual_only" if any(d["passages"] for d in findings) else "uncertain"
-    return {"version":"passage-adequacy-v2","status":status,"scope":"retrieval_candidates_only",
+    comparison = {"requested_arms":list(comparison_arms), "covered_arms":covered_arms,
+        "missing_arms":[arm for arm in comparison_arms if arm not in covered_arms],
+        "status":"not_requested" if not comparison_arms else "direct_candidate" if direct_comparison else "indirect_candidates" if len(covered_arms) == len(comparison_arms) else "partial"}
+    if missing_entities or anchors.unresolved_subject:
+        status = "partial" if count else "uncertain" if docs else status
+    return {"version":"passage-adequacy-v3","status":status,"scope":"retrieval_candidates_only",
         "full_sufficiency_established":False,"dimensions":findings,"unanswered_dimensions":unanswered,
+        "comparison":comparison,"missing_entities":missing_entities,"entity_resolution_uncertain":anchors.unresolved_subject,
         "unrecognized_dimensions_possible":True,"external_retrieval_failure":bool(external_unavailable),
         "reason":"Candidate coverage is neither semantic support nor proof of search completeness. Missing candidate matches remain uncertain.","additional_model_calls":0}

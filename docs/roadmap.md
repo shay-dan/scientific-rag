@@ -1321,3 +1321,12 @@ corrected #33 production CI collects 1,232 tests, corrected #34 collects 1,250;
 both have 60 skips and 59/59 integration passes. Security includes the Debian
 libzstd1 fix. These engineering checks do not establish scientific accuracy.
 Owner review/approval remains required, with no automatic PR merge or inference.
+
+Final P1 continuation (2026-11-25) remains **in review**: independently reproduced
+missing entities/paraphrase recall, false comparative candidate coverage and a
+screening-failure outage label. Grounded extraction, explicit partial/indirect/direct
+coverage, qualified partial answers and truthful failure reasons are corrected;
+retrieval/cache identity advances to Stage 20H v3. See the
+[final P1 report](reports/2026-11-25-stage20h-final-p1.md) for controls, validation,
+limits and rollback. Preserve the #32 → #33 → #34 chain. No live acceptance,
+paid inference, merge, deployment or next stage is authorized by these offline results.

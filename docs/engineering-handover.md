@@ -207,3 +207,10 @@ and green Security including the libzstd1 fix. The final validation addendum and
 original-API cache reproduction script preserve the before/after distinction.
 These results do not establish scientific accuracy or that the live verifier
 was wrong. The stack remains draft at the owner review gate.
+
+The owner-authorized final P1 continuation starts from #33 `3871779` and preserves
+#34 `5662f77`'s deadline safeguards. The pre-fix regression commit `fd34263`
+records unseen entity/paraphrase, comparative coverage and screening-stop failures.
+See [the final P1 report](reports/2026-11-25-stage20h-final-p1.md) for targeted
+corrections, validation and remaining scientific limits. Stage 20H stays in review;
+offline success does not authorize a live acceptance campaign, merge or deployment.

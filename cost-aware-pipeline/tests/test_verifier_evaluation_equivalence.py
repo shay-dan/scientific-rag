@@ -70,7 +70,7 @@ class EnforcementEquivalenceTests(unittest.TestCase):
                     self.assertEqual(simulated[answer_id]["retained_targets"], kept)
 
     def test_retrieval_version_is_explicit_and_not_a_frozen_prompt_contract(self) -> None:
-        self.assertEqual(PIPELINE_VERSION, "postgres-hybrid-rrf-mmr-parent-child-structured-v15-stage20h-v2")
+        self.assertEqual(PIPELINE_VERSION, "postgres-hybrid-rrf-mmr-parent-child-structured-v15-stage20h-v3")
 
 
 if __name__ == "__main__":

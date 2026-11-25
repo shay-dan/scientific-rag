@@ -956,7 +956,7 @@ class MinerService:
 
         builder = build_pubmed_query if source == "pubmed" else build_arxiv_query
         raw_results: list[Document] = []
-        external_unavailable = False
+        ladder_stopped = False
         deterministic_queries = [builder(anchors, broad=False), builder(anchors, broad=True), builder(anchors, broad=True, relaxed=True)]
         if source == "pubmed" and cls._requires_direct_clinical_evidence(research_question):
             clinical_filter = '("Clinical Trial"[pt] OR "Randomized Controlled Trial"[pt] OR "Observational Study"[pt] OR "Clinical Study"[pt] OR "Systematic Review"[pt] OR "Meta-Analysis"[pt])'
@@ -965,18 +965,25 @@ class MinerService:
             raw_results = await search_once(search_term, attempt_number, "deterministic_precise" if attempt_number == 1 else "deterministic_broad")
             if raw_results:
                 break
-            if trace["attempts"][-1].get("external_unavailable") or any(
+            if trace["attempts"][-1].get("external_unavailable"):
+                ladder_stopped = True
+                trace["retry_ladder_stopped"] = "external_source_unavailable"
+                break
+            if any(
                 candidate.get("decision") == "screening_failed_not_indexed"
                 for candidate in trace["attempts"][-1].get("candidates", [])
             ):
-                external_unavailable = True
-                trace["retry_ladder_stopped"] = "external_source_unavailable"
+                # Rephrasing a source query cannot repair a provider/schema
+                # failure. Stop without spending another screening allowance;
+                # this is not evidence that PubMed/arXiv is unavailable.
+                ladder_stopped = True
+                trace["retry_ladder_stopped"] = "relevance_screening_failed"
                 break
 
         trace["repair"] = {"used": False, "decision": "deterministic_relaxation_only",
                            "additional_model_calls": 0}
 
-        trace["repair_budget_exhausted"] = bool(not raw_results and not external_unavailable)
+        trace["repair_budget_exhausted"] = bool(not raw_results and not ladder_stopped)
         attempts = trace.get("attempts", [])
         trace["returned_count"] = sum(int(item.get("returned_count", 0)) for item in attempts)
         trace["screened_count"] = sum(int(item.get("screened_count", 0)) for item in attempts)
@@ -1929,6 +1936,9 @@ ANSWER LINES:
         ])
         unanswered = list(dict.fromkeys([
             *selected_answer.unanswered_parts,
+            *(f"The selected quotations do not cover the requested entity: {term}." for term in selected_adequacy["missing_entities"]),
+            *( ["Essential entity resolution remains uncertain; this answer cannot establish complete question coverage."] if selected_adequacy["entity_resolution_uncertain"] else []),
+            *( ["A direct comparison of every requested intervention was not established; separate studies are indirect context only."] if selected_adequacy["comparison"]["status"] in {"partial", "indirect_candidates"} else []),
             *(f"No direct candidate passage was identified for the requested {dim}; this remains unresolved." for dim in answer_adequacy["unanswered_dimensions"]),
             *(f"The selected quotations do not establish the requested {dim}." for dim in selected_adequacy["unanswered_dimensions"]
               if dim not in answer_adequacy["unanswered_dimensions"]),
@@ -2052,6 +2062,14 @@ class Orchestrator:
             1. If the question is simple, return exactly ONE sub-query.
             2. For 'Feynman Method', the learning technique is 'internal_knowledge'. Only use 'academic' if specifically asking for physics papers.
             3. Maximize information gain while minimizing redundant searches.
+            4. Populate entities from the ORIGINAL question: every essential intervention/exposure,
+               disease, population and scientific subject, each with its correct role. Include ALL
+               arms of A versus B, A or B, A and B and comparisons of three or more treatments.
+               Include unfamiliar drug names, age/pregnancy restrictions, disease subtypes and
+               multiword interventions. Copy entity text exactly; never invent a synonym or drug.
+               Separate populations from diseases ("adolescents" and their named disease), and
+               preserve parenthetical abbreviations in the original question. Outcomes, generic
+               intent words and study-design preferences are not essential topic entities.
 
             Question: {question}
             {format_instructions}
@@ -2166,11 +2184,12 @@ class Orchestrator:
         # unrelated disease paper. Require at least one topical passage.
         topical_passages = topical_documents(documents, anchors)
         eligible_corpus = " ".join(f"{doc.metadata.get('title', '')} {doc.page_content}" for doc in topical_passages)
-        covered = concepts_covered(eligible_corpus, anchors.required)
+        covered = concepts_covered(eligible_corpus, anchors.required, entity_aliases=anchors.entity_aliases)
         missing = [term for term in anchors.required if term not in covered]
-        sufficient = bool(topical_passages) and not missing
+        sufficient = bool(topical_passages) and not missing and not anchors.unresolved_subject
+        qualified_synthesis = bool(topical_passages) and bool(anchors.comparison) and not anchors.unresolved_subject and set(missing).issubset(anchors.comparison)
         reason = (
-            f"{len(topical_passages)} passage(s) retain all topic constraints; scientific sufficiency remains unestablished"
+            f"{len(topical_passages)} passage(s) provide topic coverage for qualified synthesis; direct comparison and scientific sufficiency remain separate diagnostics"
             if sufficient else
             "no eligible source was found" if not unique_sources else
             f"source set does not cover required concept(s): {', '.join(missing)}" if missing else
@@ -2179,8 +2198,11 @@ class Orchestrator:
         adequacy = assess_adequacy(question, documents, anchors=anchors) if question else None
         return {
             "sufficient": sufficient,  # legacy retrieval-admission key only
+            "qualified_synthesis_eligible": qualified_synthesis,
             "scope": "retrieval_preflight_only",
             "adequacy": adequacy,
+            "comparison": adequacy["comparison"] if adequacy else None,
+            "entity_resolution_uncertain": anchors.unresolved_subject,
             "cache_eligible": False,
             "cache_admission_reason": "Passage lexical coverage cannot establish verified completeness. Cached context never suppresses external mining; completed-answer caching is separate.",
             "unique_sources": len(unique_sources),
@@ -2404,7 +2426,7 @@ class Orchestrator:
         self.last_reused_count = len(reused_docs)
         self.last_evidence_count = doc_count
 
-        if not source_sufficiency["sufficient"]:
+        if not source_sufficiency["sufficient"] and not source_sufficiency.get("qualified_synthesis_eligible"):
             evidence_outcome = source_sufficiency["outcome"]
             mismatch_detected = any(
             candidate.get("decision") in {
