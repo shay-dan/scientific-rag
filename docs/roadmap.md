@@ -1293,3 +1293,7 @@ frozen data and all provider reservations. See
 [corrective findings](reports/2026-11-25-stage20h-corrections.md). The previous
 synthetic/API pass counts are not evidence of scientific improvement. No paid
 inference, PR merge, deployment, enforcement downgrade or next stage is authorized.
+
+The corrective Security rebuild also applies the available Debian libzstd1 fix for
+CVE-2026-124851 through the existing OS security upgrade step; no scan suppression
+or Python dependency change.
